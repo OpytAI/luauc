@@ -1,0 +1,35 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_zig//zig:defs.bzl", "zig_library", "zig_test")
+
+exports_files(
+    ["frontend_snapshot_v1.h", "runtime_profile_v1.zig"],
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "runtime_profile_v1",
+    main = "runtime_profile_v1.zig",
+    import_name = "luauc_runtime_profile_v1",
+    visibility = ["//visibility:public"],
+)
+
+zig_test(
+    name = "runtime_profile_v1_test",
+    main = "runtime_profile_v1.zig",
+)
+
+cc_library(
+    name = "frontend_snapshot_v1_c",
+    hdrs = ["frontend_snapshot_v1.h"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "frontend_contract_inputs",
+    srcs = [
+        "BUILD.bazel",
+        "frontend_snapshot_v1.h",
+    ],
+    visibility = ["//visibility:public"],
+)

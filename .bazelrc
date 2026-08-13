@@ -1,0 +1,19 @@
+common --enable_workspace=false
+common --enable_runfiles
+common --incompatible_strict_action_env
+common --copt=-w
+common --host_copt=-w
+
+# rules_zig passes this dedicated cache path into hermetic Zig actions. Mounting /tmp keeps it
+# writable and shared across sandboxed actions without baking a machine-specific workspace path
+# into the repository.
+common --repo_env=RULES_ZIG_CACHE_PREFIX=/tmp/luauc-zig-cache
+common --repo_env=RULES_ZIG_CACHE_PREFIX_LINUX=/tmp/luauc-zig-cache
+build --sandbox_add_mount_pair=/tmp
+# luauc ships executable compiler and runtime hosts; optimized code is the default product build.
+# Developers can still request --compilation_mode=dbg or fastbuild explicitly for diagnostics.
+build --compilation_mode=opt
+test --test_output=errors
+
+# Machine-local output/cache placement belongs in this ignored file.
+try-import %workspace%/user.bazelrc

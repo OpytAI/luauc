@@ -1,0 +1,50 @@
+diff --git a/Compiler/src/Builtins.cpp b/Compiler/src/Builtins.cpp
+--- a/Compiler/src/Builtins.cpp
++++ b/Compiler/src/Builtins.cpp
+@@ -8,8 +8,13 @@
+
+ #include <array>
+
+-LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
+-LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
++// luauc PATCH: the pinned strict-AOT frontend includes the integer library and its buffer
++// fastcalls as part of the closed compiler/runtime contract.
++namespace FFlag
++{
++Luau::FValue<bool> LuauIntegerFastcalls("LuauIntegerFastcalls", true, false);
++Luau::FValue<bool> LuauIntegerBufferFastcalls("LuauIntegerBufferFastcalls", true, false);
++}
+
+ namespace Luau
+ {
+diff --git a/CodeGen/src/IrTranslateBuiltins.cpp b/CodeGen/src/IrTranslateBuiltins.cpp
+--- a/CodeGen/src/IrTranslateBuiltins.cpp
++++ b/CodeGen/src/IrTranslateBuiltins.cpp
+@@ -9,7 +9,11 @@
+ #include <math.h>
+
+ LUAU_FASTFLAG(LuauCodegenInteger2)
+-LUAU_FASTFLAGVARIABLE(LuauCodegenBufferInteger)
++// luauc PATCH: keep integer buffer IR translation enabled at the pinned frontend boundary.
++namespace FFlag
++{
++Luau::FValue<bool> LuauCodegenBufferInteger("LuauCodegenBufferInteger", true, false);
++}
+
+ // TODO: when nresults is less than our actual result count, we can skip computing/writing unused results
+
+diff --git a/VM/src/lintlib.cpp b/VM/src/lintlib.cpp
+--- a/VM/src/lintlib.cpp
++++ b/VM/src/lintlib.cpp
+@@ -15,6 +15,10 @@
+ #include <intrin.h>
+ #endif
+
+-LUAU_FASTFLAGVARIABLE(LuauIntegerLibrary)
++// luauc PATCH: the strict-AOT runtime and its compiler expose one pinned integer-library surface.
++namespace FFlag
++{
++Luau::FValue<bool> LuauIntegerLibrary("LuauIntegerLibrary", true, false);
++}
+
+ #define mask64(w) (0xFFFFFFFFFFFFFFFFULL >> (64 - (w)))

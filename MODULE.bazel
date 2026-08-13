@@ -1,0 +1,53 @@
+module(
+    name = "luauc",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_zig", version = "0.16.0")
+bazel_dep(name = "rules_cc", version = "0.2.18")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+bazel_dep(name = "aspect_rules_js", version = "3.2.2")
+bazel_dep(name = "emsdk", version = "6.0.3")
+bazel_dep(name = "rules_rust", version = "0.70.0")
+
+zig = use_extension("@rules_zig//zig:extensions.bzl", "zig")
+zig.index(file = "//:zig_index.json")
+zig.toolchain(zig_version = "0.16.0")
+use_repo(zig, "zig_toolchains")
+
+register_toolchains("@rules_zig//zig/target:all")
+register_toolchains("@zig_toolchains//:all")
+register_toolchains("//platforms:wasm32_freestanding_zig_toolchain")
+register_toolchains("//platforms:wasm32_wasi_zig_toolchain")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(edition = "2021")
+use_repo(rust, "rust_toolchains")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "wasmtime_crates",
+    cargo_lockfile = "//hosts/wasmtime:Cargo.lock",
+    manifests = ["//hosts/wasmtime:Cargo.toml"],
+)
+use_repo(crate, "wasmtime_crates")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "luau",
+    build_file = "//third_party/luau:BUILD.luau.bazel",
+    patch_args = ["-p1"],
+    patch_tool = "patch",
+    patches = [
+        "//third_party/luau:patches/0001-wasm-errors.patch",
+        "//third_party/luau:patches/0002-frontend-single-thread.patch",
+        "//third_party/luau:patches/0003-strict-aot-runtime-dispatch.patch",
+        "//third_party/luau:patches/0004-integer-buffer-fastcalls.patch",
+    ],
+    sha256 = "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
+    strip_prefix = "luau-0.725",
+    type = "tar.gz",
+    urls = ["https://github.com/luau-lang/luau/archive/refs/tags/0.725.tar.gz"],
+)

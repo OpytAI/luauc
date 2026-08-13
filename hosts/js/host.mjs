@@ -1,0 +1,275 @@
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function bytes(value) {
+  if (typeof value === "string") return encoder.encode(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  throw new TypeError("expected a string, ArrayBuffer, or typed-array view");
+}
+
+function copyBytes(value) {
+  return Uint8Array.from(bytes(value));
+}
+
+function concat(parts) {
+  const total = parts.reduce((size, part) => size + part.length, 0);
+  const result = new Uint8Array(total);
+  let cursor = 0;
+  for (const part of parts) {
+    result.set(part, cursor);
+    cursor += part.length;
+  }
+  return result;
+}
+
+function compareBytes(lhs, rhs) {
+  const count = Math.min(lhs.length, rhs.length);
+  for (let index = 0; index < count; index++) {
+    if (lhs[index] !== rhs[index]) return lhs[index] - rhs[index];
+  }
+  return lhs.length - rhs.length;
+}
+
+function putU16(target, offset, value) {
+  new DataView(target.buffer, target.byteOffset, target.byteLength).setUint16(offset, value, true);
+}
+
+function putU32(target, offset, value) {
+  new DataView(target.buffer, target.byteOffset, target.byteLength).setUint32(offset, value, true);
+}
+
+async function sha256(value) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error("the JavaScript host requires the standard Web Crypto digest API");
+  return new Uint8Array(await subtle.digest("SHA-256", bytes(value)));
+}
+
+function allocation(api, bytesOrSize) {
+  const size = typeof bytesOrSize === "number" ? bytesOrSize : bytes(bytesOrSize).length;
+  const pointer = api.luauc_v1_alloc(size);
+  if (!pointer) throw new Error(`luauc allocation failed for ${size} bytes`);
+  if (typeof bytesOrSize !== "number")
+    new Uint8Array(api.memory.buffer, pointer, size).set(bytes(bytesOrSize));
+  return { pointer, size };
+}
+
+async function buildRequest(modules, entryModuleId, profileDigest, packDigest) {
+  modules = await Promise.all(modules.map(async ({ name, source }) => {
+    const canonicalName = bytes(name);
+    const content = bytes(source);
+    return {
+      name: canonicalName,
+      sourceName: bytes(`@${name}.luau`),
+      content,
+      contentDigest: await sha256(content),
+    };
+  }));
+  modules.sort((lhs, rhs) => compareBytes(lhs.name, rhs.name));
+  if (!modules.length || modules.some((module, index) => index && compareBytes(modules[index - 1].name, module.name) === 0))
+    throw new Error("invalid source package modules");
+
+  const manifestHeader = new Uint8Array(8);
+  putU32(manifestHeader, 0, modules.length);
+  putU32(manifestHeader, 4, entryModuleId);
+  const sized = (value) => {
+    const header = new Uint8Array(4);
+    putU32(header, 0, value.length);
+    return concat([header, value]);
+  };
+  const manifest = [manifestHeader];
+  for (const module of modules)
+    manifest.push(sized(module.name), sized(module.sourceName), module.contentDigest);
+  const manifestDigest = await sha256(concat(manifest));
+
+  const headerSize = 160;
+  const recordSize = 64;
+  const total = modules.reduce(
+    (size, module) => size + module.name.length + module.sourceName.length + module.content.length,
+    headerSize + recordSize * modules.length,
+  );
+  const request = new Uint8Array(total);
+  request.set(bytes("LUAUCS1\0"), 0);
+  putU16(request, 8, 1);
+  putU16(request, 10, headerSize);
+  putU32(request, 12, total);
+  putU32(request, 16, modules.length);
+  putU32(request, 20, entryModuleId);
+  putU32(request, 24, recordSize);
+  request.set((await sha256(concat([
+    bytes("luauc-source-request-v1\0"),
+    profileDigest,
+    packDigest,
+    manifestDigest,
+  ]))).subarray(0, 16), 32);
+  request.set(profileDigest, 48);
+  request.set(packDigest, 80);
+  request.set(manifestDigest, 112);
+
+  let cursor = headerSize + recordSize * modules.length;
+  for (let index = 0; index < modules.length; index++) {
+    const module = modules[index];
+    const record = headerSize + recordSize * index;
+    putU32(request, record, cursor);
+    putU32(request, record + 4, module.name.length);
+    request.set(module.name, cursor);
+    cursor += module.name.length;
+    putU32(request, record + 8, cursor);
+    putU32(request, record + 12, module.sourceName.length);
+    request.set(module.sourceName, cursor);
+    cursor += module.sourceName.length;
+    putU32(request, record + 16, cursor);
+    putU32(request, record + 20, module.content.length);
+    request.set(module.content, cursor);
+    cursor += module.content.length;
+    request.set(module.contentDigest, record + 24);
+  }
+  return request;
+}
+
+export async function compilePackage(compilerBytes, profileBytes, packBytes, modules, entryName = "main") {
+  const module = new WebAssembly.Module(bytes(compilerBytes));
+  if (WebAssembly.Module.imports(module).length) throw new Error("luauc.wasm has imports");
+  const api = new WebAssembly.Instance(module, {}).exports;
+  const profileInput = allocation(api, profileBytes);
+  const packInput = allocation(api, packBytes);
+  const contextResult = allocation(api, 72);
+  let handle = 0;
+  try {
+    new Uint8Array(api.memory.buffer, contextResult.pointer, contextResult.size).fill(0);
+    const status = api.luauc_v1_context_create(
+      profileInput.pointer,
+      profileInput.size,
+      packInput.pointer,
+      packInput.size,
+      contextResult.pointer,
+    );
+    const result = new DataView(api.memory.buffer, contextResult.pointer, contextResult.size);
+    if (status || result.getUint32(4, true))
+      throw new Error(`context creation failed with ${status}/${result.getUint32(4, true)}`);
+    handle = result.getUint32(0, true);
+    const profileDigest = copyBytes(new Uint8Array(api.memory.buffer, contextResult.pointer + 8, 32));
+    const packDigest = copyBytes(new Uint8Array(api.memory.buffer, contextResult.pointer + 40, 32));
+    const sorted = [...modules].sort((lhs, rhs) => compareBytes(bytes(lhs.name), bytes(rhs.name)));
+    const entryModuleId = sorted.findIndex(({ name }) => name === entryName);
+    if (entryModuleId < 0) throw new Error(`missing entry module ${entryName}`);
+    const request = await buildRequest(sorted, entryModuleId, profileDigest, packDigest);
+    const requestInput = allocation(api, request);
+    const compileResult = allocation(api, 208);
+    try {
+      new Uint8Array(api.memory.buffer, compileResult.pointer, compileResult.size).fill(0);
+      const compileStatus = api.luauc_v1_compile(
+        handle,
+        requestInput.pointer,
+        requestInput.size,
+        compileResult.pointer,
+      );
+      const view = new DataView(api.memory.buffer, compileResult.pointer, compileResult.size);
+      const diagnosticPointer = view.getUint32(8, true);
+      const diagnosticSize = view.getUint32(12, true);
+      const diagnostic = diagnosticPointer && diagnosticSize
+        ? decoder.decode(new Uint8Array(api.memory.buffer, diagnosticPointer, diagnosticSize))
+        : "";
+      if (compileStatus || view.getUint32(16, true))
+        throw new Error(`compile failed with ${compileStatus}/${view.getUint32(16, true)}: ${diagnostic}`);
+      const dataPointer = view.getUint32(0, true);
+      const dataSize = view.getUint32(4, true);
+      const artifact = copyBytes(new Uint8Array(api.memory.buffer, dataPointer, dataSize));
+      const provenance = {
+        profileDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 40, 32)),
+        packDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 72, 32)),
+        objectDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 136, 32)),
+        artifactDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 168, 32)),
+      };
+      return { artifact, provenance };
+    } finally {
+      api.luauc_v1_result_free(compileResult.pointer);
+      api.luauc_v1_dealloc(compileResult.pointer, compileResult.size);
+      api.luauc_v1_dealloc(requestInput.pointer, requestInput.size);
+    }
+  } finally {
+    if (handle) api.luauc_v1_context_destroy(handle);
+    api.luauc_v1_dealloc(contextResult.pointer, contextResult.size);
+    api.luauc_v1_dealloc(packInput.pointer, packInput.size);
+    api.luauc_v1_dealloc(profileInput.pointer, profileInput.size);
+  }
+}
+
+export function instantiateArtifact(artifact, namespace = "luauc_embed_v1") {
+  const module = new WebAssembly.Module(bytes(artifact));
+  let instance;
+  const throwCodes = [];
+  const imports = {
+    [namespace]: {
+      protected_call() {
+        try {
+          instance.exports.luauc_embed_v1_protected_call_run();
+          return 0;
+        } catch (error) {
+          if (!throwCodes.length) throw error;
+          return throwCodes.pop();
+        }
+      },
+      set_throw(code) {
+        throwCodes.push(code >>> 0);
+      },
+    },
+  };
+  instance = new WebAssembly.Instance(module, imports);
+  if (typeof instance.exports._start !== "function")
+    throw new Error("embed runtime profile has no initializer");
+  instance.exports._start();
+  if (throwCodes.length) throw new Error("protected-call adapter retained stale throw state");
+  return instance;
+}
+
+export function invoke(instance, number, text) {
+  if (!Number.isSafeInteger(number)) throw new TypeError("embed-v1 JavaScript numbers must be safe integers");
+  const api = instance.exports;
+  const encoded = bytes(text);
+  const allocations = [];
+  const allocate = (size) => {
+    if (size === 0) return 0;
+    const pointer = api.luauc_embed_v1_alloc(size);
+    if (!pointer) throw new Error(`embed-v1 allocation failed for ${size} bytes`);
+    allocations.push(pointer);
+    return pointer;
+  };
+  let context = 0;
+  try {
+    const textPointer = allocate(encoded.length);
+    const outputCapacity = 4096;
+    const outputPointer = allocate(outputCapacity);
+    const requestPointer = allocate(32);
+    const resultPointer = allocate(32);
+    context = api.luauc_embed_v1_context_create();
+    if (!context) throw new Error("embed-v1 context creation failed");
+
+    if (encoded.length) new Uint8Array(api.memory.buffer, textPointer, encoded.length).set(encoded);
+    const request = new DataView(api.memory.buffer, requestPointer, 32);
+    request.setUint32(0, 1, true);
+    request.setUint32(4, 32, true);
+    request.setBigInt64(8, BigInt(number), true);
+    request.setUint32(16, textPointer, true);
+    request.setUint32(20, encoded.length, true);
+    request.setUint32(24, outputPointer, true);
+    request.setUint32(28, outputCapacity, true);
+    new Uint8Array(api.memory.buffer, resultPointer, 32).fill(0);
+    const status = api.luauc_embed_v1_invoke(context, requestPointer, 32, resultPointer);
+    const result = new DataView(api.memory.buffer, resultPointer, 32);
+    const outputSize = result.getUint32(16, true);
+    if (outputSize > outputCapacity) throw new Error("embed-v1 returned an out-of-range output size");
+    const output = decoder.decode(new Uint8Array(api.memory.buffer, outputPointer, outputSize));
+    return {
+      status,
+      resultStatus: result.getUint32(0, true),
+      error: !!(result.getUint32(4, true) & 1),
+      number: Number(result.getBigInt64(8, true)),
+      text: output,
+    };
+  } finally {
+    if (context) api.luauc_embed_v1_context_destroy(context);
+    for (let index = allocations.length; index-- > 0;)
+      api.luauc_embed_v1_dealloc(allocations[index]);
+  }
+}

@@ -1,0 +1,11 @@
+load("//bazel:defs.bzl", "luauc_package")
+
+luauc_package(
+    name = "program",
+    modules = {
+        "lib": "//conformance/sources:embed_lib.luau",
+        "main": "//conformance/sources:embed_main.luau",
+    },
+    entry = "main",
+    visibility = ["//visibility:public"],
+)

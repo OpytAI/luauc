@@ -1,0 +1,70 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary")
+
+zig_binary(
+    name = "layout_probe_raw",
+    copts = [
+        "-fno-exceptions",
+        "-fno-rtti",
+    ],
+    csrcs = ["layout_probe.cpp"],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        "layout_fields.def",
+    ],
+    linkopts = [
+        "-lc",
+        "-fno-entry",
+        "--export=luauc_layout_schema_version",
+        "--export=luauc_layout_value_count",
+        "--export=luauc_layout_value",
+    ],
+    main = "layout_probe_root.zig",
+    tags = ["manual"],
+    deps = ["@luau//:interp_incs"],
+)
+zig_configure_binary(
+    name = "layout_probe_wasm",
+    actual = ":layout_probe_raw",
+    mode = "release_small",
+    target = "//platforms:wasm32_wasi",
+    threaded = "single",
+)
+
+build_test(
+    name = "layout_probe_build_test",
+    targets = [":layout_probe_wasm"],
+)
+
+js_test(
+    name = "layout_manifest_test",
+    data = [
+        "//conformance/maps:layout_json",
+        ":layout_probe_wasm",
+        "layout_fields.def",
+        "layout_probe.test.mjs",
+    ],
+    entry_point = "layout_probe.test.mjs",
+    env = {
+        "LUAUC_LAYOUT_FIELDS": "$(rlocationpath layout_fields.def)",
+        "LUAUC_LAYOUT_MANIFEST": "$(rlocationpath //conformance/maps:layout_json)",
+        "LUAUC_LAYOUT_WASM": "$(rlocationpath :layout_probe_wasm)",
+    },
+)
+
+js_test(
+    name = "runtime_archive_test",
+    data = [
+        "//conformance/maps:runtime_objects_json",
+        "//conformance/maps:runtime_sources_json",
+        "//runtime:runtime_archive_wasm32",
+        "runtime_archive.test.mjs",
+    ],
+    entry_point = "runtime_archive.test.mjs",
+    env = {
+        "LUAUC_RUNTIME_ARCHIVE": "$(rlocationpath //runtime:runtime_archive_wasm32)",
+        "LUAUC_RUNTIME_OBJECT_MANIFEST": "$(rlocationpath //conformance/maps:runtime_objects_json)",
+        "LUAUC_RUNTIME_SOURCE_MANIFEST": "$(rlocationpath //conformance/maps:runtime_sources_json)",
+    },
+)

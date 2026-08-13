@@ -1,0 +1,47 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "embed_host",
+    srcs = ["src/main.rs"],
+    crate_root = "src/main.rs",
+    edition = "2021",
+    deps = [
+        "@wasmtime_crates//:anyhow",
+        "@wasmtime_crates//:sha2",
+        "@wasmtime_crates//:wasmtime",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "build_test",
+    targets = [":embed_host"],
+)
+
+js_test(
+    name = "parity_test",
+    data = [
+        ":embed_host",
+        ":parity.test.mjs",
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:embed_main",
+        "//compiler:compiler_wasm",
+        "//conformance/interpreter:pinned_interpreter",
+        "//hosts/js:host",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+    ],
+    entry_point = "parity.test.mjs",
+    env = {
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_LIB": "$(rlocationpath //conformance/sources:embed_lib)",
+        "LUAUC_EMBED_MAIN": "$(rlocationpath //conformance/sources:embed_main)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_WASMTIME_HOST": "$(rlocationpath :embed_host)",
+        "LUAUC_PINNED_INTERPRETER": "$(rlocationpath //conformance/interpreter:pinned_interpreter)",
+    },
+    size = "large",
+)

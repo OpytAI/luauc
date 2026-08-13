@@ -1,0 +1,76 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_zig//zig:defs.bzl", "zig_configure", "zig_library", "zig_static_library")
+load("//bazel:cc.bzl", "cc_headers")
+
+exports_files(["runtime_symbols.bzl"])
+exports_files(["abi_v1.zig"])
+
+cc_headers(
+    name = "runtime_incs",
+    hdrs = ["include/aot_runtime_v1.h"],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+
+cc_headers(
+    name = "runtime_patch_incs",
+    hdrs = [
+        "include/error_channel.h",
+        "include/trap.h",
+    ],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "runtime_abi",
+    import_name = "luauc_runtime_abi",
+    main = "abi_v1.zig",
+    visibility = ["//visibility:public"],
+)
+
+zig_static_library(
+    name = "runtime_archive_raw",
+    main = "runtime_archive_root.zig",
+    csrcs = [
+        "@luau//:aot_runtime_srcs",
+        "src/call_frame.cpp",
+    ],
+    copts = [
+        "-DLUAUC_RUNTIME=1",
+        "-include",
+        "runtime/include/force_extern_c.h",
+        "-fno-exceptions",
+        "-fno-rtti",
+    ],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        "include/aot_runtime_v1.h",
+        "include/error_channel.h",
+        "include/force_extern_c.h",
+        "include/trap.h",
+    ],
+    zigopts = [
+        "-lc",
+        "-lc++",
+    ],
+    deps = [
+        ":runtime_incs",
+        "@luau//:interp_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+zig_configure(
+    name = "runtime_archive_wasm32",
+    actual = ":runtime_archive_raw",
+    mode = "release_small",
+    target = "//platforms:wasm32_wasi",
+    threaded = "single",
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "runtime_archive_build_test",
+    targets = [":runtime_archive_wasm32"],
+)

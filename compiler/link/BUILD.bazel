@@ -1,0 +1,21 @@
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_test")
+
+zig_library(
+    name = "linker",
+    main = "linker.zig",
+    import_name = "luauc_linker",
+    visibility = ["//visibility:public"],
+    deps = ["//schema:runtime_profile_v1"],
+)
+
+zig_test(
+    name = "linker_test",
+    main = "linker.zig",
+    deps = ["//schema:runtime_profile_v1"],
+)
+
+zig_binary(
+    name = "linker_cli",
+    main = "linker_main.zig",
+    deps = [":linker", "//schema:runtime_profile_v1"],
+)

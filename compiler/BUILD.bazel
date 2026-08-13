@@ -1,0 +1,109 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library", "zig_test")
+
+zig_library(
+    name = "source_package_v1",
+    main = "source_package_v1.zig",
+    import_name = "luauc_source_package_v1",
+    visibility = ["//visibility:public"],
+)
+
+zig_test(
+    name = "source_package_v1_test",
+    main = "source_package_v1.zig",
+)
+
+zig_binary(
+    name = "compiler_raw",
+    main = "compiler_host.zig",
+    csrcs = [
+        "@luau//:interp_srcs",
+        "@luau//:aot_frontend_codegen_ir_srcs",
+        "//frontend:embedded_compiler_csrcs",
+    ],
+    copts = [
+        "-DLUAUC_COMPILER_HOST=1",
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        "@luau//:aot_frontend_codegen_ir_headers",
+        "//frontend:embedded_compiler_headers",
+        "//schema:frontend_snapshot_v1.h",
+    ],
+    linkopts = [
+        "-lc",
+        "-lc++",
+        "-fno-entry",
+        "--initial-memory=67108864",
+        "--max-memory=536870912",
+        "--export=luauc_v1_describe",
+        "--export=luauc_v1_alloc",
+        "--export=luauc_v1_dealloc",
+        "--export=luauc_v1_context_create",
+        "--export=luauc_v1_context_destroy",
+        "--export=luauc_v1_compile",
+        "--export=luauc_v1_result_free",
+    ],
+    tags = ["manual"],
+    deps = [
+        ":source_package_v1",
+        "//compiler/backend:backend",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/link:linker",
+        "//frontend:frontend_incs",
+        "//schema:runtime_profile_v1",
+        "@luau//:aot_frontend_codegen_ir_incs",
+        "@luau//:interp_incs",
+    ],
+)
+
+zig_configure_binary(
+    name = "compiler_wasm_unstripped",
+    actual = ":compiler_raw",
+    mode = "release_small",
+    target = "//platforms:wasm32_wasi",
+    threaded = "single",
+)
+
+js_binary(
+    name = "strip_start",
+    entry_point = "strip_start.mjs",
+)
+
+genrule(
+    name = "compiler_wasm",
+    srcs = [":compiler_wasm_unstripped"],
+    outs = ["luauc.wasm"],
+    cmd = "BAZEL_BINDIR=. $(execpath :strip_start) $(location :compiler_wasm_unstripped) $@",
+    tools = [":strip_start"],
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "compiler_build_test",
+    targets = [":compiler_wasm"],
+)
+
+js_test(
+    name = "compiler_api_test",
+    data = [
+        ":compiler_api.test.mjs",
+        ":compiler_wasm",
+        "//profiles/embed:embed_v1_profile",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_alt_v1_profile",
+        "//profiles/embed:embed_alt_v1_pack",
+    ],
+    entry_point = "compiler_api.test.mjs",
+    env = {
+        "LUAUC_COMPILER_WASM": "$(rlocationpath :compiler_wasm)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_ALT_PROFILE": "$(rlocationpath //profiles/embed:embed_alt_v1_profile)",
+        "LUAUC_EMBED_ALT_PACK": "$(rlocationpath //profiles/embed:embed_alt_v1_pack)",
+    },
+)

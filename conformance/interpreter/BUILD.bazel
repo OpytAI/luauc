@@ -1,0 +1,21 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "pinned_interpreter",
+    srcs = [
+        "main.cpp",
+        "native_trap.cpp",
+        "@luau//:interp_all_hdrs",
+        "@luau//:interp_srcs",
+    ],
+    copts = ["-std=c++17"],
+    data = [
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:embed_main",
+    ],
+    deps = [
+        "//runtime:runtime_patch_incs",
+        "@luau//:interp_incs",
+    ],
+    visibility = ["//visibility:public"],
+)

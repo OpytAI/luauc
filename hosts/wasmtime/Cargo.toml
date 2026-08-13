@@ -1,0 +1,13 @@
+[package]
+name = "luauc-embed-wasmtime"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "luauc-embed-wasmtime"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+sha2 = "0.10"
+wasmtime = "43.0.0"

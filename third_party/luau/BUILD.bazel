@@ -1,0 +1,26 @@
+"""Pinned Luau source archive contract and project-owned patches."""
+
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+
+exports_files([
+    "BUILD.luau.bazel",
+    "LICENSE.txt",
+    "lua_LICENSE.txt",
+    "patches/0001-wasm-errors.patch",
+    "patches/0002-frontend-single-thread.patch",
+    "patches/0003-strict-aot-runtime-dispatch.patch",
+    "patches/0004-integer-buffer-fastcalls.patch",
+])
+
+js_library(
+    name = "frontend_contract_inputs",
+    srcs = [
+        "BUILD.bazel",
+        "BUILD.luau.bazel",
+        "patches/0001-wasm-errors.patch",
+        "patches/0002-frontend-single-thread.patch",
+        "patches/0003-strict-aot-runtime-dispatch.patch",
+        "patches/0004-integer-buffer-fastcalls.patch",
+    ],
+    visibility = ["//visibility:public"],
+)

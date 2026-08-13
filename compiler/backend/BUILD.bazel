@@ -1,0 +1,106 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library")
+
+exports_files(glob(["*.luau"]))
+
+zig_library(
+    name = "backend",
+    main = "lower.zig",
+    import_name = "luauc_backend",
+    srcs = ["static_package_v1.zig"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)
+zig_binary(
+    name = "backend_raw",
+    srcs = ["backend_host.zig"],
+    linkopts = [
+        "-fno-entry",
+        "--initial-memory=33554432",
+        "--max-memory=268435456",
+        "--export=luauc_backend_v1_alloc",
+        "--export=luauc_backend_v1_compile",
+        "--export=luauc_backend_v1_compile_package",
+        "--export=luauc_backend_v1_compile_static_package",
+        "--export=luauc_backend_v1_dealloc",
+        "--export=luauc_backend_v1_free",
+    ],
+    main = "backend_host.zig",
+    tags = ["manual"],
+    deps = [":backend"],
+)
+
+zig_configure_binary(
+    name = "backend_wasm",
+    actual = ":backend_raw",
+    mode = "release_small",
+    target = "//platforms:wasm32_wasi",
+    threaded = "single",
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "backend_build_test",
+    targets = [":backend_wasm"],
+)
+
+js_test(
+    name = "frontend_to_wasm_test",
+    data = [
+        ":backend_wasm",
+        ":frontend_to_wasm.test.mjs",
+        "buffer_scalar_matrix.luau",
+        "captured_call.luau",
+        "compiled_call.luau",
+        "dynamic_array_table.luau",
+        "dynamic_hash_table.luau",
+        "dynamic_string.luau",
+        "fast_builtins.luau",
+        "forwarded_capture.luau",
+        "generic_iteration.luau",
+        "generic_table.luau",
+        "global_state.luau",
+        "mixed_table.luau",
+        "multi_result_call.luau",
+        "reference_capture.luau",
+        "recursive_call.luau",
+        "silent_return.luau",
+        "slow_add.luau",
+        "table_clone_append.luau",
+        "table_namecall.luau",
+        "yield_call.luau",
+        "//frontend:frontend_wasm",
+        "@@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld",
+    ],
+    entry_point = "frontend_to_wasm.test.mjs",
+    env = {
+        "LUAUC_BACKEND_WASM": "$(rlocationpath :backend_wasm)",
+        "LUAUC_BUFFER_SCALAR_MATRIX_SOURCE": "$(rlocationpath buffer_scalar_matrix.luau)",
+        "LUAUC_CAPTURED_CALL_SOURCE": "$(rlocationpath captured_call.luau)",
+        "LUAUC_COMPILED_CALL_SOURCE": "$(rlocationpath compiled_call.luau)",
+        "LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE": "$(rlocationpath dynamic_array_table.luau)",
+        "LUAUC_DYNAMIC_HASH_TABLE_SOURCE": "$(rlocationpath dynamic_hash_table.luau)",
+        "LUAUC_DYNAMIC_STRING_SOURCE": "$(rlocationpath dynamic_string.luau)",
+        "LUAUC_FAST_BUILTINS_SOURCE": "$(rlocationpath fast_builtins.luau)",
+        "LUAUC_FORWARDED_CAPTURE_SOURCE": "$(rlocationpath forwarded_capture.luau)",
+        "LUAUC_FRONTEND_WASM": "$(rlocationpath //frontend:frontend_wasm)",
+        "LUAUC_GENERIC_ITERATION_SOURCE": "$(rlocationpath generic_iteration.luau)",
+        "LUAUC_GENERIC_TABLE_SOURCE": "$(rlocationpath generic_table.luau)",
+        "LUAUC_GLOBAL_STATE_SOURCE": "$(rlocationpath global_state.luau)",
+        "LUAUC_MIXED_TABLE_SOURCE": "$(rlocationpath mixed_table.luau)",
+        "LUAUC_MULTI_RESULT_CALL_SOURCE": "$(rlocationpath multi_result_call.luau)",
+        "LUAUC_RECURSIVE_CALL_SOURCE": "$(rlocationpath recursive_call.luau)",
+        "LUAUC_REFERENCE_CAPTURE_SOURCE": "$(rlocationpath reference_capture.luau)",
+        "LUAUC_SILENT_SOURCE": "$(rlocationpath silent_return.luau)",
+        "LUAUC_SLOW_ADD_SOURCE": "$(rlocationpath slow_add.luau)",
+        "LUAUC_TABLE_CLONE_APPEND_SOURCE": "$(rlocationpath table_clone_append.luau)",
+        "LUAUC_TABLE_NAMECALL_SOURCE": "$(rlocationpath table_namecall.luau)",
+        "LUAUC_WASM_LD": "$(rlocationpath @@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld)",
+        "LUAUC_YIELD_CALL_SOURCE": "$(rlocationpath yield_call.luau)",
+    },
+    no_copy_to_bin = ["@@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld"],
+)

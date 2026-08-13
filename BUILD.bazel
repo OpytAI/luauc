@@ -1,0 +1,22 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+])
+
+alias(
+    name = "luauc",
+    actual = "//hosts/js:luauc",
+)
+
+alias(
+    name = "embed-js",
+    actual = "//hosts/js:embed",
+)
+
+alias(
+    name = "embed-wasmtime",
+    actual = "//hosts/wasmtime:embed_host",
+)

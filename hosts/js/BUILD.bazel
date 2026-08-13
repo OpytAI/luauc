@@ -1,0 +1,65 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library", "js_test")
+
+js_library(
+    name = "host",
+    srcs = ["host.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+js_binary(
+    name = "luauc",
+    data = [":host"],
+    entry_point = "cli.mjs",
+    visibility = ["//visibility:public"],
+)
+
+js_binary(
+    name = "embed",
+    data = [":host"],
+    entry_point = "run.mjs",
+    visibility = ["//visibility:public"],
+)
+
+js_test(
+    name = "cli_test",
+    data = [
+        ":cli.test.mjs",
+        ":host",
+        ":luauc",
+        "//compiler:compiler_wasm",
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:embed_main",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+    ],
+    entry_point = "cli.test.mjs",
+    env = {
+        "LUAUC_CLI": "$(rlocationpath :luauc)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_LIB": "$(rlocationpath //conformance/sources:embed_lib)",
+        "LUAUC_EMBED_MAIN": "$(rlocationpath //conformance/sources:embed_main)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+    },
+)
+
+js_test(
+    name = "embed_test",
+    data = [
+        ":embed.test.mjs",
+        ":host",
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:embed_main",
+        "//compiler:compiler_wasm",
+        "//profiles/embed:embed_v1_profile",
+        "//profiles/embed:embed_v1_pack",
+    ],
+    entry_point = "embed.test.mjs",
+    env = {
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_LIB": "$(rlocationpath //conformance/sources:embed_lib)",
+        "LUAUC_EMBED_MAIN": "$(rlocationpath //conformance/sources:embed_main)",
+    },
+)

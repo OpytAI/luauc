@@ -1,0 +1,42 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+
+exports_files([
+    "luauc_ir_coverage.json",
+    "luauc_layout.json",
+    "luauc_runtime_link_reference.json",
+    "luauc_runtime_objects.json",
+    "luauc_runtime_sources.json",
+])
+
+js_library(
+    name = "frontend_identity_inputs",
+    srcs = [
+        "luauc_ir_coverage.json",
+        "luauc_layout.json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "layout_json",
+    srcs = ["luauc_layout.json"],
+    visibility = ["//tools:__pkg__"],
+)
+
+js_library(
+    name = "runtime_link_reference_json",
+    srcs = ["luauc_runtime_link_reference.json"],
+    visibility = ["//tools:__pkg__"],
+)
+
+js_library(
+    name = "runtime_objects_json",
+    srcs = ["luauc_runtime_objects.json"],
+    visibility = ["//tools:__pkg__"],
+)
+
+js_library(
+    name = "runtime_sources_json",
+    srcs = ["luauc_runtime_sources.json"],
+    visibility = ["//tools:__pkg__"],
+)

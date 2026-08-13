@@ -1,0 +1,6 @@
+luauc
+Copyright 2026 OpytAI
+
+This product includes Luau 0.725, Copyright (c) 2019-2025 Roblox Corporation, and Lua-derived
+software, Copyright (c) 1994-2019 Lua.org, PUC-Rio. Their MIT license texts are preserved in
+third_party/luau/LICENSE.txt and third_party/luau/lua_LICENSE.txt.

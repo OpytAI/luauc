@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "generator_version": "luauc-runtime-sources-v1",
+  "luau_pin": {
+    "version": "0.725",
+    "archive_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676"
+  },
+  "status": "archive_built_unlinked",
+  "retained_count": 34,
+  "retained_runtime_sources": [
+    "VM/src/lapi.cpp",
+    "VM/src/laux.cpp",
+    "VM/src/lbaselib.cpp",
+    "VM/src/lbitlib.cpp",
+    "VM/src/lbuffer.cpp",
+    "VM/src/lbuflib.cpp",
+    "VM/src/lbuiltins.cpp",
+    "VM/src/lclass.cpp",
+    "VM/src/lclasslib.cpp",
+    "VM/src/lcorolib.cpp",
+    "VM/src/ldblib.cpp",
+    "VM/src/ldebug.cpp",
+    "VM/src/ldo.cpp",
+    "VM/src/lfunc.cpp",
+    "VM/src/lgc.cpp",
+    "VM/src/lgcdebug.cpp",
+    "VM/src/linit.cpp",
+    "VM/src/lintlib.cpp",
+    "VM/src/lmathlib.cpp",
+    "VM/src/lmem.cpp",
+    "VM/src/lnumprint.cpp",
+    "VM/src/lobject.cpp",
+    "VM/src/loslib.cpp",
+    "VM/src/lperf.cpp",
+    "VM/src/lstate.cpp",
+    "VM/src/lstring.cpp",
+    "VM/src/lstrlib.cpp",
+    "VM/src/ltable.cpp",
+    "VM/src/ltablib.cpp",
+    "VM/src/ltm.cpp",
+    "VM/src/ludata.cpp",
+    "VM/src/lutf8lib.cpp",
+    "VM/src/lveclib.cpp",
+    "VM/src/lvmutils.cpp"
+  ],
+  "forbidden_family_count": 7,
+  "forbidden_runtime_families": [
+    "Ast/src/*.cpp",
+    "Bytecode/src/*.cpp",
+    "Common/src/*.cpp",
+    "Compiler/src/*.cpp",
+    "CodeGen/src/*.cpp",
+    "Analysis/src/*.cpp",
+    "Config/src/*.cpp"
+  ],
+  "forbidden_file_count": 2,
+  "forbidden_runtime_files": [
+    "VM/src/lvmexecute.cpp",
+    "VM/src/lvmload.cpp"
+  ],
+  "project_adapter": {
+    "source": "src/call_frame.cpp",
+    "upstream_pin": "0.725",
+    "purpose": "extract generic call-frame and hook mechanics from the forbidden bytecode executor and own the strict AOT metadata, frame, static-module, materialized-constant, table, iteration, and method-dispatch ABI",
+    "defines": [
+      "luau_callhook",
+      "luau_precall",
+      "luau_poscall",
+      "luauc_runtime_v1_call",
+      "luauc_runtime_v1_close_upvalues",
+      "luauc_runtime_v1_do_arith",
+      "luauc_runtime_v1_dup_table",
+      "luauc_runtime_v1_dupclosure",
+      "luauc_runtime_v1_enter",
+      "luauc_runtime_v1_exchange_continuation",
+      "luauc_runtime_v1_finish_yielded_op",
+      "luauc_runtime_v1_forg_loop",
+      "luauc_runtime_v1_forg_loop_call",
+      "luauc_runtime_v1_forg_loop_finish",
+      "luauc_runtime_v1_forg_prep",
+      "luauc_runtime_v1_get_upvalue",
+      "luauc_runtime_v1_get_varargs_fixed",
+      "luauc_runtime_v1_get_varargs_multret",
+      "luauc_runtime_v1_interrupt",
+      "luauc_runtime_v1_load_constant",
+      "luauc_runtime_v1_namecall_plain",
+      "luauc_runtime_v1_newclosure_capture",
+      "luauc_runtime_v1_prep_varargs",
+      "luauc_runtime_v1_push_program",
+      "luauc_runtime_v1_push_root",
+      "luauc_runtime_v1_require_static",
+      "luauc_runtime_v1_return",
+      "luauc_runtime_v1_set_location",
+      "luauc_runtime_v1_set_upvalue",
+      "luauc_runtime_v1_table_insert_append"
+    ],
+    "bytecode_boundary": {
+      "requires_code_null": true,
+      "requires_codeentry_null": true,
+      "requires_sizecode_zero": true,
+      "requires_execdata_nonnull": true,
+      "requires_source_nonnull": true,
+      "aot_frame_savedpc": "never_fabricated",
+      "aot_frame_location": "CallInfo.aotstate low 20 bits; zero is unknown and currentpc remains opaque",
+      "aot_frame_continuation": "CallInfo.aotstate high 12 bits; zero means no resumable continuation",
+      "aot_frame_flag": "LUA_CALLINFO_NATIVE"
+    }
+  },
+  "dispatch_patch": {
+    "source": "third_party/luau/patches/0003-strict-aot-runtime-dispatch.patch",
+    "compile_define": "LUAUC_RUNTIME",
+    "normal_build_behavior": "unchanged_luau_execute_and_luau_finishop",
+    "aot_entry_symbol": "luauc_runtime_v1_enter",
+    "aot_yield_finish_symbol": "luauc_runtime_v1_finish_yielded_op"
+  },
+  "resolved_excluded_executor_symbol_count": 5,
+  "resolved_excluded_executor_symbols": [
+    {
+      "symbol": "luau_execute",
+      "defined_at": "VM/src/lvmexecute.cpp:3718",
+      "resolution": "conditional ldo dispatch patch routes AOT entry to luauc_runtime_v1_enter"
+    },
+    {
+      "symbol": "luau_finishop",
+      "defined_at": "VM/src/lvmexecute.cpp:3726",
+      "resolution": "conditional ldo dispatch patch routes yielded-op completion to luauc_runtime_v1_finish_yielded_op"
+    },
+    {
+      "symbol": "luau_precall",
+      "defined_at": "VM/src/lvmexecute.cpp:3759",
+      "resolution": "project adapter extracts generic call setup and rejects bytecode-bearing Proto metadata"
+    },
+    {
+      "symbol": "luau_poscall",
+      "defined_at": "VM/src/lvmexecute.cpp:3845",
+      "resolution": "project adapter extracts generic result movement and frame restoration"
+    },
+    {
+      "symbol": "luau_callhook",
+      "defined_at": "VM/src/lvmexecute.cpp:149",
+      "resolution": "project adapter preserves paused-thread hook mechanics and reports no fabricated bytecode source line"
+    }
+  ],
+  "required_final_link_symbol_count": 2,
+  "required_final_link_symbols": [
+    "luauc_runtime_v1_protected_call",
+    "luauc_runtime_v1_raise"
+  ],
+  "notes": [
+    "The declared set compiles into a 36-member wasm32 relocatable archive: 34 retained upstream translation units, one project call-frame adapter, and the required empty Zig root object.",
+    "archive_built_unlinked means standard relocatable objects exist; generated functions, profile-provided protected-call hooks, libc, the provider adapter, and any entry adapter are separate normalized-pack inputs.",
+    "The project adapter owns the versioned strict-AOT program metadata, rooted Proto constant materialization, plain table-template cloning, append mutation, direct table method dispatch, and one table-valued __index prototype method lookup, packed native-frame source location and continuation state, frame entry, fixed and open-result return, variadic frame preparation and retrieval, zero-upvalue, one-direct-value-upvalue, and one-reference-upvalue closure materialization, open/closed UpVal access and mutation, fixed and open-argument/result compiled calls, a GC-rooted static-module registry that caches successful exports, retries failed initializers, explicitly rejects active cycles, and caches the entry-module result, plus the Proto teardown ABI.",
+    "lvmutils.cpp remains because it owns reusable value, table, comparison, arithmetic, concatenation, length, loop, and metamethod helpers.",
+    "luaV_getimport remains trapped in forbidden VM/src/lvmload.cpp and general imports remain unsupported; exact safe-environment-proven literal require clusters are instead resolved to closed-package module IDs and call luauc_runtime_v1_require_static."
+  ],
+  "canonical_hash": "5c82cc721b0d4910e03f8871b08b0cdcb59a6e1eb34afde91cbb43af15c065e3"
+}

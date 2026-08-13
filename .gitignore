@@ -1,0 +1,10 @@
+/bazel-bin
+/bazel-out
+/bazel-testlogs
+/bazel-luauc
+/node_modules
+/.zig-cache
+user.bazelrc
+.bazelrc.user
+*.wasm
+*.o
