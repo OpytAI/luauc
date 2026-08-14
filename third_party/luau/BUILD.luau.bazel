@@ -2,6 +2,40 @@
 # the compiler frontend and strict runtime; final binaries are owned by the main repository.
 
 load("@luauc//bazel:cc.bzl", "cc_headers")
+load("@luauc//luau:components.bzl", "luauc_cpp_archive")
+
+INTERP_SRCS = glob([
+    "VM/src/*.cpp",
+    "Compiler/src/*.cpp",
+    "Ast/src/*.cpp",
+    "Bytecode/src/*.cpp",
+    "Common/src/*.cpp",
+])
+
+INTERP_HEADERS = glob([
+    "VM/**/*.h",
+    "Compiler/**/*.h",
+    "Ast/**/*.h",
+    "Bytecode/**/*.h",
+    "Common/**/*.h",
+])
+
+ANALYSIS_SRCS = glob(
+    [
+        "Config/src/*.cpp",
+        "Analysis/src/*.cpp",
+    ],
+    exclude = [
+        "Analysis/src/Autocomplete.cpp",
+        "Analysis/src/AutocompleteCore.cpp",
+        "Analysis/src/FragmentAutocomplete.cpp",
+    ],
+)
+
+ANALYSIS_HEADERS = glob([
+    "Config/**/*.h",
+    "Analysis/**/*.h",
+])
 
 # Pin-specific source policy for the Luau AOT frontend and target runtime. These lists are explicit
 # so an upstream pin update cannot silently add a compiler, loader, or bytecode executor to the
@@ -224,13 +258,7 @@ cc_headers(
 # The interpreter's translation units: VM (bytecode exec) + Compiler + Ast + Bytecode + Common.
 filegroup(
     name = "interp_srcs",
-    srcs = glob([
-        "VM/src/*.cpp",
-        "Compiler/src/*.cpp",
-        "Ast/src/*.cpp",
-        "Bytecode/src/*.cpp",
-        "Common/src/*.cpp",
-    ]),
+    srcs = INTERP_SRCS,
     visibility = ["//visibility:public"],
 )
 
@@ -281,13 +309,7 @@ cc_headers(
 # These are NOT a cdep — they must not become @cImport `direct_public_headers`.
 filegroup(
     name = "interp_all_hdrs",
-    srcs = glob([
-        "VM/**/*.h",
-        "Compiler/**/*.h",
-        "Ast/**/*.h",
-        "Bytecode/**/*.h",
-        "Common/**/*.h",
-    ]),
+    srcs = INTERP_HEADERS,
     visibility = ["//visibility:public"],
 )
 
@@ -296,26 +318,13 @@ filegroup(
 # ownership in this facade.
 filegroup(
     name = "analysis_srcs",
-    srcs = glob(
-        [
-            "Config/src/*.cpp",
-            "Analysis/src/*.cpp",
-        ],
-        exclude = [
-            "Analysis/src/Autocomplete.cpp",
-            "Analysis/src/AutocompleteCore.cpp",
-            "Analysis/src/FragmentAutocomplete.cpp",
-        ],
-    ),
+    srcs = ANALYSIS_SRCS,
     visibility = ["//visibility:public"],
 )
 
 filegroup(
     name = "analysis_all_hdrs",
-    srcs = glob([
-        "Config/**/*.h",
-        "Analysis/**/*.h",
-    ]),
+    srcs = ANALYSIS_HEADERS,
     visibility = ["//visibility:public"],
 )
 
@@ -327,6 +336,40 @@ cc_headers(
         "Analysis/include",
         "Analysis/src",
         "Config/include",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+luauc_cpp_archive(
+    name = "interp_wasm32_wasi",
+    srcs = INTERP_SRCS,
+    copts = [
+        "-include",
+        "force_extern_c.h",
+        "-fno-exceptions",
+        "-fno-rtti",
+    ],
+    extra_srcs = INTERP_HEADERS + ["@luauc//runtime:runtime_patch_headers"],
+    deps = [
+        ":interp_headers",
+        "@luauc//runtime:runtime_patch_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+luauc_cpp_archive(
+    name = "analysis_wasm32_wasi",
+    srcs = ANALYSIS_SRCS,
+    copts = [
+        "-include",
+        "Luau/AnalysisEhShim.h",
+        "-fno-exceptions",
+        "-fno-rtti",
+    ],
+    extra_srcs = ANALYSIS_HEADERS + INTERP_HEADERS,
+    deps = [
+        ":analysis_incs",
+        ":interp_headers",
     ],
     visibility = ["//visibility:public"],
 )

@@ -96,7 +96,16 @@ pack manifest from those bytes; it does not select a provider namespace or entry
 ## Pinned Luau components
 
 `luauc` is the sole pin and patch authority for its Luau distribution. Downstream interpreter and
-analysis products consume stable facades instead of addressing the private `@luau` repository:
+analysis products consume stable component archives instead of addressing the private `@luau`
+repository or compiling its source set themselves:
+
+- `@luauc//luau:interpreter_wasm32_wasi`
+- `@luauc//luau:analysis_wasm32_wasi`
+
+Each C++ translation unit is an independent Bazel action; luauc assembles the resulting Wasm objects
+into one deterministic archive per component. The analysis archive is disjoint and links with the
+interpreter archive. Source and header facades remain available for consumers targeting another
+toolchain:
 
 - `@luauc//luau:interpreter_sources`
 - `@luauc//luau:interpreter_headers`
@@ -110,9 +119,8 @@ interpreter exception boundary, while the analysis header set carries the no-exc
 shim. Consumers still own executable entrypoints, protected-call providers, effects, packaging, and
 installation.
 
-The source facades are disjoint: an analyzer links `analysis_sources` together with
-`interpreter_sources`. This keeps the components independently compilable and prevents a consumer
-from compiling the interpreter twice under different component policies.
+The source facades preserve the same disjoint ownership, preventing a consumer from compiling the
+interpreter twice under different component policies.
 
 Rules that compile the interpreter use `@luauc//runtime:runtime_patch_incs` for include paths and
 `@luauc//runtime:runtime_patch_headers` for declared header inputs. Keeping these targets separate

@@ -31,3 +31,13 @@ alias(
     name = "analysis_header_files",
     actual = "@luau//:analysis_all_hdrs",
 )
+
+alias(
+    name = "interpreter_wasm32_wasi",
+    actual = "@luau//:interp_wasm32_wasi",
+)
+
+alias(
+    name = "analysis_wasm32_wasi",
+    actual = "@luau//:analysis_wasm32_wasi",
+)
