@@ -362,15 +362,18 @@ luauc_cpp_archive(
     srcs = ANALYSIS_SRCS,
     copts = [
         "-include",
+        "force_extern_c.h",
+        "-include",
         "Luau/AnalysisEhShim.h",
         "-fno-exceptions",
         "-fno-rtti",
     ],
-    extra_srcs = ANALYSIS_HEADERS + INTERP_HEADERS,
+    extra_srcs = ANALYSIS_HEADERS + INTERP_HEADERS + ["@luauc//runtime:runtime_patch_headers"],
     deps = [
         ":analysis_incs",
         ":interp_headers",
         ":interp_wasm32_wasi",
+        "@luauc//runtime:runtime_patch_incs",
     ],
     visibility = ["//visibility:public"],
 )
