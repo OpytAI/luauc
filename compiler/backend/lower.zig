@@ -629,6 +629,11 @@ const StringTablePattern = struct {
     rejoin: u32,
 };
 
+const InlineStringTablePattern = struct {
+    pattern: StringTablePattern,
+    finish: u32,
+};
+
 const DupClosurePattern = union(enum) {
     closed: struct {
         destination: u32,
@@ -5673,6 +5678,182 @@ const Context = struct {
         return .{ .operation = .get, .start = start, .pc = pc, .table = table.value, .value = destination.value, .key = key, .fallback = fallback.value, .fast_target = rejoin, .rejoin = rejoin };
     }
 
+    fn inlineGeneralStringSetPatternAt(self: Context, start: u32, block: snapshot_v1.IrBlock) Error!?InlineStringTablePattern {
+        const commands = [_]snapshot_v1.IrCommand{
+            .load_tag,                 .check_tag,              .load_pointer,
+            ir_cmd_get_slot_node_addr, ir_cmd_check_slot_match, ir_cmd_check_readonly,
+            .load_tvalue,              .store_tvalue,           ir_cmd_barrier_table_forward,
+        };
+        if (!block.kind.isCompilable() or block.isEmpty() or start < block.start or start > block.finish or
+            block.finish - start < commands.len - 1 or !try self.commandRangeMatches(start, &commands))
+            return null;
+
+        const load_tag = try self.instruction(start);
+        const check_tag = try self.instruction(start + 1);
+        const load_pointer = try self.instruction(start + 2);
+        const slot = try self.instruction(start + 3);
+        const match = try self.instruction(start + 4);
+        const readonly = try self.instruction(start + 5);
+        const load = try self.instruction(start + 6);
+        const store = try self.instruction(start + 7);
+        const barrier = try self.instruction(start + 8);
+        if (load_tag.operand_count != 1 or check_tag.operand_count != 3 or load_pointer.operand_count != 1 or
+            slot.operand_count != 3 or match.operand_count != 3 or readonly.operand_count != 2 or
+            (load.operand_count != 1 and load.operand_count != 3) or store.operand_count != 3 or
+            barrier.operand_count != 3)
+            return null;
+
+        const table = try self.operand(load_tag, 0);
+        const checked = try self.operand(check_tag, 0);
+        const tag = try self.operand(check_tag, 1);
+        const check_fallback = try self.operand(check_tag, 2);
+        const pointer_table = try self.operand(load_pointer, 0);
+        const slot_pointer = try self.operand(slot, 0);
+        const pc_operand = try self.operand(slot, 1);
+        const key_operand = try self.operand(slot, 2);
+        const matched_slot = try self.operand(match, 0);
+        const matched_key = try self.operand(match, 1);
+        const fallback = try self.operand(match, 2);
+        const readonly_pointer = try self.operand(readonly, 0);
+        const readonly_fallback = try self.operand(readonly, 1);
+        const source = try self.operand(load, 0);
+        const store_slot = try self.operand(store, 0);
+        const store_value = try self.operand(store, 1);
+        const store_offset = try self.operand(store, 2);
+        const barrier_pointer = try self.operand(barrier, 0);
+        const barrier_source = try self.operand(barrier, 1);
+        const barrier_tag = try self.operand(barrier, 2);
+        if (table.kind != .vm_reg or table.value >= self.proto.max_stack_size or
+            checked.kind != .instruction or checked.value != start or tag.kind != .constant or
+            (try self.constant(tag.value)).tagValue() != lua_tag_table or
+            pointer_table.kind != .vm_reg or pointer_table.value != table.value or
+            slot_pointer.kind != .instruction or slot_pointer.value != start + 2 or pc_operand.kind != .constant or
+            key_operand.kind != .vm_const or matched_slot.kind != .instruction or matched_slot.value != start + 3 or
+            matched_key.kind != .vm_const or matched_key.value != key_operand.value or fallback.kind != .block or
+            readonly_pointer.kind != .instruction or readonly_pointer.value != start + 2 or
+            readonly_fallback.kind != .block or readonly_fallback.value != fallback.value or
+            source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
+            store_slot.kind != .instruction or store_slot.value != start + 3 or
+            store_value.kind != .instruction or store_value.value != start + 6 or
+            !try self.intOperandEquals(store_offset, 0) or
+            barrier_pointer.kind != .instruction or barrier_pointer.value != start + 2 or
+            barrier_source.kind != .vm_reg or barrier_source.value != source.value)
+            return null;
+
+        const pc = (try self.constant(pc_operand.value)).uintValue() orelse return null;
+        if ((check_fallback.kind != .block or check_fallback.value != fallback.value) and
+            (check_fallback.kind != .vm_exit or check_fallback.value != pc))
+            return null;
+        if (load.operand_count == 1) {
+            if (barrier_tag.kind != .undef)
+                return null;
+        } else {
+            const load_offset = try self.operand(load, 1);
+            const load_value_tag = try self.operand(load, 2);
+            if (!try self.intOperandEquals(load_offset, 0) or load_value_tag.kind != .constant or
+                (try self.constant(load_value_tag.value)).tagValue() == null or barrier_tag.kind != .constant or
+                (try self.constant(barrier_tag.value)).tagValue() != (try self.constant(load_value_tag.value)).tagValue())
+                return null;
+        }
+        const key = (try self.stringKey(key_operand)) orelse return null;
+        const rejoin = (try self.stringFallbackRejoin(fallback.value, .set, pc, source.value, table.value, key_operand.value)) orelse return null;
+        return .{
+            .pattern = .{
+                .operation = .set,
+                .start = start,
+                .pc = pc,
+                .table = table.value,
+                .value = source.value,
+                .key = key,
+                .fallback = fallback.value,
+                .fast_target = rejoin,
+                .rejoin = rejoin,
+            },
+            .finish = start + 8,
+        };
+    }
+
+    fn inlinePreloadedStringSetPatternAt(self: Context, start: u32, block: snapshot_v1.IrBlock) Error!?InlineStringTablePattern {
+        const commands = [_]snapshot_v1.IrCommand{
+            .load_tvalue,              .store_tvalue,           .nop, .nop,          .nop,
+            ir_cmd_get_slot_node_addr, ir_cmd_check_slot_match, .nop, .store_tvalue, ir_cmd_barrier_table_forward,
+        };
+        if (!block.kind.isCompilable() or block.isEmpty() or start < block.start or start > block.finish or
+            block.finish - start < commands.len - 1 or !try self.commandRangeMatches(start, &commands))
+            return null;
+        const publication = (try self.constantLoadPatternAt(start)) orelse return null;
+
+        const slot_id = start + 5;
+        const slot = try self.instruction(slot_id);
+        const match = try self.instruction(start + 6);
+        const store = try self.instruction(start + 8);
+        const barrier = try self.instruction(start + 9);
+        if (slot.operand_count != 3 or match.operand_count != 3 or store.operand_count != 3 or
+            barrier.operand_count != 3)
+            return null;
+
+        const pointer_operand = try self.operand(slot, 0);
+        const pc_operand = try self.operand(slot, 1);
+        const key_operand = try self.operand(slot, 2);
+        const matched_slot = try self.operand(match, 0);
+        const matched_key = try self.operand(match, 1);
+        const fallback = try self.operand(match, 2);
+        const store_slot = try self.operand(store, 0);
+        const store_value = try self.operand(store, 1);
+        const store_offset = try self.operand(store, 2);
+        const barrier_pointer = try self.operand(barrier, 0);
+        const barrier_source = try self.operand(barrier, 1);
+        const barrier_tag = try self.operand(barrier, 2);
+        if (pointer_operand.kind != .instruction or pointer_operand.value < block.start or pointer_operand.value >= start or
+            pc_operand.kind != .constant or key_operand.kind != .vm_const or
+            matched_slot.kind != .instruction or matched_slot.value != slot_id or
+            matched_key.kind != .vm_const or matched_key.value != key_operand.value or fallback.kind != .block or
+            store_slot.kind != .instruction or store_slot.value != slot_id or
+            store_value.kind != .instruction or store_value.value != start or
+            !try self.intOperandEquals(store_offset, 0) or
+            barrier_pointer.kind != .instruction or barrier_pointer.value != pointer_operand.value or
+            barrier_source.kind != .vm_reg or barrier_source.value != publication.destination or
+            barrier_tag.kind != .constant)
+            return null;
+
+        const pointer = try self.instruction(pointer_operand.value);
+        if (pointer.command != .load_pointer or pointer.operand_count != 1)
+            return null;
+        const table = try self.operand(pointer, 0);
+        if (table.kind != .vm_reg or table.value >= self.proto.max_stack_size)
+            return null;
+        const load = try self.instruction(start);
+        const load_tag = try self.operand(load, 2);
+        if (load_tag.kind != .constant or
+            (try self.constant(load_tag.value)).tagValue() == null or
+            (try self.constant(barrier_tag.value)).tagValue() != (try self.constant(load_tag.value)).tagValue())
+            return null;
+
+        const pc = (try self.constant(pc_operand.value)).uintValue() orelse return null;
+        const key = (try self.stringKey(key_operand)) orelse return null;
+        const rejoin = (try self.stringFallbackRejoin(fallback.value, .set, pc, publication.destination, table.value, key_operand.value)) orelse return null;
+        return .{
+            .pattern = .{
+                .operation = .set,
+                .start = start,
+                .pc = pc,
+                .table = table.value,
+                .value = publication.destination,
+                .key = key,
+                .fallback = fallback.value,
+                .fast_target = rejoin,
+                .rejoin = rejoin,
+            },
+            .finish = start + 9,
+        };
+    }
+
+    fn inlineStringSetPatternAt(self: Context, start: u32, block: snapshot_v1.IrBlock) Error!?InlineStringTablePattern {
+        if (try self.inlineGeneralStringSetPatternAt(start, block)) |pattern|
+            return pattern;
+        return self.inlinePreloadedStringSetPatternAt(start, block);
+    }
+
     fn stringTablePattern(self: Context, block: snapshot_v1.IrBlock) Error!?StringTablePattern {
         if (try self.stringSetPattern(block)) |pattern|
             return pattern;
@@ -8888,6 +9069,9 @@ const Context = struct {
 
             var instruction_id = source.start;
             while (instruction_id <= source.finish) : (instruction_id += 1) {
+                if (try self.inlineStringSetPatternAt(instruction_id, source)) |operation|
+                    if (operation.pattern.fallback == block_id)
+                        return true;
                 if (try self.inlineStringGetPatternAt(instruction_id, source)) |pattern|
                     if (pattern.fallback == block_id)
                         return true;
@@ -10316,6 +10500,11 @@ const Context = struct {
             if (try self.inlineStringGetPatternAt(instruction_id, block)) |pattern| {
                 try self.emitStringTableHelper(pattern);
                 instruction_id += 6;
+                continue;
+            }
+            if (try self.inlineStringSetPatternAt(instruction_id, block)) |operation| {
+                try self.emitStringTableHelper(operation.pattern);
+                instruction_id = operation.finish;
                 continue;
             }
             if (dynamic_length) |pattern| {

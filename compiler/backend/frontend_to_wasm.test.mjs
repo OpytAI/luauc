@@ -543,6 +543,47 @@ async function executePreloadedFieldAndInvertedCompare() {
   return { objectSize: object.length };
 }
 
+async function executeLinearizedStringFieldWrites() {
+  const name = "linearized-string-field-writes";
+  const snapshot = frontendSnapshot(
+    `local inputPath = arg[1]
+local outputPath = arg[2]
+local mode = arg[3] or "ready"
+if type(inputPath) ~= "string" or type(outputPath) ~= "string" or arg[4] ~= nil then error("usage") end
+local source = assert(sys.fs.read(inputPath))
+local manifest = assert(json.decode(source))
+local plan = buildPlan(manifest, mode)
+plan.input = inputPath
+plan.generated_by = "agent-plan"
+assert(sys.fs.write(outputPath, json.encode(plan)))`,
+    "@linearized_string_field_writes.luau",
+  );
+  const shape = snapshotShape(snapshot);
+  const general = [1, 131, 2, 10, 137, 133, 7, 20, 149];
+  const preloaded = [7, 20, 0, 0, 0, 10, 137, 0, 20, 149];
+  let generalMidBlock = false;
+  let preloadedMidBlock = false;
+  for (let blockId = 0; blockId < shape.blockCount(0); blockId++) {
+    const block = shape.block(0, blockId);
+    if (block.start === 0xffffffff || block.kind !== 3) continue;
+    for (let start = block.start; start <= block.finish; start++) {
+      const matches = (wanted) => start + wanted.length - 1 <= block.finish &&
+        wanted.every((command, offset) => shape.instruction(0, start + offset).command === command);
+      if (matches(general) && start + general.length - 1 < block.finish) generalMidBlock = true;
+      if (matches(preloaded) && start + preloaded.length - 1 < block.finish) preloadedMidBlock = true;
+    }
+  }
+  if (!generalMidBlock || !preloadedMidBlock)
+    throw new Error(`${name}: optimizer no longer emits both owned mid-block SETTABLEKS graphs`);
+
+  const object = backendStaticPackage(staticPackageFrame("linearized_string_field_writes", snapshot));
+  const module = await WebAssembly.compile(linkPackage(object, packageFunctionSymbols(1)));
+  const imports = WebAssembly.Module.imports(module).map(({ name: importName }) => importName);
+  if (!imports.includes("luauc_runtime_v1_table_set_string"))
+    throw new Error(`${name}: real literal table-set boundary is missing`);
+  return { objectSize: object.length };
+}
+
 async function executePlainTableNamecallPackageShape() {
   const name = "plain-table-namecall-package-shape";
   const snapshot = frontendSnapshot(
@@ -2577,6 +2618,7 @@ const forwardedCapture = executeForwardedCapturePackageShape();
 const recursiveCall = await executeRecursiveCallPackageShape();
 const tableInsertAppend = await executeTableInsertAppendPackageShape();
 const preloadedFieldCompare = await executePreloadedFieldAndInvertedCompare();
+const linearizedStringFields = await executeLinearizedStringFieldWrites();
 const plainTableNamecall = await executePlainTableNamecallPackageShape();
 const yieldCall = await executeYieldCallPackage();
 const dynamicArrayTable = await executeDynamicArrayTablePackage();
@@ -2602,6 +2644,7 @@ console.log(
     `recursive call package ${recursiveCall.objectSize} bytes/${recursiveCall.functionCount} functions; ` +
     `table.insert append package ${tableInsertAppend.objectSize} bytes; ` +
     `preloaded field/inverted compare ${preloadedFieldCompare.objectSize} bytes; ` +
+    `linearized string fields ${linearizedStringFields.objectSize} bytes; ` +
     `plain table NAMECALL package ${plainTableNamecall.objectSize} bytes; ` +
     `yield call package ${yieldCall.objectSize} bytes/${yieldCall.functionCount} functions; ` +
     `dynamic array table ${dynamicArrayTable.objectSize} bytes/${dynamicArrayTable.functionCount} functions; ` +
