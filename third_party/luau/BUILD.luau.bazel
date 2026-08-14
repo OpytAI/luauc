@@ -291,17 +291,13 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Complete source and header boundary for the pinned analysis engine. These remain raw components:
-# consumers own their command entrypoint, provider adapter, capabilities, and packaging.
+# Config and Analysis translation units. Interpreter/compiler/Ast/Bytecode/Common sources are a
+# separate component exposed by :interp_srcs; an analyzer composes both without duplicating source
+# ownership in this facade.
 filegroup(
     name = "analysis_srcs",
     srcs = glob(
         [
-            "VM/src/*.cpp",
-            "Compiler/src/*.cpp",
-            "Ast/src/*.cpp",
-            "Bytecode/src/*.cpp",
-            "Common/src/*.cpp",
             "Config/src/*.cpp",
             "Analysis/src/*.cpp",
         ],
