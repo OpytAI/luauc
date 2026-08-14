@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
-load("@rules_zig//zig:defs.bzl", "zig_configure", "zig_library", "zig_static_library")
-load("//bazel:cc.bzl", "cc_headers")
+load("@rules_zig//zig:defs.bzl", "zig_configure", "zig_library")
+load("//bazel:cc.bzl", "cc_headers", "cc_object_archive", "zig_cxx_object")
 
 exports_files(["runtime_symbols.bzl"])
 exports_files(["abi_v1.zig"])
@@ -38,17 +38,17 @@ zig_library(
     visibility = ["//visibility:public"],
 )
 
-zig_static_library(
-    name = "runtime_archive_raw",
-    main = "runtime_archive_root.zig",
-    csrcs = [
-        "@luau//:aot_runtime_srcs",
-        "src/call_frame.cpp",
-    ],
+zig_cxx_object(
+    name = "runtime_call_frame_object",
+    src = "src/call_frame.cpp",
+    target = "wasm32-wasi",
     copts = [
+        "-Oz",
+        "-DNDEBUG",
+        "-std=c++17",
         "-DLUAUC_RUNTIME=1",
         "-include",
-        "runtime/include/force_extern_c.h",
+        "force_extern_c.h",
         "-fno-exceptions",
         "-fno-rtti",
     ],
@@ -59,13 +59,21 @@ zig_static_library(
         "include/force_extern_c.h",
         "include/trap.h",
     ],
-    zigopts = [
-        "-lc",
-        "-lc++",
-    ],
     deps = [
         ":runtime_incs",
         "@luau//:interp_incs",
+    ],
+)
+
+cc_object_archive(
+    name = "runtime_archive_raw",
+    objects = [
+        ":runtime_call_frame_object",
+        "@luau//:aot_runtime_wasm32_wasi_objects",
+    ],
+    deps = [
+        ":runtime_incs",
+        "@luau//:interp_headers",
     ],
     visibility = ["//visibility:public"],
 )

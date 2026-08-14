@@ -37,48 +37,69 @@ ANALYSIS_HEADERS = glob([
     "Analysis/**/*.h",
 ])
 
-# Pin-specific source policy for the Luau AOT frontend and target runtime. These lists are explicit
-# so an upstream pin update cannot silently add a compiler, loader, or bytecode executor to the
-# runtime boundary. They are declarations only: the retained set does not link until the
-# lvmexecute-owned call/frame helpers recorded by the runtime-source manifest are replaced.
+# Pin-specific source policy for the Luau AOT frontend and target runtime. This explicit list is
+# shared by the ownership manifest and the independently compiled runtime component, so a pin update
+# cannot silently add a compiler, loader, or bytecode executor to the runtime boundary.
+AOT_RUNTIME_SRCS = [
+    "VM/src/lapi.cpp",
+    "VM/src/laux.cpp",
+    "VM/src/lbaselib.cpp",
+    "VM/src/lbitlib.cpp",
+    "VM/src/lbuffer.cpp",
+    "VM/src/lbuflib.cpp",
+    "VM/src/lbuiltins.cpp",
+    "VM/src/lclass.cpp",
+    "VM/src/lclasslib.cpp",
+    "VM/src/lcorolib.cpp",
+    "VM/src/ldblib.cpp",
+    "VM/src/ldebug.cpp",
+    "VM/src/ldo.cpp",
+    "VM/src/lfunc.cpp",
+    "VM/src/lgc.cpp",
+    "VM/src/lgcdebug.cpp",
+    "VM/src/linit.cpp",
+    "VM/src/lintlib.cpp",
+    "VM/src/lmathlib.cpp",
+    "VM/src/lmem.cpp",
+    "VM/src/lnumprint.cpp",
+    "VM/src/lobject.cpp",
+    "VM/src/loslib.cpp",
+    "VM/src/lperf.cpp",
+    "VM/src/lstate.cpp",
+    "VM/src/lstring.cpp",
+    "VM/src/lstrlib.cpp",
+    "VM/src/ltable.cpp",
+    "VM/src/ltablib.cpp",
+    "VM/src/ltm.cpp",
+    "VM/src/ludata.cpp",
+    "VM/src/lutf8lib.cpp",
+    "VM/src/lveclib.cpp",
+    "VM/src/lvmutils.cpp",
+]
+
 filegroup(
     name = "aot_runtime_srcs",
-    srcs = [
-        "VM/src/lapi.cpp",
-        "VM/src/laux.cpp",
-        "VM/src/lbaselib.cpp",
-        "VM/src/lbitlib.cpp",
-        "VM/src/lbuffer.cpp",
-        "VM/src/lbuflib.cpp",
-        "VM/src/lbuiltins.cpp",
-        "VM/src/lclass.cpp",
-        "VM/src/lclasslib.cpp",
-        "VM/src/lcorolib.cpp",
-        "VM/src/ldblib.cpp",
-        "VM/src/ldebug.cpp",
-        "VM/src/ldo.cpp",
-        "VM/src/lfunc.cpp",
-        "VM/src/lgc.cpp",
-        "VM/src/lgcdebug.cpp",
-        "VM/src/linit.cpp",
-        "VM/src/lintlib.cpp",
-        "VM/src/lmathlib.cpp",
-        "VM/src/lmem.cpp",
-        "VM/src/lnumprint.cpp",
-        "VM/src/lobject.cpp",
-        "VM/src/loslib.cpp",
-        "VM/src/lperf.cpp",
-        "VM/src/lstate.cpp",
-        "VM/src/lstring.cpp",
-        "VM/src/lstrlib.cpp",
-        "VM/src/ltable.cpp",
-        "VM/src/ltablib.cpp",
-        "VM/src/ltm.cpp",
-        "VM/src/ludata.cpp",
-        "VM/src/lutf8lib.cpp",
-        "VM/src/lveclib.cpp",
-        "VM/src/lvmutils.cpp",
+    srcs = AOT_RUNTIME_SRCS,
+    visibility = ["//visibility:public"],
+)
+
+luauc_cpp_archive(
+    name = "aot_runtime_wasm32_wasi",
+    srcs = AOT_RUNTIME_SRCS,
+    copts = [
+        "-DLUAUC_RUNTIME=1",
+        "-include",
+        "force_extern_c.h",
+        "-fno-exceptions",
+        "-fno-rtti",
     ],
+    extra_srcs = INTERP_HEADERS + ["@luauc//runtime:runtime_patch_headers"],
+    deps = [
+        ":interp_headers",
+        "@luauc//runtime:runtime_patch_incs",
+    ],
+    objects_name = "aot_runtime_wasm32_wasi_objects",
+    objects_visibility = ["//visibility:public"],
     visibility = ["//visibility:public"],
 )
 

@@ -8,6 +8,8 @@ def luauc_cpp_archive(
         copts,
         extra_srcs,
         deps,
+        objects_name = None,
+        objects_visibility = None,
         visibility = None,
         tags = None):
     """Compiles each C++ translation unit independently and bundles the resulting archives."""
@@ -33,6 +35,14 @@ def luauc_cpp_archive(
             visibility = ["//visibility:private"],
         )
         objects.append(":" + unit)
+
+    if objects_name:
+        native.filegroup(
+            name = objects_name,
+            srcs = objects,
+            tags = tags or [],
+            visibility = objects_visibility,
+        )
 
     cc_object_archive(
         name = name,
