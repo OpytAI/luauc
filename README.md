@@ -103,8 +103,9 @@ repository or compiling its source set themselves:
 - `@luauc//luau:analysis_wasm32_wasi`
 
 Each C++ translation unit is an independent Bazel action; luauc assembles the resulting Wasm objects
-into one deterministic archive per component. The analysis archive is disjoint and links with the
-interpreter archive. Source and header facades remain available for consumers targeting another
+into one deterministic archive per component. The analysis component owns its interpreter-component
+link dependency, so downstream analyzers consume `analysis_wasm32_wasi` without reconstructing Luau's
+internal archive order. Source and header facades remain available for consumers targeting another
 toolchain:
 
 - `@luauc//luau:interpreter_sources`

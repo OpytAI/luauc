@@ -370,6 +370,7 @@ luauc_cpp_archive(
     deps = [
         ":analysis_incs",
         ":interp_headers",
+        ":interp_wasm32_wasi",
     ],
     visibility = ["//visibility:public"],
 )
