@@ -2,7 +2,7 @@ diff --git a/Analysis/include/Luau/AnalysisEhShim.h b/Analysis/include/Luau/Anal
 new file mode 100644
 --- /dev/null
 +++ b/Analysis/include/Luau/AnalysisEhShim.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,42 @@
 +#pragma once
 +
 +// luauc PATCH: the analysis component is compiled for single-threaded wasm32-wasi with C++
@@ -15,11 +15,6 @@ new file mode 100644
 +#ifdef __cplusplus
 +}
 +#endif
-+
-+// The remaining exception handlers cover terminal allocation, cancellation, limit, or internal
-+// failures. Patched throw sites call luauc_analysis_abort; their handlers are therefore unreachable.
-+#define try if (true)
-+#define catch(...) else if (false)
 +
 +#ifdef __cplusplus
 +namespace luauc_nothread

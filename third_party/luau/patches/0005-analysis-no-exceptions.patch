@@ -72,8 +72,8 @@ index 8f0adc4..552ba77 100644
 -            InternalCompilerError augmented = err.location.has_value() ? InternalCompilerError{err.message, sourceModule.name, *err.location}
 -                                                                       : InternalCompilerError{err.message, sourceModule.name};
 -            throw augmented;
-+            // luauc PATCH (-fno-exceptions): catch is dead (compat macro -> else if(false)); dropped the
-+            // `err`-referencing body (was: rebuild an augmented ICE and rethrow).
++            // luauc PATCH (-fno-exceptions): patched throw sites terminate, so this handler is unreachable.
++            // Preserve the terminal analysis error contract without reconstructing a C++ exception.
 +            luauc_analysis_abort("luau-analyze: internal compiler error (ICE)");
          }
      }

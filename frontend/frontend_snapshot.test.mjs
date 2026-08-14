@@ -32,6 +32,7 @@ const contractInputs = [
   "third_party/luau/patches/0005-analysis-no-exceptions.patch",
   "third_party/luau/patches/0006-analysis-named-catch.patch",
   "third_party/luau/patches/0007-analysis-shim.patch",
+  "third_party/luau/patches/0008-analysis-explicit-control-flow.patch",
 ].sort();
 
 function frontendContractDigest() {

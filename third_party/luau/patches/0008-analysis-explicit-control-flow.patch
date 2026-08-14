@@ -1,0 +1,395 @@
+diff --git a/Analysis/src/Frontend.cpp b/Analysis/src/Frontend.cpp
+index 39ee3d8..c1ef707 100644
+--- a/Analysis/src/Frontend.cpp
++++ b/Analysis/src/Frontend.cpp
+@@ -1237,14 +1237,7 @@ void Frontend::performQueueItemTask(std::shared_ptr<BuildQueueWorkState> state,
+ {
+     BuildQueueItem& item = state->buildQueueItems[itemPos];
+
+-    try
+-    {
+-        checkBuildQueueItem(item);
+-    }
+-    catch (const Luau::InternalCompilerError&)
+-    {
+-        item.exception = std::current_exception();
+-    }
++    checkBuildQueueItem(item);
+
+     {
+         luauc_nothread::unique_lock guard(state->mtx);
+@@ -1552,18 +1545,7 @@ ModulePtr check(
+     if (options.randomizeConstraintResolutionSeed)
+         cs.randomize(*options.randomizeConstraintResolutionSeed);
+
+-    try
+-    {
+-        cs.run();
+-    }
+-    catch (const TimeLimitError&)
+-    {
+-        module->timeout = true;
+-    }
+-    catch (const UserCancelError&)
+-    {
+-        module->cancelled = true;
+-    }
++    cs.run();
+
+     stats.dynamicConstraintsCreated += cs.solverConstraints.size();
+
+@@ -1598,41 +1580,30 @@ ModulePtr check(
+     }
+     else
+     {
+-        try
++        switch (mode)
+         {
+-            switch (mode)
+-            {
+-            case Mode::Nonstrict:
+-                Luau::checkNonStrict(
+-                    builtinTypes,
+-                    NotNull{&typeFunctionRuntime},
+-                    iceHandler,
+-                    NotNull{&unifierState},
+-                    NotNull{&dfg},
+-                    NotNull{&limits},
+-                    sourceModule,
+-                    module.get()
+-                );
+-                break;
+-            case Mode::Definition:
+-                // fallthrough intentional
+-            case Mode::Strict:
+-                Luau::check(
+-                    builtinTypes, NotNull{&typeFunctionRuntime}, NotNull{&unifierState}, NotNull{&limits}, logger.get(), sourceModule, module.get()
+-                );
+-                break;
+-            case Mode::NoCheck:
+-                break;
+-            };
+-        }
+-        catch (const TimeLimitError&)
+-        {
+-            module->timeout = true;
+-        }
+-        catch (const UserCancelError&)
+-        {
+-            module->cancelled = true;
+-        }
++        case Mode::Nonstrict:
++            Luau::checkNonStrict(
++                builtinTypes,
++                NotNull{&typeFunctionRuntime},
++                iceHandler,
++                NotNull{&unifierState},
++                NotNull{&dfg},
++                NotNull{&limits},
++                sourceModule,
++                module.get()
++            );
++            break;
++        case Mode::Definition:
++            // fallthrough intentional
++        case Mode::Strict:
++            Luau::check(
++                builtinTypes, NotNull{&typeFunctionRuntime}, NotNull{&unifierState}, NotNull{&limits}, logger.get(), sourceModule, module.get()
++            );
++            break;
++        case Mode::NoCheck:
++            break;
++        };
+
+         if (FFlag::LuauExportValueSyntax && FFlag::LuauExportValueTypecheck && !module->timeout && !module->cancelled)
+             synthesizeExportReturn(builtinTypes, NotNull{module.get()});
+@@ -1728,32 +1699,23 @@ ModulePtr Frontend::check(
+                 prepareModuleScope(name, scope, forAutocomplete);
+         };
+
+-        try
+-        {
+-            return Luau::check(
+-                sourceModule,
+-                mode,
+-                requireCycles,
+-                builtinTypes,
+-                NotNull{&iceHandler},
+-                NotNull{forAutocomplete ? &moduleResolverForAutocomplete : &moduleResolver},
+-                NotNull{fileResolver},
+-                environmentScope ? *environmentScope : globals.globalScope,
+-                globals.globalTypeFunctionScope,
+-                prepareModuleScopeWrap,
+-                options,
+-                std::move(typeCheckLimits),
+-                recordJsonLog,
+-                stats,
+-                writeJsonLog
+-            );
+-        }
+-        catch (const InternalCompilerError& err)
+-        {
+-            // luauc PATCH (-fno-exceptions): patched throw sites terminate, so this handler is unreachable.
+-            // Preserve the terminal analysis error contract without reconstructing a C++ exception.
+-            luauc_analysis_abort("luau-analyze: internal compiler error (ICE)");
+-        }
++        return Luau::check(
++            sourceModule,
++            mode,
++            requireCycles,
++            builtinTypes,
++            NotNull{&iceHandler},
++            NotNull{forAutocomplete ? &moduleResolverForAutocomplete : &moduleResolver},
++            NotNull{fileResolver},
++            environmentScope ? *environmentScope : globals.globalScope,
++            globals.globalTypeFunctionScope,
++            prepareModuleScopeWrap,
++            options,
++            std::move(typeCheckLimits),
++            recordJsonLog,
++            stats,
++            writeJsonLog
++        );
+     }
+     else
+     {
+diff --git a/Analysis/src/Normalize.cpp b/Analysis/src/Normalize.cpp
+index 7983614..43fc570 100644
+--- a/Analysis/src/Normalize.cpp
++++ b/Analysis/src/Normalize.cpp
+@@ -401,15 +401,8 @@ static bool isShallowInhabited(const NormalizedType& norm)
+ NormalizationResult Normalizer::isInhabited(const NormalizedType* norm)
+ {
+     Set<TypeId> seen{nullptr};
+-    try
+-    {
+-        FuelInitializer fi{NotNull{this}};
+-        return isInhabited(norm, seen);
+-    }
+-    catch (const NormalizerHitLimits&)
+-    {
+-        return NormalizationResult::HitLimits;
+-    }
++    FuelInitializer fi{NotNull{this}};
++    return isInhabited(norm, seen);
+ }
+
+ NormalizationResult Normalizer::isInhabited(const NormalizedType* norm, Set<TypeId>& seen)
+@@ -461,22 +454,15 @@ NormalizationResult Normalizer::isInhabited(TypeId ty)
+     }
+
+     Set<TypeId> seen{nullptr};
+-    try
+-    {
+-        FuelInitializer fi{NotNull{this}};
+-        NormalizationResult result = isInhabited(ty, seen);
++    FuelInitializer fi{NotNull{this}};
++    NormalizationResult result = isInhabited(ty, seen);
+
+-        if (cacheInhabitance && result == NormalizationResult::True)
+-            cachedIsInhabited[ty] = true;
+-        else if (cacheInhabitance && result == NormalizationResult::False)
+-            cachedIsInhabited[ty] = false;
++    if (cacheInhabitance && result == NormalizationResult::True)
++        cachedIsInhabited[ty] = true;
++    else if (cacheInhabitance && result == NormalizationResult::False)
++        cachedIsInhabited[ty] = false;
+
+-        return result;
+-    }
+-    catch (const NormalizerHitLimits&)
+-    {
+-        return NormalizationResult::HitLimits;
+-    }
++    return result;
+ }
+
+ NormalizationResult Normalizer::isInhabited(TypeId ty, Set<TypeId>& seen)
+@@ -541,15 +527,8 @@ NormalizationResult Normalizer::isIntersectionInhabited(TypeId left, TypeId righ
+ {
+     Set<TypeId> seen{nullptr};
+     SeenTablePropPairs seenTablePropPairs{{nullptr, nullptr}};
+-    try
+-    {
+-        FuelInitializer fi{NotNull{this}};
+-        return isIntersectionInhabited(left, right, seenTablePropPairs, seen);
+-    }
+-    catch (const NormalizerHitLimits&)
+-    {
+-        return NormalizationResult::HitLimits;
+-    }
++    FuelInitializer fi{NotNull{this}};
++    return isIntersectionInhabited(left, right, seenTablePropPairs, seen);
+ }
+
+ NormalizationResult Normalizer::isIntersectionInhabited(TypeId left, TypeId right, SeenTablePropPairs& seenTablePropPairs, Set<TypeId>& seenSet)
+@@ -939,17 +918,10 @@ std::shared_ptr<const NormalizedType> Normalizer::normalize(TypeId ty)
+     Set<TypeId> seenSetTypes{nullptr};
+     SeenTablePropPairs seenTablePropPairs{{nullptr, nullptr}};
+
+-    try
+-    {
+-        FuelInitializer fi{NotNull{this}};
+-        NormalizationResult res = unionNormalWithTy(norm, ty, seenTablePropPairs, seenSetTypes);
+-        if (res != NormalizationResult::True)
+-            return nullptr;
+-    }
+-    catch (const NormalizerHitLimits&)
+-    {
++    FuelInitializer fi{NotNull{this}};
++    NormalizationResult res = unionNormalWithTy(norm, ty, seenTablePropPairs, seenSetTypes);
++    if (res != NormalizationResult::True)
+         return nullptr;
+-    }
+
+     if (norm.isUnknown())
+     {
+@@ -2574,15 +2546,7 @@ void Normalizer::intersectStrings(NormalizedStringType& here, const NormalizedSt
+ std::optional<TypePackId> Normalizer::intersectionOfTypePacks(TypePackId here, TypePackId there)
+ {
+     FuelInitializer fi{NotNull{this}};
+-
+-    try
+-    {
+-        return intersectionOfTypePacks_INTERNAL(here, there);
+-    }
+-    catch (const NormalizerHitLimits&)
+-    {
+-        return std::nullopt;
+-    }
++    return intersectionOfTypePacks_INTERNAL(here, there);
+ }
+
+ std::optional<TypePackId> Normalizer::intersectionOfTypePacks_INTERNAL(TypePackId here, TypePackId there)
+diff --git a/Analysis/src/TypeFunction.cpp b/Analysis/src/TypeFunction.cpp
+index 8ea2569..288338b 100644
+--- a/Analysis/src/TypeFunction.cpp
++++ b/Analysis/src/TypeFunction.cpp
+@@ -695,15 +695,7 @@ static FunctionGraphReductionResult reduceFunctionsInternal(
+ FunctionGraphReductionResult reduceTypeFunctions(TypeId entrypoint, Location location, NotNull<TypeFunctionContext> ctx, bool force)
+ {
+     InstanceCollector collector;
+-
+-    try
+-    {
+-        collector.traverse(entrypoint);
+-    }
+-    catch (RecursionLimitException&)
+-    {
+-        return FunctionGraphReductionResult{};
+-    }
++    collector.traverse(entrypoint);
+
+     if (collector.tys.empty() && collector.tps.empty())
+         return {};
+@@ -722,15 +714,7 @@ FunctionGraphReductionResult reduceTypeFunctions(TypeId entrypoint, Location loc
+ FunctionGraphReductionResult reduceTypeFunctions(TypePackId entrypoint, Location location, NotNull<TypeFunctionContext> ctx, bool force)
+ {
+     InstanceCollector collector;
+-
+-    try
+-    {
+-        collector.traverse(entrypoint);
+-    }
+-    catch (RecursionLimitException&)
+-    {
+-        return FunctionGraphReductionResult{};
+-    }
++    collector.traverse(entrypoint);
+
+     if (collector.tys.empty() && collector.tps.empty())
+         return {};
+diff --git a/Analysis/src/TypeFunctionRuntime.cpp b/Analysis/src/TypeFunctionRuntime.cpp
+index 0ec016b..e469d36 100644
+--- a/Analysis/src/TypeFunctionRuntime.cpp
++++ b/Analysis/src/TypeFunctionRuntime.cpp
+@@ -96,14 +96,7 @@ std::optional<std::string> TypeFunctionRuntime::registerFunction_DEPRECATED(AstS
+     ParseResult parseResult{&exec, 1, {}, {}, {}, CstNodeMap{nullptr}};
+
+     BytecodeBuilder builder;
+-    try
+-    {
+-        compileOrThrow(builder, parseResult, names);
+-    }
+-    catch (CompileError& e)
+-    {
+-        return format("'%s' type function failed to compile with error message: %s", name.value, "");
+-    }
++    compileOrThrow(builder, parseResult, names);
+
+     std::string bytecode = builder.getBytecode();
+
+@@ -182,14 +175,7 @@ std::optional<TypeFunctionError> TypeFunctionRuntime::registerFunction(AstStatTy
+     ParseResult parseResult{&exec, 1, {}, {}, {}, CstNodeMap{nullptr}};
+
+     BytecodeBuilder builder;
+-    try
+-    {
+-        compileOrThrow(builder, parseResult, names);
+-    }
+-    catch (CompileError& e)
+-    {
+-        return TypeFunctionError{Location{}, FailedToCompile{name.value, ""}};
+-    }
++    compileOrThrow(builder, parseResult, names);
+
+     std::string bytecode = builder.getBytecode();
+
+diff --git a/Analysis/src/TypeInfer.cpp b/Analysis/src/TypeInfer.cpp
+index b849280..e6fc1ae 100644
+--- a/Analysis/src/TypeInfer.cpp
++++ b/Analysis/src/TypeInfer.cpp
+@@ -229,15 +229,7 @@ TypeChecker::TypeChecker(const ScopePtr& globalScope, ModuleResolver* resolver,
+
+ ModulePtr TypeChecker::check(const SourceModule& module, Mode mode, std::optional<ScopePtr> environmentScope)
+ {
+-    try
+-    {
+-        return checkWithoutRecursionCheck(module, mode, std::move(environmentScope));
+-    }
+-    catch (const RecursionLimitException&)
+-    {
+-        reportErrorCodeTooComplex(module.root->location);
+-        return std::move(currentModule);
+-    }
++    return checkWithoutRecursionCheck(module, mode, std::move(environmentScope));
+ }
+
+ ModulePtr TypeChecker::checkWithoutRecursionCheck(const SourceModule& module, Mode mode, std::optional<ScopePtr> environmentScope)
+@@ -274,18 +266,7 @@ ModulePtr TypeChecker::checkWithoutRecursionCheck(const SourceModule& module, Mo
+     if (prepareModuleScope)
+         prepareModuleScope(currentModule->name, currentModule->getModuleScope());
+
+-    try
+-    {
+-        checkBlock(moduleScope, *module.root);
+-    }
+-    catch (const TimeLimitError&)
+-    {
+-        currentModule->timeout = true;
+-    }
+-    catch (const UserCancelError&)
+-    {
+-        currentModule->cancelled = true;
+-    }
++    checkBlock(moduleScope, *module.root);
+
+     if (FFlag::LuauExportValueSyntax && FFlag::LuauExportValueTypecheck && !currentModule->timeout && !currentModule->cancelled)
+         synthesizeExportReturn(builtinTypes, NotNull{currentModule.get()});
+@@ -429,15 +410,7 @@ ControlFlow TypeChecker::checkBlock(const ScopePtr& scope, const AstStatBlock& b
+         reportErrorCodeTooComplex(block.location);
+         return ControlFlow::None;
+     }
+-    try
+-    {
+-        return checkBlockWithoutRecursionCheck(scope, block);
+-    }
+-    catch (const RecursionLimitException&)
+-    {
+-        reportErrorCodeTooComplex(block.location);
+-        return ControlFlow::None;
+-    }
++    return checkBlockWithoutRecursionCheck(scope, block);
+ }
+
+ struct InplaceDemoter : TypeOnceVisitor
