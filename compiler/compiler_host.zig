@@ -14,7 +14,7 @@ const FrontendResult = extern struct {
     status: u32 = 0,
 };
 
-extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, result: *FrontendResult) u32;
+extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_free(result: *FrontendResult) void;
 
 const ContextResult = extern struct {
@@ -288,7 +288,7 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     for (0..package.module_count) |index| {
         const module = package.module(@intCast(index)) catch |err| return publishError(result, status_invalid_request, err);
         const frontend_result = &frontend_results[index];
-        const frontend_status = luauc_frontend_snapshot_v1_compile(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, frontend_result);
+        const frontend_status = luauc_frontend_snapshot_v1_compile(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, frontend_result);
         compiled_count += 1;
         if (frontend_status != 0 or frontend_result.status != 0 or frontend_result.data == null or frontend_result.size == 0) {
             const diagnostic = if (frontend_result.diagnostic) |pointer| pointer[0..frontend_result.diagnostic_size] else "frontend compilation failed";

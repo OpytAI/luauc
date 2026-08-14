@@ -50,6 +50,7 @@ function compileFrontend(module) {
     source.length,
     chunkPointer,
     chunk.length,
+    0,
     resultPointer,
   );
   const result = new DataView(api.memory.buffer, resultPointer, 20);

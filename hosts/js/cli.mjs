@@ -5,7 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 import { compilePackage } from "./host.mjs";
 
 function usage() {
-  throw new Error("usage: luauc compile --compiler luauc.wasm --profile runtime.profile --pack runtime.pack.wasm --output program.wasm --entry module name=source.luau...");
+  throw new Error("usage: luauc compile --compiler luauc.wasm --profile runtime.profile --pack runtime.pack.wasm --output program.wasm --entry module [--coverage none|statement|expression] name=source.luau...");
 }
 
 const bazelExecrootPaths = process.env.LUAUC_BAZEL_EXECROOT_PATHS === "1";
@@ -19,12 +19,14 @@ function parseArguments(arguments_) {
   const options = {};
   while (arguments_[0]?.startsWith("--")) {
     const option = arguments_.shift().slice(2);
-    if (!["compiler", "profile", "pack", "output", "entry"].includes(option) || options[option] !== undefined || !arguments_.length)
+    if (!["compiler", "profile", "pack", "output", "entry", "coverage"].includes(option) || options[option] !== undefined || !arguments_.length)
       usage();
     options[option] = arguments_.shift();
   }
   if (["compiler", "profile", "pack", "output", "entry"].some((name) => !options[name]) || !arguments_.length)
     usage();
+  options.coverage ??= "none";
+  if (!["none", "statement", "expression"].includes(options.coverage)) usage();
   const modules = arguments_.map((argument) => {
     const separator = argument.indexOf("=");
     if (separator <= 0 || separator === argument.length - 1) usage();
@@ -41,18 +43,21 @@ function parseArguments(arguments_) {
 }
 
 const { options, modules } = parseArguments(process.argv.slice(2));
+const coverageLevel = { none: 0, statement: 1, expression: 2 }[options.coverage];
 const compilation = await compilePackage(
   readFileSync(filesystemPath(options.compiler)),
   readFileSync(filesystemPath(options.profile)),
   readFileSync(filesystemPath(options.pack)),
   modules,
   options.entry,
+  { coverageLevel },
 );
 writeFileSync(filesystemPath(options.output), compilation.artifact);
 const hex = (value) => [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 process.stdout.write(`${JSON.stringify({
   artifact_bytes: compilation.artifact.length,
   artifact_sha256: hex(compilation.provenance.artifactDigest),
+  coverage: options.coverage,
   generated_object_sha256: hex(compilation.provenance.objectDigest),
   module_count: modules.length,
   runtime_pack_sha256: hex(compilation.provenance.packDigest),

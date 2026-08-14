@@ -35,6 +35,7 @@ function compileFrontend(sourceBytes) {
     sourceBytes.length,
     chunkPointer,
     chunk.length,
+    0,
     resultPointer,
   );
   const result = new DataView(api.memory.buffer, resultPointer, 20);

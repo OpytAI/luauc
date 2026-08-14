@@ -227,6 +227,7 @@ extern "C" {
 
 uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, size_t source_size,
                                               const uint8_t *chunk_name, size_t chunk_name_size,
+                                              uint32_t coverage_level,
                                               LuaucFrontendSnapshotV1Result *out_result);
 
 void luauc_frontend_snapshot_v1_free(LuaucFrontendSnapshotV1Result *result);

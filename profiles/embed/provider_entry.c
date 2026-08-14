@@ -29,6 +29,53 @@ typedef struct LuaucEmbedInvokeResultV1 {
     uint64_t reserved1;
 } LuaucEmbedInvokeResultV1;
 
+typedef struct LuaucEmbedCoverageRecordV1 {
+    uint32_t function_index;
+    uint32_t depth;
+    uint32_t line;
+    uint32_t hits;
+} LuaucEmbedCoverageRecordV1;
+
+typedef struct LuaucEmbedCoverageResultV1 {
+    uint32_t status;
+    uint32_t record_count;
+    uint32_t required_capacity;
+    uint32_t reserved;
+} LuaucEmbedCoverageResultV1;
+
+typedef struct LuaucEmbedCoverageCollector {
+    LuaucEmbedCoverageRecordV1 *records;
+    uint32_t capacity;
+    uint32_t count;
+    uint32_t function_index;
+    uint32_t overflow;
+    uint32_t truncated;
+} LuaucEmbedCoverageCollector;
+
+static void collectCoverage(void *context, const char *, int, int depth, const int *hits,
+                            size_t size) {
+    LuaucEmbedCoverageCollector *collector = (LuaucEmbedCoverageCollector *)context;
+    for (size_t line = 0; line < size; ++line) {
+        if (hits[line] < 0)
+            continue;
+        if (collector->count == UINT32_MAX) {
+            collector->overflow = 1;
+            continue;
+        }
+        if (collector->count < collector->capacity) {
+            LuaucEmbedCoverageRecordV1 *record = &collector->records[collector->count];
+            record->function_index = collector->function_index;
+            record->depth = (uint32_t)depth;
+            record->line = (uint32_t)line;
+            record->hits = (uint32_t)hits[line];
+        } else {
+            collector->truncated = 1;
+        }
+        ++collector->count;
+    }
+    ++collector->function_index;
+}
+
 extern const LuaucRuntimeProgramV1 *luauc_runtime_v1_program_pointer;
 
 uint32_t luauc_embed_v1_alloc(uint32_t size) {
@@ -67,6 +114,36 @@ void luauc_embed_v1_context_destroy(uint32_t handle) {
         return;
     lua_close(context->state);
     free(context);
+}
+
+uint32_t luauc_embed_v1_coverage(uint32_t handle, uint32_t output_pointer,
+                                 uint32_t output_capacity, uint32_t result_pointer) {
+    LuaucEmbedContext *context = (LuaucEmbedContext *)(uintptr_t)handle;
+    LuaucEmbedCoverageResultV1 *result =
+        (LuaucEmbedCoverageResultV1 *)(uintptr_t)result_pointer;
+    if (!context || !result || (output_capacity != 0 && !output_pointer))
+        return 1;
+    memset(result, 0, sizeof(*result));
+    LuaucEmbedCoverageCollector collector = {
+        (LuaucEmbedCoverageRecordV1 *)(uintptr_t)output_pointer,
+        output_capacity / sizeof(LuaucEmbedCoverageRecordV1), 0, 0, 0, 0,
+    };
+    if (luauc_runtime_v1_get_program_coverage(context->state, &collector, collectCoverage) != 0) {
+        result->status = 1;
+        return 1;
+    }
+    result->record_count = collector.count;
+    if (collector.overflow || collector.count > UINT32_MAX / sizeof(LuaucEmbedCoverageRecordV1)) {
+        result->required_capacity = UINT32_MAX;
+        result->status = 2;
+        return 2;
+    }
+    result->required_capacity = collector.count * sizeof(LuaucEmbedCoverageRecordV1);
+    if (collector.truncated) {
+        result->status = 2;
+        return 2;
+    }
+    return 0;
 }
 
 uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,

@@ -21,7 +21,9 @@ offsets, malformed strings, nonzero reserved bytes, and inconsistent resource li
 
 Required roles bind the program pointer, generated data arena/capacity, memory, protected dispatcher,
 allocator/deallocator, context create/destroy, invocation function, and initializer. Linker policy is
-derived from these bindings; it does not hardcode the provider's public names or import module.
+derived from these bindings; it does not hardcode the provider's public names or import module. A
+profile may additionally bind a retained coverage-query export; the `embed-v1` profiles expose this
+role and return state-local counters for every module Proto tree.
 
 ## Pack
 

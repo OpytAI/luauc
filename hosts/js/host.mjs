@@ -54,7 +54,7 @@ function allocation(api, bytesOrSize) {
   return { pointer, size };
 }
 
-async function buildRequest(modules, entryModuleId, profileDigest, packDigest) {
+async function buildRequest(modules, entryModuleId, profileDigest, packDigest, coverageLevel) {
   modules = await Promise.all(modules.map(async ({ name, source }) => {
     const canonicalName = bytes(name);
     const content = bytes(source);
@@ -96,8 +96,12 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest) {
   putU32(request, 16, modules.length);
   putU32(request, 20, entryModuleId);
   putU32(request, 24, recordSize);
+  putU32(request, 28, coverageLevel);
+  const coverage = new Uint8Array(4);
+  putU32(coverage, 0, coverageLevel);
   request.set((await sha256(concat([
     bytes("luauc-source-request-v1\0"),
+    coverage,
     profileDigest,
     packDigest,
     manifestDigest,
@@ -127,7 +131,10 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest) {
   return request;
 }
 
-export async function compilePackage(compilerBytes, profileBytes, packBytes, modules, entryName = "main") {
+export async function compilePackage(compilerBytes, profileBytes, packBytes, modules, entryName = "main", options = {}) {
+  const coverageLevel = options.coverageLevel ?? 0;
+  if (!Number.isInteger(coverageLevel) || coverageLevel < 0 || coverageLevel > 2)
+    throw new TypeError("coverageLevel must be 0, 1, or 2");
   const module = new WebAssembly.Module(bytes(compilerBytes));
   if (WebAssembly.Module.imports(module).length) throw new Error("luauc.wasm has imports");
   const api = new WebAssembly.Instance(module, {}).exports;
@@ -153,7 +160,7 @@ export async function compilePackage(compilerBytes, profileBytes, packBytes, mod
     const sorted = [...modules].sort((lhs, rhs) => compareBytes(bytes(lhs.name), bytes(rhs.name)));
     const entryModuleId = sorted.findIndex(({ name }) => name === entryName);
     if (entryModuleId < 0) throw new Error(`missing entry module ${entryName}`);
-    const request = await buildRequest(sorted, entryModuleId, profileDigest, packDigest);
+    const request = await buildRequest(sorted, entryModuleId, profileDigest, packDigest, coverageLevel);
     const requestInput = allocation(api, request);
     const compileResult = allocation(api, 208);
     try {
@@ -223,7 +230,17 @@ export function instantiateArtifact(artifact, namespace = "luauc_embed_v1") {
   return instance;
 }
 
-export function invoke(instance, number, text) {
+export function createContext(instance) {
+  const context = instance.exports.luauc_embed_v1_context_create();
+  if (!context) throw new Error("embed-v1 context creation failed");
+  return context;
+}
+
+export function destroyContext(instance, context) {
+  if (context) instance.exports.luauc_embed_v1_context_destroy(context);
+}
+
+export function invoke(instance, number, text, existingContext = 0) {
   if (!Number.isSafeInteger(number)) throw new TypeError("embed-v1 JavaScript numbers must be safe integers");
   const api = instance.exports;
   const encoded = bytes(text);
@@ -235,15 +252,15 @@ export function invoke(instance, number, text) {
     allocations.push(pointer);
     return pointer;
   };
-  let context = 0;
+  let context = existingContext;
+  const ownsContext = context === 0;
   try {
     const textPointer = allocate(encoded.length);
     const outputCapacity = 4096;
     const outputPointer = allocate(outputCapacity);
     const requestPointer = allocate(32);
     const resultPointer = allocate(32);
-    context = api.luauc_embed_v1_context_create();
-    if (!context) throw new Error("embed-v1 context creation failed");
+    if (ownsContext) context = createContext(instance);
 
     if (encoded.length) new Uint8Array(api.memory.buffer, textPointer, encoded.length).set(encoded);
     const request = new DataView(api.memory.buffer, requestPointer, 32);
@@ -268,8 +285,51 @@ export function invoke(instance, number, text) {
       text: output,
     };
   } finally {
-    if (context) api.luauc_embed_v1_context_destroy(context);
+    if (ownsContext && context) destroyContext(instance, context);
     for (let index = allocations.length; index-- > 0;)
       api.luauc_embed_v1_dealloc(allocations[index]);
+  }
+}
+
+export function coverage(instance, context) {
+  if (!context) throw new TypeError("coverage requires a live embed-v1 context");
+  const api = instance.exports;
+  const resultPointer = api.luauc_embed_v1_alloc(16);
+  if (!resultPointer) throw new Error("coverage result allocation failed");
+  let outputPointer = 0;
+  try {
+    new Uint8Array(api.memory.buffer, resultPointer, 16).fill(0);
+    const probeStatus = api.luauc_embed_v1_coverage(context, 0, 0, resultPointer);
+    let result = new DataView(api.memory.buffer, resultPointer, 16);
+    const requiredCapacity = result.getUint32(8, true);
+    if ((requiredCapacity === 0 && probeStatus !== 0) || (requiredCapacity !== 0 && probeStatus !== 2) ||
+        result.getUint32(0, true) !== probeStatus || requiredCapacity === 0xffffffff)
+      throw new Error(`coverage size query failed with ${probeStatus}/${result.getUint32(0, true)} (${requiredCapacity} bytes)`);
+    if (requiredCapacity === 0) return [];
+    outputPointer = api.luauc_embed_v1_alloc(requiredCapacity);
+    if (!outputPointer) throw new Error(`coverage output allocation failed for ${requiredCapacity} bytes`);
+    new Uint8Array(api.memory.buffer, resultPointer, 16).fill(0);
+    const status = api.luauc_embed_v1_coverage(context, outputPointer, requiredCapacity, resultPointer);
+    result = new DataView(api.memory.buffer, resultPointer, 16);
+    const recordCount = result.getUint32(4, true);
+    const returnedCapacity = result.getUint32(8, true);
+    if (status || result.getUint32(0, true) || returnedCapacity !== requiredCapacity ||
+        recordCount * 16 !== returnedCapacity)
+      throw new Error(`coverage query failed with ${status}/${result.getUint32(0, true)} (${returnedCapacity} bytes)`);
+    const records = [];
+    const view = new DataView(api.memory.buffer, outputPointer, returnedCapacity);
+    for (let index = 0; index < recordCount; index++) {
+      const offset = index * 16;
+      records.push({
+        functionIndex: view.getUint32(offset, true),
+        depth: view.getUint32(offset + 4, true),
+        line: view.getUint32(offset + 8, true),
+        hits: view.getUint32(offset + 12, true),
+      });
+    }
+    return records;
+  } finally {
+    api.luauc_embed_v1_dealloc(resultPointer);
+    if (outputPointer) api.luauc_embed_v1_dealloc(outputPointer);
   }
 }

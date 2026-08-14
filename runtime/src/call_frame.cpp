@@ -26,6 +26,15 @@
 static_assert(LUAUC_RUNTIME_V1_MULTRET == LUA_MULTRET, "Luau MULTRET sentinel drift");
 
 static constexpr uint32_t AOT_FASTCALL_NO_OPERAND = UINT32_MAX;
+static constexpr uint64_t AOT_COVERAGE_MAX_HITS = (UINT64_C(1) << 23) - 1;
+
+struct AotCoverageRecord {
+    uint32_t line;
+    uint32_t reserved;
+    uint64_t hits;
+};
+
+static_assert(sizeof(AotCoverageRecord) == 16, "AOT coverage record layout drift");
 
 // These flag definitions live in lvmexecute.cpp upstream even though retained runtime sources use
 // them. The strict archive excludes that translation unit, so the pin adapter owns the definitions.
@@ -204,6 +213,21 @@ extern "C" const uint8_t luauc_runtime_v1_layout_sha256[32] = {
 
 static bool materializableScalarConstantKind(uint8_t kind);
 static bool validAotProto(const LuaucRuntimeProtoV1 *metadata);
+
+static char *getAotCoverageData(lua_State *, Proto *proto, size_t *count, size_t *lineCount) {
+    if (!count || !lineCount)
+        return nullptr;
+    *count = 0;
+    *lineCount = 0;
+    const LuaucRuntimeProtoV1 *metadata =
+        proto ? static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata) : nullptr;
+    if (!validAotProto(metadata) ||
+        (metadata->coverage_site_count != 0 && proto->userdata == nullptr))
+        return nullptr;
+    *count = metadata->coverage_site_count;
+    *lineCount = metadata->coverage_line_count;
+    return static_cast<char *>(proto->userdata);
+}
 static char moduleRegistryKey;
 
 enum ModuleRegistrySlot {
@@ -297,12 +321,13 @@ static bool validAotSuspension(lua_State *L) {
     return validCallSuspension(L) || validScheduledReentrySuspension(L);
 }
 
-static void configurePinnedRuntimeFlags() {
+static void configurePinnedRuntimeFlags(lua_State *L) {
     // These flags control the two heap-frame continuation paths retained by strict AOT: yieldable
     // pcall/xpcall C frames and yielded generic-iterator completion. Pin them explicitly instead of
     // inheriting process defaults; the product E2E validates both continuation protocols directly.
     FFlag::LuauCustomYieldablePcalls.value = true;
     FFlag::LuauYieldIter2.value = true;
+    L->global->ecb.getcoveragedata = getAotCoverageData;
 }
 
 static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
@@ -537,6 +562,17 @@ extern "C" void luauc_runtime_v1_new_table_deferred(lua_State *L, uint32_t desti
 extern "C" void luauc_runtime_v1_check_gc(lua_State *L) {
     activeAotFrameProto(L, "collector assist");
     luaC_checkGC(L);
+}
+
+extern "C" void luauc_runtime_v1_coverage_hit(lua_State *L, uint32_t siteId) {
+    Proto *proto = activeAotFrameProto(L, "coverage update");
+    const LuaucRuntimeProtoV1 *metadata =
+        static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata);
+    if (siteId >= metadata->coverage_site_count || !proto->userdata)
+        luaG_runerror(L, "strict AOT coverage update rejected invalid site metadata");
+    AotCoverageRecord &record = static_cast<AotCoverageRecord *>(proto->userdata)[siteId];
+    if (record.hits < AOT_COVERAGE_MAX_HITS)
+        ++record.hits;
 }
 
 extern "C" void luauc_runtime_v1_dup_table(lua_State *L, uint32_t destinationRegister,
@@ -2095,8 +2131,14 @@ extern "C" uint32_t luauc_runtime_v1_require_static(lua_State *L, uint32_t desti
     return LUAUC_RUNTIME_V1_OK;
 }
 
-static void destroyAotProto(lua_State *, Proto *proto) {
+static void destroyAotProto(lua_State *L, Proto *proto) {
     // AOT metadata is immutable linker-owned data, not a heap allocation owned by Proto.
+    const LuaucRuntimeProtoV1 *metadata =
+        static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata);
+    if (metadata && proto->userdata)
+        luaM_freearray(L, static_cast<AotCoverageRecord *>(proto->userdata),
+                       metadata->coverage_site_count, AotCoverageRecord, proto->memcat);
+    proto->userdata = nullptr;
     proto->execdata = nullptr;
 }
 
@@ -2148,12 +2190,24 @@ static bool validAotConstants(const LuaucRuntimeProtoV1 *metadata) {
 }
 
 static bool validAotProto(const LuaucRuntimeProtoV1 *metadata) {
-    return metadata && metadata->abi_version == LUAUC_AOT_ABI_V1 &&
-           metadata->struct_size == LUAUC_AOT_PROTO_V1_SIZE && metadata->entry &&
-           metadata->max_stack_size >= metadata->num_params && metadata->is_vararg <= 1 &&
-           validAotConstants(metadata) &&
-           memcmp(metadata->layout_sha256, luauc_runtime_v1_layout_sha256,
-                  sizeof(metadata->layout_sha256)) == 0;
+    if (!metadata || metadata->abi_version != LUAUC_AOT_ABI_V1 ||
+        metadata->struct_size != LUAUC_AOT_PROTO_V1_SIZE || !metadata->entry ||
+        metadata->max_stack_size < metadata->num_params || metadata->is_vararg > 1 ||
+        !validAotConstants(metadata) ||
+        memcmp(metadata->layout_sha256, luauc_runtime_v1_layout_sha256,
+               sizeof(metadata->layout_sha256)) != 0)
+        return false;
+    if ((metadata->coverage_sites == nullptr) != (metadata->coverage_site_count == 0) ||
+        (metadata->coverage_site_count == 0) != (metadata->coverage_line_count == 0) ||
+        metadata->coverage_site_count > uint32_t(INT_MAX) ||
+        metadata->coverage_line_count > uint32_t(INT_MAX))
+        return false;
+    for (uint32_t id = 0; id < metadata->coverage_site_count; ++id) {
+        const LuaucRuntimeCoverageSiteV1 &site = metadata->coverage_sites[id];
+        if (site.reserved != 0 || site.line >= metadata->coverage_line_count)
+            return false;
+    }
+    return true;
 }
 
 static bool validAotModule(const LuaucRuntimeModuleV1 *module) {
@@ -2259,6 +2313,16 @@ static void initializeAotProto(lua_State *L, Proto *proto, const LuaucRuntimePro
     proto->is_vararg = metadata->is_vararg;
     proto->funid = metadata->function_id;
     proto->execdata = const_cast<LuaucRuntimeProtoV1 *>(metadata);
+    if (metadata->coverage_site_count != 0) {
+        AotCoverageRecord *records = luaM_newarray(
+            L, metadata->coverage_site_count, AotCoverageRecord, proto->memcat);
+        for (uint32_t id = 0; id < metadata->coverage_site_count; ++id) {
+            records[id].line = metadata->coverage_sites[id].line;
+            records[id].reserved = 0;
+            records[id].hits = 0;
+        }
+        proto->userdata = records;
+    }
     materializeAotConstants(L, proto, metadata);
 }
 
@@ -2315,6 +2379,52 @@ static void publishModuleRegistry(lua_State *L, const LuaucRuntimeProgramV1 *pro
     lua_settop(L, anchorBase);
 }
 
+extern "C" uint32_t luauc_runtime_v1_get_program_coverage(
+    lua_State *L, void *context, LuaucRuntimeCoverageCallbackV1 callback) {
+    if (!L || !callback)
+        return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+    if (!lua_checkstack(L, 3))
+        return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+
+    const int originalTop = lua_gettop(L);
+    lua_pushlightuserdata(L, &moduleRegistryKey);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    const int registryIndex = lua_gettop(L);
+    if (!lua_istable(L, registryIndex)) {
+        lua_settop(L, originalTop);
+        return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+    }
+    lua_rawgeti(L, registryIndex, MODULE_REGISTRY_COUNT_SLOT);
+    if (!lua_isnumber(L, -1)) {
+        lua_settop(L, originalTop);
+        return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+    }
+    const int moduleCount = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    if (moduleCount <= 0) {
+        lua_settop(L, originalTop);
+        return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+    }
+
+    for (int id = 0; id < moduleCount; ++id) {
+        lua_rawgeti(L, registryIndex, id + 1);
+        const int recordIndex = lua_gettop(L);
+        if (!lua_istable(L, recordIndex)) {
+            lua_settop(L, originalTop);
+            return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+        }
+        lua_rawgeti(L, recordIndex, 1);
+        if (!lua_isfunction(L, -1) || clvalue(L->top - 1)->isC) {
+            lua_settop(L, originalTop);
+            return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
+        }
+        lua_getcoverage(L, -1, context, callback);
+        lua_pop(L, 2);
+    }
+    lua_settop(L, originalTop);
+    return LUAUC_RUNTIME_V1_OK;
+}
+
 extern "C" uint32_t luauc_runtime_v1_push_root(lua_State *L, const LuaucRuntimeProtoV1 *metadata,
                                              const char *source, size_t sourceSize) {
     if (!L || !source || sourceSize == 0 || !validAotProto(metadata) ||
@@ -2324,7 +2434,7 @@ extern "C" uint32_t luauc_runtime_v1_push_root(lua_State *L, const LuaucRuntimeP
 
     if (L->global->ecb.destroy && L->global->ecb.destroy != destroyAotProto)
         return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
-    configurePinnedRuntimeFlags();
+    configurePinnedRuntimeFlags(L);
     L->global->ecb.destroy = destroyAotProto;
 
     // Match the public API publication contract for newly-created collectables: reserve the stack
@@ -2393,7 +2503,7 @@ extern "C" uint32_t luauc_runtime_v1_push_program(lua_State *L, const LuaucRunti
 
     if (L->global->ecb.destroy && L->global->ecb.destroy != destroyAotProto)
         return LUAUC_RUNTIME_V1_INTERNAL_ERROR;
-    configurePinnedRuntimeFlags();
+    configurePinnedRuntimeFlags(L);
     L->global->ecb.destroy = destroyAotProto;
 
     if (!lua_checkstack(L, moduleCount == 0 ? 1 : int(moduleCount) + 8))

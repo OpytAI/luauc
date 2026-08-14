@@ -52,7 +52,7 @@ function createContext(profile, pack, expectedStatus = 0) {
   } finally { release(result); release(packInput); release(profileInput); }
 }
 
-function canonicalRequest(source, profileDigest, packDigest) {
+function canonicalRequest(source, profileDigest, packDigest, coverageLevel = 0) {
   const name = Buffer.from("main"), sourceName = Buffer.from("@main.luau"), content = Buffer.from(source), contentDigest = sha256(content);
   const sized = (bytes) => { const size = Buffer.alloc(4); size.writeUInt32LE(bytes.length); return Buffer.concat([size, bytes]); };
   const manifestHeader = Buffer.alloc(8); manifestHeader.writeUInt32LE(1, 0);
@@ -62,7 +62,9 @@ function canonicalRequest(source, profileDigest, packDigest) {
   Buffer.from("LUAUCS1\0", "binary").copy(request, 0);
   request.writeUInt16LE(1, 8); request.writeUInt16LE(160, 10); request.writeUInt32LE(total, 12);
   request.writeUInt32LE(1, 16); request.writeUInt32LE(0, 20); request.writeUInt32LE(64, 24);
-  sha256(Buffer.concat([Buffer.from("luauc-source-request-v1\0"), profileDigest, packDigest, manifestDigest])).subarray(0, 16).copy(request, 32);
+  request.writeUInt32LE(coverageLevel, 28);
+  const coverage = Buffer.alloc(4); coverage.writeUInt32LE(coverageLevel);
+  sha256(Buffer.concat([Buffer.from("luauc-source-request-v1\0"), coverage, profileDigest, packDigest, manifestDigest])).subarray(0, 16).copy(request, 32);
   profileDigest.copy(request, 48); packDigest.copy(request, 80); manifestDigest.copy(request, 112);
   let cursor = 224;
   request.writeUInt32LE(cursor, 160); request.writeUInt32LE(name.length, 164); name.copy(request, cursor); cursor += name.length;
@@ -114,10 +116,20 @@ for (const item of profiles) {
     throw new Error(`${item.id}: artifact linker identity mismatch`);
 
   const badContent = Buffer.from(request); badContent[184] ^= 0xff;
-  const rejected = compile(context.handle, badContent);
-  if (rejected.status !== 2 || !rejected.diagnostic.includes("InvalidContentDigest")) throw new Error(`${item.id}: malformed request was accepted`);
-  const recovered = compile(context.handle, request);
-  if (!recovered.artifact.equals(first.artifact)) throw new Error(`${item.id}: request failure poisoned deterministic recovery`);
+  const badRequestId = Buffer.from(request); badRequestId[32] ^= 0xff;
+  const badCoverage = Buffer.from(request); badCoverage.writeUInt32LE(3, 28);
+  for (const [label, malformed, diagnostic] of [
+    ["content digest", badContent, "InvalidContentDigest"],
+    ["request identity", badRequestId, "InvalidRequestDigest"],
+    ["coverage level", badCoverage, "InvalidHeader"],
+  ]) {
+    const rejected = compile(context.handle, malformed);
+    if (rejected.status !== 2 || !rejected.diagnostic.includes(diagnostic))
+      throw new Error(`${item.id}: malformed ${label} was accepted: ${rejected.status}/${rejected.diagnostic}`);
+    const recovered = compile(context.handle, request);
+    if (!recovered.artifact.equals(first.artifact))
+      throw new Error(`${item.id}: ${label} failure poisoned deterministic recovery`);
+  }
   if (api.luauc_v1_context_destroy(context.handle) !== 0) throw new Error(`${item.id}: context destroy failed`);
   const stale = compile(context.handle, request);
   if (stale.status !== 7 || !stale.diagnostic.includes("InvalidContext")) throw new Error(`${item.id}: stale context handle was accepted`);
@@ -199,4 +211,4 @@ const sourceRecovery = compile(sourceFailureContext.handle, referenceRequest);
 if (!sourceRecovery.artifact.equals(referenceArtifact)) throw new Error("malformed source poisoned deterministic recovery");
 if (api.luauc_v1_context_destroy(sourceFailureContext.handle) !== 0) throw new Error("source recovery context destroy failed");
 
-console.log("verified zero-import context compiler with two independent runtime profiles, deterministic output, provenance, 11 malformed profile/pack recoveries, source recovery, and stale-handle rejection");
+console.log("verified zero-import context compiler with two independent runtime profiles, deterministic output, provenance, malformed request/profile/pack recovery, source recovery, and stale-handle rejection");

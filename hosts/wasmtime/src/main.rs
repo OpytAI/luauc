@@ -83,8 +83,10 @@ fn source_request(
     put_u32(&mut request, 16, modules.len().try_into()?);
     put_u32(&mut request, 20, entry_id.try_into()?);
     put_u32(&mut request, 24, SOURCE_RECORD_SIZE as u32);
+    put_u32(&mut request, 28, 0);
     let mut request_identity = Sha256::new();
     request_identity.update(b"luauc-source-request-v1\0");
+    request_identity.update(0u32.to_le_bytes());
     request_identity.update(profile_digest);
     request_identity.update(pack_digest);
     request_identity.update(manifest_digest);

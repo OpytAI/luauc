@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { compilePackage, instantiateArtifact, invoke } from "./host.mjs";
+import { compilePackage, coverage, createContext, destroyContext, instantiateArtifact, invoke } from "./host.mjs";
 
 const runfile = (value) => value.startsWith("/") ? value : join(process.env.RUNFILES_DIR, value);
 const compiler = readFileSync(runfile(process.env.LUAUC_COMPILER_WASM));
@@ -10,15 +10,24 @@ const modules = [
   { name: "lib", source: readFileSync(runfile(process.env.LUAUC_EMBED_LIB), "utf8") },
   { name: "main", source: readFileSync(runfile(process.env.LUAUC_EMBED_MAIN), "utf8") },
 ];
-const first = await compilePackage(compiler, profile, pack, modules);
-const second = await compilePackage(compiler, profile, pack, modules);
+const first = await compilePackage(compiler, profile, pack, modules, "main", { coverageLevel: 1 });
+const second = await compilePackage(compiler, profile, pack, modules, "main", { coverageLevel: 1 });
 if (Buffer.compare(first.artifact, second.artifact) !== 0) throw new Error("JavaScript host compile output is nondeterministic");
 const instance = instantiateArtifact(first.artifact);
-for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
-  const result = invoke(instance, number, text);
-  const expectedNumber = 9 * number + 13;
-  const expectedText = `${text}:${number + 1}`;
-  if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
-    throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${expectedNumber}/${expectedText}`);
+const context = createContext(instance);
+try {
+  for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
+    const result = invoke(instance, number, text, context);
+    const expectedNumber = 9 * number + 13;
+    const expectedText = `${text}:${number + 1}`;
+    if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
+      throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${expectedNumber}/${expectedText}`);
+  }
+  const records = coverage(instance, context);
+  if (records.length < 10 || !records.some(({ hits }) => hits > 0) ||
+      !records.some(({ hits }) => hits >= 3) || !records.some(({ depth }) => depth >= 1))
+    throw new Error(`embed-v1 coverage evidence is incomplete: ${JSON.stringify(records)}`);
+} finally {
+  destroyContext(instance, context);
 }
-console.log(`JavaScript embed-v1 compiled one multi-module artifact (${first.artifact.length} bytes) and ran three runtime inputs with calls/errors/tables/strings/iteration/coroutine/GC`);
+console.log(`JavaScript embed-v1 compiled one covered multi-module artifact (${first.artifact.length} bytes) and ran three runtime inputs with calls/errors/tables/strings/iteration/coroutine/GC/coverage`);

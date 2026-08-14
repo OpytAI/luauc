@@ -8,6 +8,7 @@ PACK_EXPORTS = [
     "luauc_embed_v1_alloc",
     "luauc_embed_v1_context_create",
     "luauc_embed_v1_context_destroy",
+    "luauc_embed_v1_coverage",
     "luauc_embed_v1_dealloc",
     "luauc_embed_v1_invoke",
     "luauc_embed_v1_protected_call_run",

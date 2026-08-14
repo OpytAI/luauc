@@ -49,6 +49,7 @@ http_archive(
         "//third_party/luau:patches/0006-analysis-named-catch.patch",
         "//third_party/luau:patches/0007-analysis-shim.patch",
         "//third_party/luau:patches/0008-analysis-explicit-control-flow.patch",
+        "//third_party/luau:patches/0009-aot-coverage-data.patch",
     ],
     sha256 = "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     strip_prefix = "luau-0.725",

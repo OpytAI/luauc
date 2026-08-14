@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 function runfile(relative, variable) {
@@ -108,12 +108,14 @@ const actualSourceManifestHash = createHash("sha256")
 if (actualSourceManifestHash !== sourceManifestHash)
   throw new Error(`runtime source manifest canonical hash drifted: ${actualSourceManifestHash}`);
 
-const upstreamObjects = manifest.retained_runtime_sources.map((source) => {
+const retainedSources = [...manifest.retained_runtime_sources].sort();
+const expectedInventory = retainedSources.map((source, index) => {
   if (!/^VM\/src\/[^/]+\.cpp$/.test(source))
     throw new Error(`invalid retained runtime source ${JSON.stringify(source)}`);
-  return `${basename(source, ".cpp")}.o`;
+  return { name: `aot_runtime_wasm32_wasi_unit_${index}.o`, source, owner: "luau" };
 });
-const expected = [...upstreamObjects, "call_frame.o", "libruntime_archive_raw_zcu.o"].sort();
+expectedInventory.push({ name: "runtime_call_frame_object.o", source: "runtime/src/call_frame.cpp", owner: "luauc" });
+const expected = expectedInventory.map(({ name }) => name).sort();
 if (new Set(expected).size !== expected.length) throw new Error("expected runtime object basenames collide");
 
 const objectMembers = parseArchive(archive).filter(({ name }) => basename(name).endsWith(".o"));
@@ -123,44 +125,64 @@ if (new Set(actual).size !== actual.length)
 if (JSON.stringify([...actual].sort()) !== JSON.stringify(expected))
   throw new Error(`runtime archive membership drifted\nexpected=${JSON.stringify(expected)}\nactual=${JSON.stringify([...actual].sort())}`);
 
-const forbiddenVm = new Set(["lvmexecute.o", "lvmload.o"]);
-const forbiddenFrontendStems = new Set([
-  "Allocator", "Ast", "Confusables", "Cst", "Lexer", "Location", "Parser", "PrettyPrinter",
-  "BytecodeBuilder", "BytecodeGraph", "BytecodeWire", "StringUtils", "TimeTrace",
-  "BuiltinFolding", "Builtins", "Compiler", "ConstantFolding", "CostModel", "TableShape", "Types",
-  "ValueTracking", "lcode", "AssemblyBuilderA64", "AssemblyBuilderX64", "BytecodeAnalysis",
-  "BytecodeSummary", "CodeAllocator", "CodeBlockUnwind", "CodeGen", "CodeGenA64",
-  "CodeGenAssembly", "CodeGenContext", "CodeGenUtils", "CodeGenX64", "EmitBuiltinsX64",
-  "EmitCommonX64", "EmitInstructionX64", "IrAnalysis", "IrBuilder", "IrCallWrapperX64", "IrDump",
-  "IrLoweringA64", "IrLoweringX64", "IrRegAllocA64", "IrRegAllocX64", "IrTranslateBuiltins",
-  "IrTranslation", "IrUtils", "IrValueLocationTracking", "NativeProtoExecData", "NativeState",
-  "OptimizeConstProp", "OptimizeDeadStore", "OptimizeFinalX64", "SharedCodeAllocator",
-  "UnwindBuilderDwarf2", "UnwindBuilderWin", "lcodegen",
-]);
+const inventoryByName = new Map(expectedInventory.map((entry) => [entry.name, entry]));
+const forbiddenVm = new Set(["VM/src/lvmexecute.cpp", "VM/src/lvmload.cpp"]);
 for (const { name, data } of objectMembers) {
   const object = basename(name);
-  if (forbiddenVm.has(object)) throw new Error(`forbidden VM object in runtime archive: ${object}`);
-  if (forbiddenFrontendStems.has(basename(object, ".o")))
-    throw new Error(`forbidden frontend-family object in runtime archive: ${object}`);
+  const inventory = inventoryByName.get(object);
+  if (!inventory) throw new Error(`runtime object has no source inventory: ${object}`);
+  if (forbiddenVm.has(inventory.source))
+    throw new Error(`forbidden VM source in runtime archive: ${inventory.source}`);
+  if (inventory.owner === "luau" && !inventory.source.startsWith("VM/src/"))
+    throw new Error(`forbidden frontend-family source in runtime archive: ${inventory.source}`);
   if (data.length < 8 || !data.subarray(0, 8).equals(Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0])))
     throw new Error(`runtime archive member is not a wasm v1 object: ${object}`);
 }
 
-const actualDigests = objectMembers.map(({ name, data }) => ({
-  name: basename(name),
-  sha256: createHash("sha256").update(data).digest("hex"),
-})).sort((a, b) => a.name.localeCompare(b.name));
-const expectedDigests = objectManifest.members.map(({ name, sha256 }) => ({ name, sha256 }))
-  .sort((a, b) => a.name.localeCompare(b.name));
-if (JSON.stringify(actualDigests) !== JSON.stringify(expectedDigests))
-  throw new Error(`runtime object digest drift\nexpected=${JSON.stringify(expectedDigests)}\nactual=${JSON.stringify(actualDigests)}`);
+const actualMembers = objectMembers.map(({ name, data }) => {
+  const inventory = inventoryByName.get(basename(name));
+  return { ...inventory, sha256: createHash("sha256").update(data).digest("hex") };
+}).sort((a, b) => a.name.localeCompare(b.name));
 
 const canonicalDigest = createHash("sha256")
-  .update(actualDigests.map(({ name, sha256 }) => `${name} ${sha256}\n`).join(""))
+  .update(actualMembers.map(({ name, sha256 }) => `${name} ${sha256}\n`).join(""))
   .digest("hex");
-if (canonicalDigest !== objectManifest.archive?.canonical_member_set_sha256)
-  throw new Error(`canonical runtime member-set digest drifted: ${canonicalDigest}`);
-if (objectManifest.archive?.member_count !== actual.length)
-  throw new Error("runtime object manifest member count drifted");
+
+const actualManifest = {
+  schema_version: 1,
+  generator_version: "luauc-runtime-object-inventory-v2",
+  status: "relocatable_archive_verified",
+  target: "wasm32-wasi",
+  object_format: "WebAssembly relocatable object version 1",
+  toolchain: {
+    zig_version: "0.16.0",
+    mode: "release_small",
+    bazel_compilation_mode: "opt",
+    threaded: "single",
+    cxx_flags: ["-DLUAUC_RUNTIME=1", "-fno-exceptions", "-fno-rtti"],
+    sysroot_selection: ["-lc", "-lc++"],
+  },
+  archive: {
+    bazel_target: "//runtime:runtime_archive_wasm32",
+    member_count: actualMembers.length,
+    upstream_member_count: retainedSources.length,
+    project_adapter_member_count: 1,
+    member_name_policy: "sorted Luau source index plus project adapter label",
+    canonical_member_set_sha256: canonicalDigest,
+  },
+  members: actualMembers,
+  forbidden_members: [
+    "VM/src/lvmexecute.cpp",
+    "VM/src/lvmload.cpp",
+    "any Ast, Bytecode, Compiler, CodeGen, Analysis, or Config source",
+  ],
+};
+
+const emitPath = process.argv.find((argument) => argument.startsWith("--emit="))?.slice(7);
+if (emitPath) {
+  writeFileSync(emitPath, `${JSON.stringify(actualManifest, null, 2)}\n`);
+} else if (JSON.stringify(canonicalize(actualManifest)) !== JSON.stringify(canonicalize(objectManifest))) {
+  throw new Error(`runtime object manifest drift\nexpected=${JSON.stringify(objectManifest)}\nactual=${JSON.stringify(actualManifest)}`);
+}
 
 console.log(`verified strict wasm runtime archive (${actual.length} objects, ${canonicalDigest})`);

@@ -42,6 +42,7 @@ pub const Role = enum(u16) {
     context_destroy = 10,
     invoke = 11,
     initialize = 12,
+    coverage = 13,
 };
 
 pub const HostImport = struct { module: []const u8, name: []const u8, type_index: u32, kind: Kind };
@@ -276,6 +277,7 @@ fn role(value: u16) Error!Role {
         10 => .context_destroy,
         11 => .invoke,
         12 => .initialize,
+        13 => .coverage,
         else => Error.InvalidBinding,
     };
 }

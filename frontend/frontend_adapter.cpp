@@ -51,8 +51,8 @@ constexpr uint8_t kLuauPinSha256[32] = {
 };
 
 constexpr uint8_t kPatchsetSha256[32] = {
-    0x0f, 0x41, 0x6c, 0xde, 0x72, 0xe4, 0x41, 0x2d, 0x39, 0x72, 0x8f, 0xa9, 0xb2, 0x23, 0x72, 0xa5,
-    0x74, 0x7a, 0x00, 0x01, 0xc6, 0x5d, 0x4a, 0x17, 0x18, 0xf4, 0x1d, 0x74, 0xf7, 0x4d, 0xea, 0x94,
+    0x91, 0xac, 0xf9, 0x29, 0xdb, 0xc5, 0xc2, 0xb3, 0x86, 0x90, 0x5f, 0xba, 0xd9, 0xd6, 0x26, 0xcd,
+    0x28, 0xb5, 0x63, 0x46, 0x25, 0x98, 0xad, 0x01, 0xe5, 0x1d, 0x15, 0xa6, 0x02, 0x31, 0x50, 0x0e,
 };
 
 constexpr uint8_t kIrEnumSha256[32] = {
@@ -875,13 +875,14 @@ bool buildWireImage(std::vector<SectionData> &sections, uint32_t protoCount, uin
 extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, size_t sourceSize,
                                                          const uint8_t *chunkName,
                                                          size_t chunkNameSize,
+                                                         uint32_t coverageLevel,
                                                          LuaucFrontendSnapshotV1Result *result) {
     if (!result)
         return LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT;
     memset(result, 0, sizeof(*result));
 
     if ((!source && sourceSize != 0) || (!chunkName && chunkNameSize != 0) ||
-        sourceSize > kMaxSourceBytes || chunkNameSize > 4096) {
+        sourceSize > kMaxSourceBytes || chunkNameSize > 4096 || coverageLevel > 2) {
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT,
                       "invalid frontend source or chunk name");
         return result->status;
@@ -893,7 +894,11 @@ extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, si
 
     size_t bytecodeSize = 0;
     const char *sourceBytes = sourceSize ? reinterpret_cast<const char *>(source) : "";
-    char *bytecode = luau_compile(sourceBytes, sourceSize, nullptr, &bytecodeSize);
+    lua_CompileOptions options{};
+    options.optimizationLevel = 1;
+    options.debugLevel = 1;
+    options.coverageLevel = int(coverageLevel);
+    char *bytecode = luau_compile(sourceBytes, sourceSize, &options, &bytecodeSize);
     if (!bytecode || bytecodeSize == 0 || bytecodeSize > kMaxBytecodeBytes) {
         free(bytecode);
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_COMPILE_ERROR,

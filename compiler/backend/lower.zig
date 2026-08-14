@@ -6,6 +6,7 @@ const wasm = @import("luauc_wasm_object");
 pub const generated_symbol = "luauc_runtime_v1_generated_ir_function";
 pub const return_symbol = "luauc_runtime_v1_return";
 pub const interrupt_symbol = "luauc_runtime_v1_interrupt";
+pub const coverage_hit_symbol = "luauc_runtime_v1_coverage_hit";
 pub const do_arith_symbol = "luauc_runtime_v1_do_arith";
 pub const compare_any_symbol = "luauc_runtime_v1_compare_any";
 pub const dupclosure_symbol = "luauc_runtime_v1_dupclosure";
@@ -63,7 +64,8 @@ pub const generated_program_symbol = "luauc_runtime_v1_program";
 pub const generated_string_keys_symbol = "luauc_runtime_v1_string_keys";
 
 const aot_abi_version: u32 = 1;
-const aot_proto_size: u32 = 76;
+const aot_proto_size: u32 = 88;
+const aot_coverage_site_size: u32 = 8;
 const aot_constant_size: u32 = 16;
 const aot_constant_item_size: u32 = 8;
 const aot_module_size: u32 = 56;
@@ -753,9 +755,11 @@ const Context = struct {
     function: snapshot_v1.IrFunction,
     slots: []const ValueSlot,
     builtin_number_sources: []u32,
+    coverage_site_ids: []const u32,
     body: *wasm.Body,
     return_: wasm.FunctionRef,
     interrupt: wasm.FunctionRef,
+    coverage_hit: ?wasm.FunctionRef,
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
@@ -9173,6 +9177,20 @@ const Context = struct {
         try self.body.end(self.allocator);
     }
 
+    fn emitCoverage(self: Context, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+        try self.requireOperandCount(instruction_value, 1);
+        const pc_operand = try self.operand(instruction_value, 0);
+        if (pc_operand.kind != .constant or
+            (try self.constant(pc_operand.value)).uintValue() == null)
+            return Error.InvalidOperandType;
+        const site_id = self.coverage_site_ids[instruction_id];
+        if (site_id == snapshot_v1.no_id)
+            return Error.UnsupportedControlFlow;
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(site_id));
+        try self.body.call(self.allocator, self.coverage_hit orelse return Error.UnsupportedCommand);
+    }
+
     fn emitJump(self: Context, instruction_value: snapshot_v1.IrInstruction) Error!void {
         try self.requireOperandCount(instruction_value, 1);
         const target = try self.requireDispatchTarget(try self.operand(instruction_value, 0));
@@ -9804,10 +9822,12 @@ const Context = struct {
         if (!try isRequireImportInstruction(self.snapshot, self.function, self.proto, get_import))
             return null;
         if (marker.command == .nop) {
-            const follows_root_prep = start == block.start + 1 and
-                (try self.instruction(start - 1)).command == .fallback_prepvarargs;
-            if ((start != block.start and !follows_root_prep) or
-                (block.flags & (1 << 0)) == 0 or marker.operand_count != 0)
+            var prefix = block.start;
+            if (prefix < start and (try self.instruction(prefix)).command == .fallback_prepvarargs)
+                prefix += 1;
+            while (prefix < start and (try self.instruction(prefix)).command == .coverage)
+                prefix += 1;
+            if (prefix != start or (block.flags & (1 << 0)) == 0 or marker.operand_count != 0)
                 return Error.UnsupportedControlFlow;
         } else {
             try self.requireOperandCount(marker, 1);
@@ -10357,6 +10377,7 @@ const Context = struct {
             ir_cmd_invoke_libm => try self.emitLibm(instruction_id, instruction_value),
             ir_cmd_fastcall => try self.emitDirectFastcall(instruction_value),
             ir_cmd_string_len => try self.emitStringLen(instruction_id, instruction_value),
+            .coverage => try self.emitCoverage(instruction_id, instruction_value),
             .interrupt => try self.emitInterrupt(instruction_id, instruction_value),
             .jump => {
                 try self.emitJump(instruction_value);
@@ -11241,6 +11262,7 @@ fn resultShape(command: snapshot_v1.IrCommand) ValueShape {
 }
 
 const ImportNeeds = struct {
+    coverage_hit: bool = false,
     do_arith: bool = false,
     compare_any: bool = false,
     dupclosure: bool = false,
@@ -11297,6 +11319,7 @@ const ImportNeeds = struct {
 const RuntimeImports = struct {
     return_: wasm.FunctionRef,
     interrupt: wasm.FunctionRef,
+    coverage_hit: ?wasm.FunctionRef,
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
@@ -11399,6 +11422,7 @@ fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_pack
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
         const instruction_value = try snapshot.irInstruction(function, instruction_id);
         switch (instruction_value.command) {
+            .coverage => needs.coverage_hit = true,
             .load_pointer => {
                 if (instruction_value.operand_count == 1 and
                     (try snapshot.irOperand(instruction_value, 0)).kind == .vm_const)
@@ -11590,6 +11614,7 @@ fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_pack
 fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!RuntimeImports {
     const return_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const interrupt_params = [_]wasm.ValueType{ .i32, .i32 };
+    const coverage_hit_params = [_]wasm.ValueType{ .i32, .i32 };
     const do_arith_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32 };
     const compare_any_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const dupclosure_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
@@ -11635,6 +11660,10 @@ fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!RuntimeImpo
     const generated_type = try object.addType(.{ .params = &generated_params, .results = &status_result });
     const return_ = try object.importFunction("env", return_symbol, return_type);
     const interrupt = try object.importFunction("env", interrupt_symbol, interrupt_type);
+    const coverage_hit = if (needs.coverage_hit) blk: {
+        const helper_type = try object.addType(.{ .params = &coverage_hit_params, .results = &no_results });
+        break :blk try object.importFunction("env", coverage_hit_symbol, helper_type);
+    } else null;
     const do_arith = if (needs.do_arith) blk: {
         const helper_type = try object.addType(.{ .params = &do_arith_params, .results = &no_results });
         break :blk try object.importFunction("env", do_arith_symbol, helper_type);
@@ -11842,6 +11871,7 @@ fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!RuntimeImpo
     return .{
         .return_ = return_,
         .interrupt = interrupt,
+        .coverage_hit = coverage_hit,
         .do_arith = do_arith,
         .compare_any = compare_any,
         .dupclosure = dupclosure,
@@ -11923,6 +11953,18 @@ fn lowerFunction(
     const builtin_number_sources = try allocator.alloc(u32, function.instruction_count);
     defer allocator.free(builtin_number_sources);
     @memset(builtin_number_sources, std.math.maxInt(u32));
+    const coverage_site_ids = try allocator.alloc(u32, function.instruction_count);
+    defer allocator.free(coverage_site_ids);
+    @memset(coverage_site_ids, snapshot_v1.no_id);
+    var coverage_site_count: u32 = 0;
+    var coverage_instruction_id: u32 = 0;
+    while (coverage_instruction_id < function.instruction_count) : (coverage_instruction_id += 1) {
+        const instruction_value = try snapshot.irInstruction(function, coverage_instruction_id);
+        if (instruction_value.command == .coverage) {
+            coverage_site_ids[coverage_instruction_id] = coverage_site_count;
+            coverage_site_count = std.math.add(u32, coverage_site_count, 1) catch return Error.ResourceLimit;
+        }
+    }
 
     var locals: std.ArrayList(wasm.Local) = .empty;
     defer locals.deinit(allocator);
@@ -11991,9 +12033,11 @@ fn lowerFunction(
         .function = function,
         .slots = slots,
         .builtin_number_sources = builtin_number_sources,
+        .coverage_site_ids = coverage_site_ids,
         .body = &body,
         .return_ = imports.return_,
         .interrupt = imports.interrupt,
+        .coverage_hit = imports.coverage_hit,
         .do_arith = imports.do_arith,
         .compare_any = imports.compare_any,
         .dupclosure = imports.dupclosure,
@@ -12187,6 +12231,12 @@ const ProtoConstantSpan = struct {
     item_count: u32 = 0,
 };
 
+const ProtoCoverageSpan = struct {
+    byte_offset: u32 = 0,
+    site_count: u32 = 0,
+    line_count: u32 = 0,
+};
+
 const ConstantStringRelocation = struct {
     descriptor_offset: u32,
     string_offset: u32,
@@ -12262,6 +12312,44 @@ fn appendProtoConstantMetadata(
     };
 }
 
+fn appendProtoCoverageMetadata(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    proto: snapshot_v1.Proto,
+    bytes: *std.ArrayList(u8),
+) Error!ProtoCoverageSpan {
+    if (bytes.items.len > std.math.maxInt(u32))
+        return Error.ResourceLimit;
+    const byte_offset: u32 = @intCast(bytes.items.len);
+    const function = try snapshot.irFunction(proto.id);
+    if (function.proto_id != proto.id)
+        return Error.UnsupportedControlFlow;
+    var site_count: u32 = 0;
+    var line_count: u32 = 0;
+    var instruction_id: u32 = 0;
+    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        const instruction_value = try snapshot.irInstruction(function, instruction_id);
+        if (instruction_value.command != .coverage)
+            continue;
+        if (instruction_value.operand_count != 1)
+            return Error.InvalidOperandCount;
+        const pc_operand = try snapshot.irOperand(instruction_value, 0);
+        if (pc_operand.kind != .constant)
+            return Error.InvalidOperandType;
+        const pc = (try snapshot.irConstant(function, pc_operand.value)).uintValue() orelse
+            return Error.InvalidOperandType;
+        if (pc >= proto.code_count)
+            return Error.UnsupportedControlFlow;
+        const line = try snapshot.sourceLine(proto, pc);
+        const offset = bytes.items.len;
+        try bytes.appendNTimes(allocator, 0, aot_coverage_site_size);
+        writeU32(bytes.items[offset..][0..aot_coverage_site_size], 0, line);
+        line_count = @max(line_count, std.math.add(u32, line, 1) catch return Error.ResourceLimit);
+        site_count = std.math.add(u32, site_count, 1) catch return Error.ResourceLimit;
+    }
+    return .{ .byte_offset = byte_offset, .site_count = site_count, .line_count = line_count };
+}
+
 fn emitStaticPackageMetadata(
     allocator: std.mem.Allocator,
     object: *wasm.Object,
@@ -12277,10 +12365,15 @@ fn emitStaticPackageMetadata(
     const proto_spans = try allocator.alloc(ProtoConstantSpan, function_refs.len);
     defer allocator.free(proto_spans);
     @memset(proto_spans, .{});
+    const coverage_spans = try allocator.alloc(ProtoCoverageSpan, function_refs.len);
+    defer allocator.free(coverage_spans);
+    @memset(coverage_spans, .{});
     var constant_bytes: std.ArrayList(u8) = .empty;
     defer constant_bytes.deinit(allocator);
     var item_bytes: std.ArrayList(u8) = .empty;
     defer item_bytes.deinit(allocator);
+    var coverage_bytes: std.ArrayList(u8) = .empty;
+    defer coverage_bytes.deinit(allocator);
     var constant_strings = StringKeyPool{};
     defer constant_strings.deinit(allocator);
     var string_relocations: std.ArrayList(ConstantStringRelocation) = .empty;
@@ -12332,6 +12425,14 @@ fn emitStaticPackageMetadata(
             );
             writeU32(record, 64, proto.vm_constant_count);
             writeU32(record, 72, proto_spans[@intCast(global_id)].item_count);
+            coverage_spans[@intCast(global_id)] = try appendProtoCoverageMetadata(
+                allocator,
+                snapshot,
+                proto,
+                &coverage_bytes,
+            );
+            writeU32(record, 80, coverage_spans[@intCast(global_id)].site_count);
+            writeU32(record, 84, coverage_spans[@intCast(global_id)].line_count);
         }
 
         const module_record_offset = std.math.mul(usize, @as(usize, @intCast(module_id)), aot_module_size) catch return Error.ResourceLimit;
@@ -12374,6 +12475,16 @@ fn emitStaticPackageMetadata(
             data_flags,
             2,
             item_bytes.items,
+        )
+    else
+        null;
+    const coverage_data = if (coverage_bytes.items.len != 0)
+        try object.defineData(
+            ".rodata.luauc_runtime_v1_coverage_sites",
+            "luauc_runtime_v1_coverage_sites",
+            data_flags,
+            2,
+            coverage_bytes.items,
         )
     else
         null;
@@ -12440,6 +12551,14 @@ fn emitStaticPackageMetadata(
                 record_offset + 68,
                 items_data.?,
                 std.math.cast(i32, span.item_offset) orelse return Error.ResourceLimit,
+            );
+        const coverage = coverage_spans[global_id];
+        if (coverage.site_count != 0)
+            try object.relocateDataMemoryAddress(
+                protos,
+                record_offset + 76,
+                coverage_data.?,
+                std.math.cast(i32, coverage.byte_offset) orelse return Error.ResourceLimit,
             );
     }
     if (constants_data) |data|

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generator_version": "luauc-runtime-object-inventory-v1",
+  "generator_version": "luauc-runtime-object-inventory-v2",
   "status": "relocatable_archive_verified",
   "target": "wasm32-wasi",
   "object_format": "WebAssembly relocatable object version 1",
@@ -20,76 +20,228 @@
     ]
   },
   "archive": {
-    "bazel_target": "//runtime:luauc_runtime_wasm32",
-    "member_count": 36,
+    "bazel_target": "//runtime:runtime_archive_wasm32",
+    "member_count": 35,
     "upstream_member_count": 34,
     "project_adapter_member_count": 1,
-    "zig_root_member_count": 1,
-    "member_name_policy": "inventory and digest by basename; rules_zig archive headers contain non-contract Zig cache paths",
-    "canonical_member_set_sha256": "e93745e17f2e01134fdba2944896c781e12192f2afc8af76c26804f995920be5"
+    "member_name_policy": "sorted Luau source index plus project adapter label",
+    "canonical_member_set_sha256": "3ad35dfa94390d5a22adce886a60f5bff414e8af954ab0358c383c799fa6dbd5"
   },
   "members": [
-    {"name": "call_frame.o", "sha256": "d5c8188402ed0b0af5ea006b9b686792269177fdecafc40e32e0bcef810226f5", "owner": "luauc"},
-    {"name": "lapi.o", "sha256": "2b9e9b828e3cb29a555bc3f07ea9368c4f90b996ac2380287a373285caf66325", "owner": "luau"},
-    {"name": "laux.o", "sha256": "354493b7558157bfdabe7c811487c5225b4b89e8fccdeae817ad052b3dd119b0", "owner": "luau"},
-    {"name": "lbaselib.o", "sha256": "7ab015e8d6df0962be500f2eedaa99630465f34faf418256faa3dbd58aa4f5df", "owner": "luau"},
-    {"name": "lbitlib.o", "sha256": "f64ea2fed4a3c020173dafd20b1e2abd7e385cabbab7d74359364eb7bb5fc6af", "owner": "luau"},
-    {"name": "lbuffer.o", "sha256": "e76cce07ddf85e96f598b77ea5e649db961f279b6c5dd67d21c5c3187efd3a7c", "owner": "luau"},
-    {"name": "lbuflib.o", "sha256": "74cd5395d15e27502c5d62f14058dd38d9fc22705b29d3a1d6220862e7f02c6f", "owner": "luau"},
-    {"name": "lbuiltins.o", "sha256": "4fee7e74860597855b00793e0483ad8836eed6cda3f596e9ac08bdaf1f4ce83f", "owner": "luau"},
-    {"name": "lclass.o", "sha256": "01dae31bbb6ed223c6c3cc0f22fe48ae118dcbdfc9c8c1e25c2c05b0457f038d", "owner": "luau"},
-    {"name": "lclasslib.o", "sha256": "2253374fa46bc43546d7c1e87ceb216b3fda81d8ba12093c4b0d48347895a5f0", "owner": "luau"},
-    {"name": "lcorolib.o", "sha256": "909c6d3675329214df98d10206c2d978b3661777fb0d5b53d1e917d475b0c375", "owner": "luau"},
-    {"name": "ldblib.o", "sha256": "e68bf421c2b893ca8781cca26924f7eab3fb7d8a785593869fd77318763eaed7", "owner": "luau"},
-    {"name": "ldebug.o", "sha256": "c3c55e4691725174f62034bde27e965abc9c26566d845f92ee1cb4788dd6954c", "owner": "luau"},
-    {"name": "ldo.o", "sha256": "329b35d2338c6e7fed6446641c7d1387c108d55f02f175d48101a4081e2b74f1", "owner": "luau"},
-    {"name": "lfunc.o", "sha256": "e5eb118c65cc15a5fa08a26b1180f3bf7931e8a817dcd5e538cfcb9fd76ec8b7", "owner": "luau"},
-    {"name": "lgc.o", "sha256": "8918a9be32952674018bd44d374bf0a2eb140d5fdedae97891d7017efe3f431e", "owner": "luau"},
-    {"name": "lgcdebug.o", "sha256": "12e24742e5f1a435aca8c7a167e19dca1b543c9c066a4b5e1fea98bcd49c4f49", "owner": "luau"},
-    {"name": "libruntime_archive_raw_zcu.o", "sha256": "ae5be5f026cf95a541bc00ee01d1b9b8644778fc733b272e783aa775f442c863", "owner": "rules_zig"},
-    {"name": "linit.o", "sha256": "638e3c357065e72d9b86fbfd2116e30bf5de0f0a8009540281bd563e31907086", "owner": "luau"},
-    {"name": "lintlib.o", "sha256": "dcfeb21be73b1a14aa8f89232e1c4de0c70fe80a915b295606c35a904675e6a0", "owner": "luau"},
-    {"name": "lmathlib.o", "sha256": "3124aa18d8ad3efec3ab03cd554f0f788c6b7252a365c8d352976ed0f4b48766", "owner": "luau"},
-    {"name": "lmem.o", "sha256": "862eef89ef36e380acf2db3ce261c7fce0d3f12b8ee6656a9084811ed05edd44", "owner": "luau"},
-    {"name": "lnumprint.o", "sha256": "5d9cee637a958ba7bb6bdc9a6b986b567b9fdd4cea1b3b8b37310e4774cfb957", "owner": "luau"},
-    {"name": "lobject.o", "sha256": "ada25586aaaf2e1a5f470bec6fb43b0a2b44f4f65c231ebea2f6d6872d013823", "owner": "luau"},
-    {"name": "loslib.o", "sha256": "f15022755c9f0c1150eb3efd25808cc223ed12030f45803e8f29eee22500efc7", "owner": "luau"},
-    {"name": "lperf.o", "sha256": "ff4e8643137ac03437fccb2e713903e12801f7d371518292fcd47afaff90376d", "owner": "luau"},
-    {"name": "lstate.o", "sha256": "8f15693d4e3e5b887aa1540a0c4c7d1813a4edbd82cf4526c94edc3380f5c8f5", "owner": "luau"},
-    {"name": "lstring.o", "sha256": "e8b78c64925b3007d4fc0b30f8d887714fb8d41ca5d199c1138a6eed8fb50a3c", "owner": "luau"},
-    {"name": "lstrlib.o", "sha256": "42e6ee953083fe7a2969b810300a440ad212525e891a900ae626755e0e4ee9db", "owner": "luau"},
-    {"name": "ltable.o", "sha256": "2eade8858190c642daa81b2a2715a19eab15c098c8b1bfeab04b736dd0ee8a22", "owner": "luau"},
-    {"name": "ltablib.o", "sha256": "70740259ac5fd7abf6fbe5b8c715bb85721bda50613ea798092b5558688f47a6", "owner": "luau"},
-    {"name": "ltm.o", "sha256": "5726893201bf63d3b7ae480209bc3982a971a3a7da43b5cdf43f671e9dfd0a9e", "owner": "luau"},
-    {"name": "ludata.o", "sha256": "e4b2923f43c8bb91ea1d62bbee4c20ef5324fab5a014eb2f410bfe16298ee5c7", "owner": "luau"},
-    {"name": "lutf8lib.o", "sha256": "bae91b3f60e33d2259e45c89f385093cc7c5c9ee8ebca78d13b37da9f4ffff09", "owner": "luau"},
-    {"name": "lveclib.o", "sha256": "e2105c5e4f4aa6f0c43442acae5e041013d723c742a598aec49335b7699be779", "owner": "luau"},
-    {"name": "lvmutils.o", "sha256": "62b8fb701eaef32434d756ba4d29dc65f278967bc6c0161274f876ba326eac17", "owner": "luau"}
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_0.o",
+      "source": "VM/src/lapi.cpp",
+      "owner": "luau",
+      "sha256": "2b9e9b828e3cb29a555bc3f07ea9368c4f90b996ac2380287a373285caf66325"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_1.o",
+      "source": "VM/src/laux.cpp",
+      "owner": "luau",
+      "sha256": "354493b7558157bfdabe7c811487c5225b4b89e8fccdeae817ad052b3dd119b0"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_10.o",
+      "source": "VM/src/ldblib.cpp",
+      "owner": "luau",
+      "sha256": "e68bf421c2b893ca8781cca26924f7eab3fb7d8a785593869fd77318763eaed7"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_11.o",
+      "source": "VM/src/ldebug.cpp",
+      "owner": "luau",
+      "sha256": "bad82ee3c80922a267fea1a148de1f72acca948953baee16f0868b60e92b3a81"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_12.o",
+      "source": "VM/src/ldo.cpp",
+      "owner": "luau",
+      "sha256": "329b35d2338c6e7fed6446641c7d1387c108d55f02f175d48101a4081e2b74f1"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_13.o",
+      "source": "VM/src/lfunc.cpp",
+      "owner": "luau",
+      "sha256": "9880e146429687bd22f2fbe82f2e713424ea4d7ebddb94c70a48fe239f7e5095"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_14.o",
+      "source": "VM/src/lgc.cpp",
+      "owner": "luau",
+      "sha256": "8918a9be32952674018bd44d374bf0a2eb140d5fdedae97891d7017efe3f431e"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_15.o",
+      "source": "VM/src/lgcdebug.cpp",
+      "owner": "luau",
+      "sha256": "12e24742e5f1a435aca8c7a167e19dca1b543c9c066a4b5e1fea98bcd49c4f49"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_16.o",
+      "source": "VM/src/linit.cpp",
+      "owner": "luau",
+      "sha256": "638e3c357065e72d9b86fbfd2116e30bf5de0f0a8009540281bd563e31907086"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_17.o",
+      "source": "VM/src/lintlib.cpp",
+      "owner": "luau",
+      "sha256": "dcfeb21be73b1a14aa8f89232e1c4de0c70fe80a915b295606c35a904675e6a0"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_18.o",
+      "source": "VM/src/lmathlib.cpp",
+      "owner": "luau",
+      "sha256": "3124aa18d8ad3efec3ab03cd554f0f788c6b7252a365c8d352976ed0f4b48766"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_19.o",
+      "source": "VM/src/lmem.cpp",
+      "owner": "luau",
+      "sha256": "862eef89ef36e380acf2db3ce261c7fce0d3f12b8ee6656a9084811ed05edd44"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_2.o",
+      "source": "VM/src/lbaselib.cpp",
+      "owner": "luau",
+      "sha256": "7ab015e8d6df0962be500f2eedaa99630465f34faf418256faa3dbd58aa4f5df"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_20.o",
+      "source": "VM/src/lnumprint.cpp",
+      "owner": "luau",
+      "sha256": "5d9cee637a958ba7bb6bdc9a6b986b567b9fdd4cea1b3b8b37310e4774cfb957"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_21.o",
+      "source": "VM/src/lobject.cpp",
+      "owner": "luau",
+      "sha256": "ada25586aaaf2e1a5f470bec6fb43b0a2b44f4f65c231ebea2f6d6872d013823"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_22.o",
+      "source": "VM/src/loslib.cpp",
+      "owner": "luau",
+      "sha256": "f15022755c9f0c1150eb3efd25808cc223ed12030f45803e8f29eee22500efc7"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_23.o",
+      "source": "VM/src/lperf.cpp",
+      "owner": "luau",
+      "sha256": "ff4e8643137ac03437fccb2e713903e12801f7d371518292fcd47afaff90376d"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_24.o",
+      "source": "VM/src/lstate.cpp",
+      "owner": "luau",
+      "sha256": "031bd2e9c0809747a5b349ac5a6673006a925c2c78de08c9bb3598277b0bdfc2"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_25.o",
+      "source": "VM/src/lstring.cpp",
+      "owner": "luau",
+      "sha256": "e8b78c64925b3007d4fc0b30f8d887714fb8d41ca5d199c1138a6eed8fb50a3c"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_26.o",
+      "source": "VM/src/lstrlib.cpp",
+      "owner": "luau",
+      "sha256": "42e6ee953083fe7a2969b810300a440ad212525e891a900ae626755e0e4ee9db"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_27.o",
+      "source": "VM/src/ltable.cpp",
+      "owner": "luau",
+      "sha256": "2eade8858190c642daa81b2a2715a19eab15c098c8b1bfeab04b736dd0ee8a22"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_28.o",
+      "source": "VM/src/ltablib.cpp",
+      "owner": "luau",
+      "sha256": "70740259ac5fd7abf6fbe5b8c715bb85721bda50613ea798092b5558688f47a6"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_29.o",
+      "source": "VM/src/ltm.cpp",
+      "owner": "luau",
+      "sha256": "5726893201bf63d3b7ae480209bc3982a971a3a7da43b5cdf43f671e9dfd0a9e"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_3.o",
+      "source": "VM/src/lbitlib.cpp",
+      "owner": "luau",
+      "sha256": "f64ea2fed4a3c020173dafd20b1e2abd7e385cabbab7d74359364eb7bb5fc6af"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_30.o",
+      "source": "VM/src/ludata.cpp",
+      "owner": "luau",
+      "sha256": "e4b2923f43c8bb91ea1d62bbee4c20ef5324fab5a014eb2f410bfe16298ee5c7"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_31.o",
+      "source": "VM/src/lutf8lib.cpp",
+      "owner": "luau",
+      "sha256": "bae91b3f60e33d2259e45c89f385093cc7c5c9ee8ebca78d13b37da9f4ffff09"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_32.o",
+      "source": "VM/src/lveclib.cpp",
+      "owner": "luau",
+      "sha256": "e2105c5e4f4aa6f0c43442acae5e041013d723c742a598aec49335b7699be779"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_33.o",
+      "source": "VM/src/lvmutils.cpp",
+      "owner": "luau",
+      "sha256": "62b8fb701eaef32434d756ba4d29dc65f278967bc6c0161274f876ba326eac17"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_4.o",
+      "source": "VM/src/lbuffer.cpp",
+      "owner": "luau",
+      "sha256": "e76cce07ddf85e96f598b77ea5e649db961f279b6c5dd67d21c5c3187efd3a7c"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_5.o",
+      "source": "VM/src/lbuflib.cpp",
+      "owner": "luau",
+      "sha256": "74cd5395d15e27502c5d62f14058dd38d9fc22705b29d3a1d6220862e7f02c6f"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_6.o",
+      "source": "VM/src/lbuiltins.cpp",
+      "owner": "luau",
+      "sha256": "4fee7e74860597855b00793e0483ad8836eed6cda3f596e9ac08bdaf1f4ce83f"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_7.o",
+      "source": "VM/src/lclass.cpp",
+      "owner": "luau",
+      "sha256": "01dae31bbb6ed223c6c3cc0f22fe48ae118dcbdfc9c8c1e25c2c05b0457f038d"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_8.o",
+      "source": "VM/src/lclasslib.cpp",
+      "owner": "luau",
+      "sha256": "2253374fa46bc43546d7c1e87ceb216b3fda81d8ba12093c4b0d48347895a5f0"
+    },
+    {
+      "name": "aot_runtime_wasm32_wasi_unit_9.o",
+      "source": "VM/src/lcorolib.cpp",
+      "owner": "luau",
+      "sha256": "909c6d3675329214df98d10206c2d978b3661777fb0d5b53d1e917d475b0c375"
+    },
+    {
+      "name": "runtime_call_frame_object.o",
+      "source": "runtime/src/call_frame.cpp",
+      "owner": "luauc",
+      "sha256": "fbd30903d1fb0747c2fb3a6f5e21cf1a1fd8cf6bf08247775677d0c81c308578"
+    }
   ],
-  "relocation_sections": {
-    "linking": 36,
-    "reloc.CODE": 35,
-    "reloc.DATA": 18
-  },
-  "relocation_count": 4933,
-  "relocation_kinds": {
-    "R_WASM_FUNCTION_INDEX_LEB": 2626,
-    "R_WASM_GLOBAL_INDEX_LEB": 465,
-    "R_WASM_MEMORY_ADDR_I32": 302,
-    "R_WASM_MEMORY_ADDR_LEB": 208,
-    "R_WASM_MEMORY_ADDR_SLEB": 663,
-    "R_WASM_TABLE_INDEX_I32": 451,
-    "R_WASM_TABLE_INDEX_SLEB": 50,
-    "R_WASM_TABLE_NUMBER_LEB": 84,
-    "R_WASM_TYPE_INDEX_LEB": 84
-  },
   "forbidden_members": [
-    "lvmexecute.o",
-    "lvmload.o",
-    "any Ast, Bytecode, Compiler, CodeGen, Analysis, or Config object"
-  ],
-  "notes": [
-    "Per-member digests are the reproducibility contract; the raw ar container digest is not, because rules_zig stores cache-qualified member names in archive headers.",
-    "The hermetic Emscripten wasm-ld reference consumes this archive with --whole-archive and --allow-undefined before runtime-profile linking."
+    "VM/src/lvmexecute.cpp",
+    "VM/src/lvmload.cpp",
+    "any Ast, Bytecode, Compiler, CodeGen, Analysis, or Config source"
   ]
 }

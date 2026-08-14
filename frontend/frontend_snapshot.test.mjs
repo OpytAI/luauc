@@ -33,6 +33,7 @@ const contractInputs = [
   "third_party/luau/patches/0006-analysis-named-catch.patch",
   "third_party/luau/patches/0007-analysis-shim.patch",
   "third_party/luau/patches/0008-analysis-explicit-control-flow.patch",
+  "third_party/luau/patches/0009-aot-coverage-data.patch",
 ].sort();
 
 function frontendContractDigest() {
@@ -264,7 +265,7 @@ api.luauc_frontend_v1_init();
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function compile(sourceText, chunkText) {
+function compile(sourceText, chunkText, coverageLevel = 0) {
   const source = encoder.encode(sourceText);
   const chunk = encoder.encode(chunkText);
   const sourcePointer = api.luauc_frontend_v1_alloc(source.length);
@@ -280,6 +281,7 @@ function compile(sourceText, chunkText) {
     source.length,
     chunkPointer,
     chunk.length,
+    coverageLevel,
     resultPointer,
   );
 

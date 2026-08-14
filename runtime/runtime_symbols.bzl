@@ -18,6 +18,7 @@ AOT_GENERATED_RUNTIME_SYMBOLS = [
     "luauc_runtime_v1_close_upvalues",
     "luauc_runtime_v1_compare_any",
     "luauc_runtime_v1_concat",
+    "luauc_runtime_v1_coverage_hit",
     "luauc_runtime_v1_do_arith",
     "luauc_runtime_v1_do_len",
     "luauc_runtime_v1_dup_table",

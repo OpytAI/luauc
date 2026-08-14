@@ -36,7 +36,7 @@ const wasmLd = runfile(process.env.LUAUC_WASM_LD, "LUAUC_WASM_LD");
 
 const encoder = new TextEncoder();
 
-function frontendSnapshot(sourceText, chunkText) {
+function frontendSnapshot(sourceText, chunkText, coverageLevel = 0) {
   const api = frontend.exports;
   api.luauc_frontend_v1_init();
   const source = encoder.encode(sourceText);
@@ -54,6 +54,7 @@ function frontendSnapshot(sourceText, chunkText) {
     source.length,
     chunkPointer,
     chunk.length,
+    coverageLevel,
     resultPointer,
   );
   const result = new DataView(api.memory.buffer, resultPointer, 20);
@@ -422,18 +423,64 @@ async function executeRecursiveCallPackageShape() {
   const protoBase = Number(instance.exports.luauc_runtime_v1_protos.value);
   const view = new DataView(instance.exports.memory.buffer);
   for (let protoId = 0; protoId < 4; protoId++) {
-    const record = protoBase + protoId * 76;
+    const record = protoBase + protoId * 88;
     const constantPointer = view.getUint32(record + 60, true);
     const constantCount = view.getUint32(record + 64, true);
     const itemPointer = view.getUint32(record + 68, true);
     const itemCount = view.getUint32(record + 72, true);
-    if (view.getUint32(record, true) !== 1 || view.getUint32(record + 4, true) !== 76 ||
+    const coveragePointer = view.getUint32(record + 76, true);
+    const coverageCount = view.getUint32(record + 80, true);
+    const coverageLineCount = view.getUint32(record + 84, true);
+    if (view.getUint32(record, true) !== 1 || view.getUint32(record + 4, true) !== 88 ||
         view.getUint32(record + 44, true) !== protoId)
       throw new Error(`${name}: generated Proto descriptor ${protoId} is malformed`);
-    if ((constantCount === 0) !== (constantPointer === 0) || (itemCount === 0) !== (itemPointer === 0))
+    if ((constantCount === 0) !== (constantPointer === 0) || (itemCount === 0) !== (itemPointer === 0) ||
+        (coverageCount === 0) !== (coveragePointer === 0) || (coverageCount === 0) !== (coverageLineCount === 0))
       throw new Error(`${name}: generated Proto descriptor ${protoId} has noncanonical constant spans`);
   }
   return { objectSize: first.length, functionCount: generatedFunctions.length };
+}
+
+async function executeCoveragePackageShape() {
+  const name = "coverage-package-shape";
+  const source = "return function(value) if value > 0 then return value + 1 end return value - 1 end";
+  const firstSnapshot = frontendSnapshot(source, "@aot/coverage_shape.luau", 1);
+  const secondSnapshot = frontendSnapshot(source, "@aot/coverage_shape.luau", 1);
+  const shape = snapshotShape(firstSnapshot);
+  let irSites = 0;
+  for (let functionId = 0; functionId < shape.functionCount; functionId++)
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++)
+      irSites += shape.instruction(functionId, instructionId).command === 159;
+  if (irSites < 3) throw new Error(`${name}: expected natural statement coverage IR, got ${irSites} sites`);
+
+  const first = backendStaticPackage(staticPackageFrame("aot_coverage", firstSnapshot));
+  const second = backendStaticPackage(staticPackageFrame("aot_coverage", secondSnapshot));
+  if (!first.equals(second)) throw new Error(`${name}: static-package backend is nondeterministic`);
+  const functionSymbols = packageFunctionSymbols(shape.functionCount);
+  const module = await WebAssembly.compile(linkPackage(first, functionSymbols, ["luauc_runtime_v1_protos"]));
+  const env = Object.fromEntries(WebAssembly.Module.imports(module).map(({ name: importName }) => [importName, () => 0]));
+  const instance = await WebAssembly.instantiate(module, { env });
+  const protoBase = Number(instance.exports.luauc_runtime_v1_protos.value);
+  const view = new DataView(instance.exports.memory.buffer);
+  let metadataSites = 0;
+  for (let protoId = 0; protoId < shape.protoCount; protoId++) {
+    const record = protoBase + protoId * 88;
+    const pointer = view.getUint32(record + 76, true);
+    const count = view.getUint32(record + 80, true);
+    const lines = view.getUint32(record + 84, true);
+    if ((count === 0) !== (pointer === 0) || (count === 0) !== (lines === 0))
+      throw new Error(`${name}: malformed coverage metadata for Proto ${protoId}`);
+    for (let site = 0; site < count; site++) {
+      const line = view.getUint32(pointer + site * 8, true);
+      const reserved = view.getUint32(pointer + site * 8 + 4, true);
+      if (reserved !== 0 || line >= lines)
+        throw new Error(`${name}: invalid coverage site ${protoId}/${site}`);
+    }
+    metadataSites += count;
+  }
+  if (metadataSites !== irSites)
+    throw new Error(`${name}: coverage metadata/IR mismatch ${metadataSites}/${irSites}`);
+  return { objectSize: first.length, sites: irSites };
 }
 
 async function executeTableInsertAppendPackageShape() {
@@ -2616,6 +2663,7 @@ const referenceCapture = await executeReferenceCapturePackage();
 const multiResultCall = await executeMultiResultCallPackage();
 const forwardedCapture = executeForwardedCapturePackageShape();
 const recursiveCall = await executeRecursiveCallPackageShape();
+const coverage = await executeCoveragePackageShape();
 const tableInsertAppend = await executeTableInsertAppendPackageShape();
 const preloadedFieldCompare = await executePreloadedFieldAndInvertedCompare();
 const linearizedStringFields = await executeLinearizedStringFieldWrites();
@@ -2642,6 +2690,7 @@ console.log(
     `reference capture package ${referenceCapture.objectSize} bytes/${referenceCapture.closes} closes; ` +
     `forwarded capture package ${forwardedCapture.objectSize} bytes; ` +
     `recursive call package ${recursiveCall.objectSize} bytes/${recursiveCall.functionCount} functions; ` +
+    `coverage package ${coverage.objectSize} bytes/${coverage.sites} sites; ` +
     `table.insert append package ${tableInsertAppend.objectSize} bytes; ` +
     `preloaded field/inverted compare ${preloadedFieldCompare.objectSize} bytes; ` +
     `linearized string fields ${linearizedStringFields.objectSize} bytes; ` +

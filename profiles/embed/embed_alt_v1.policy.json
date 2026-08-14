@@ -12,6 +12,7 @@
     { "role": "dealloc", "name": "luauc_embed_v1_dealloc", "retain": true },
     { "role": "context_create", "name": "luauc_embed_v1_context_create", "retain": true },
     { "role": "context_destroy", "name": "luauc_embed_v1_context_destroy", "retain": true },
+    { "role": "coverage", "name": "luauc_embed_v1_coverage", "retain": true },
     { "role": "invoke", "name": "luauc_embed_v1_invoke", "retain": true },
     { "role": "initialize", "name": "_start", "retain": true }
   ],

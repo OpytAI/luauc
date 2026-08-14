@@ -18,6 +18,7 @@ const roleSpecs = new Map([
   ["context_destroy", { role: 10, kind: 0, required: true, retain: true }],
   ["invoke", { role: 11, kind: 0, required: true, retain: true }],
   ["initialize", { role: 12, kind: 0, required: true, retain: true }],
+  ["coverage", { role: 13, kind: 0, required: false, retain: true }],
 ]);
 const kindNames = new Map([["function", 0], ["table", 1], ["memory", 2], ["global", 3]]);
 

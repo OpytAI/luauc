@@ -20,6 +20,7 @@ pub const Error = error{
     InvalidUtf8,
     InvalidContentDigest,
     InvalidManifestDigest,
+    InvalidRequestDigest,
     RuntimeProfileMismatch,
     RuntimePackMismatch,
     NonCanonicalModuleOrder,
@@ -39,6 +40,7 @@ pub const Package = struct {
     bytes: []const u8,
     module_count: u32,
     entry_module_id: u32,
+    coverage_level: u32,
     request_id: [16]u8,
     runtime_profile_sha256: [32]u8,
     runtime_pack_sha256: [32]u8,
@@ -68,8 +70,9 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
         return Error.InvalidMagic;
     if (readU16(bytes, 8) != version)
         return Error.UnsupportedVersion;
+    const coverage_level = readU32(bytes, 28);
     if (readU16(bytes, 10) != header_size or readU32(bytes, 12) != bytes.len or
-        readU32(bytes, 24) != record_size or readU32(bytes, 28) != 0)
+        readU32(bytes, 24) != record_size or coverage_level > 2)
         return Error.InvalidHeader;
     for (bytes[144..160]) |reserved|
         if (reserved != 0)
@@ -158,10 +161,23 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
     hasher.final(&actual_manifest);
     if (!std.mem.eql(u8, &actual_manifest, &manifest_digest))
         return Error.InvalidManifestDigest;
+    var request_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    request_hasher.update("luauc-source-request-v1\x00");
+    var coverage_bytes: [4]u8 = undefined;
+    writeU32(&coverage_bytes, 0, coverage_level);
+    request_hasher.update(&coverage_bytes);
+    request_hasher.update(&profile_digest);
+    request_hasher.update(&runtime_digest);
+    request_hasher.update(&manifest_digest);
+    var actual_request_digest: [32]u8 = undefined;
+    request_hasher.final(&actual_request_digest);
+    if (!std.mem.eql(u8, &request_id, actual_request_digest[0..request_id.len]))
+        return Error.InvalidRequestDigest;
     return .{
         .bytes = bytes,
         .module_count = module_count,
         .entry_module_id = entry_module_id,
+        .coverage_level = coverage_level,
         .request_id = request_id,
         .runtime_profile_sha256 = profile_digest,
         .runtime_pack_sha256 = runtime_digest,
@@ -249,15 +265,14 @@ test "parses canonical source package and verifies every identity" {
     writeU32(&bytes, 16, @intCast(names.len));
     writeU32(&bytes, 20, 1);
     writeU32(&bytes, 24, record_size);
+    writeU32(&bytes, 28, 2);
     bytes[8] = @truncate(version);
     bytes[9] = @truncate(version >> 8);
     bytes[10] = @truncate(header_size);
     bytes[11] = @truncate(header_size >> 8);
 
-    const request_id = [_]u8{0x5a} ** 16;
     const runtime_digest = [_]u8{0xa5} ** 32;
     const profile_digest = [_]u8{0xb6} ** 32;
-    @memcpy(bytes[32..48], &request_id);
     @memcpy(bytes[48..80], &profile_digest);
     @memcpy(bytes[80..112], &runtime_digest);
 
@@ -294,10 +309,22 @@ test "parses canonical source package and verifies every identity" {
     manifest.final(&manifest_digest);
     @memcpy(bytes[112..144], &manifest_digest);
 
+    var request = std.crypto.hash.sha2.Sha256.init(.{});
+    request.update("luauc-source-request-v1\x00");
+    const coverage_bytes = [_]u8{ 2, 0, 0, 0 };
+    request.update(&coverage_bytes);
+    request.update(&profile_digest);
+    request.update(&runtime_digest);
+    request.update(&manifest_digest);
+    var request_digest: [32]u8 = undefined;
+    request.final(&request_digest);
+    @memcpy(bytes[32..48], request_digest[0..16]);
+
     const package = try parse(&bytes, profile_digest, runtime_digest);
     try std.testing.expectEqual(@as(u32, 2), package.module_count);
     try std.testing.expectEqual(@as(u32, 1), package.entry_module_id);
-    try std.testing.expectEqualSlices(u8, &request_id, &package.request_id);
+    try std.testing.expectEqual(@as(u32, 2), package.coverage_level);
+    try std.testing.expectEqualSlices(u8, request_digest[0..16], &package.request_id);
     try std.testing.expectEqualSlices(u8, &manifest_digest, &package.manifest_sha256);
     try std.testing.expectEqualStrings("counter", (try package.module(0)).name);
     try std.testing.expectEqualStrings(contents[1], (try package.module(1)).content);

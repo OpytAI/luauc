@@ -33,6 +33,11 @@ pub const AotVmConstantItem = extern struct {
     value: u32,
 };
 
+pub const AotCoverageSite = extern struct {
+    line: u32,
+    reserved: u32 = 0,
+};
+
 pub const AotProto = extern struct {
     abi_version: u32,
     struct_size: u32,
@@ -49,6 +54,9 @@ pub const AotProto = extern struct {
     constant_count: u32 = 0,
     constant_items: ?[*]const AotVmConstantItem = null,
     constant_item_count: u32 = 0,
+    coverage_sites: ?[*]const AotCoverageSite = null,
+    coverage_site_count: u32 = 0,
+    coverage_line_count: u32 = 0,
 };
 
 pub const AotModule = extern struct {
@@ -77,9 +85,11 @@ pub const AotProgram = extern struct {
 comptime {
     if (@sizeOf(AotVmConstant) != 16 or @sizeOf(AotVmConstantItem) != 8)
         @compileError("LuaucRuntimeVmConstantV1 Zig layout drift");
-    if (@sizeOf(AotProto) != 76 or @offsetOf(AotProto, "entry") != 40 or
+    if (@sizeOf(AotCoverageSite) != 8)
+        @compileError("LuaucRuntimeCoverageSiteV1 Zig layout drift");
+    if (@sizeOf(AotProto) != 88 or @offsetOf(AotProto, "entry") != 40 or
         @offsetOf(AotProto, "num_params") != 56 or @offsetOf(AotProto, "constants") != 60 or
-        @offsetOf(AotProto, "constant_items") != 68)
+        @offsetOf(AotProto, "constant_items") != 68 or @offsetOf(AotProto, "coverage_sites") != 76)
         @compileError("LuaucRuntimeProtoV1 Zig layout drift");
     if (@sizeOf(AotModule) != 56 or @offsetOf(AotModule, "source_name") != 48)
         @compileError("LuaucRuntimeModuleV1 Zig layout drift");
@@ -90,7 +100,8 @@ comptime {
 pub const abi_version: u32 = 1;
 pub const vm_constant_size: u32 = 16;
 pub const vm_constant_item_size: u32 = 8;
-pub const proto_size: u32 = 76;
+pub const proto_size: u32 = 88;
+pub const coverage_site_size: u32 = 8;
 pub const module_size: u32 = 56;
 pub const legacy_program_size: u32 = 56;
 pub const program_size: u32 = 68;

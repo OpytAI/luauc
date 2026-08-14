@@ -14,7 +14,7 @@ the compiler performs no filesystem or network discovery.
 | 16 | `u32 module_count` (1–128) |
 | 20 | `u32 entry_module_id` |
 | 24 | `u32 record_size = 64` |
-| 28 | zero `u32` reserved |
+| 28 | `u32 coverage_level` (`0` none, `1` statement, `2` expression) |
 | 32 | request ID (16 bytes) |
 | 48 | runtime-profile SHA-256 |
 | 80 | runtime-pack SHA-256 |
@@ -36,7 +36,9 @@ unique. Source name is exactly `@<module>.luau`.
 
 The manifest digest hashes module count and entry ID followed by each length-prefixed name,
 length-prefixed source name, and content digest. The request ID is the first 16 bytes of SHA-256 over
-`"luauc-source-request-v1\0"`, profile digest, pack digest, and manifest digest.
+`"luauc-source-request-v1\0"`, the little-endian coverage level, profile digest, pack digest, and
+manifest digest. Coverage therefore participates in canonical request identity and deterministic
+artifact identity.
 
 The JavaScript reference implementation is in [host.mjs](../hosts/js/host.mjs); the Wasmtime host
 contains an independent Rust encoder. Cross-host equality therefore checks the byte contract rather

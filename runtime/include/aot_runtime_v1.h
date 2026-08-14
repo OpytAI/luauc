@@ -9,10 +9,14 @@ extern "C" {
 
 typedef struct lua_State lua_State;
 typedef struct LuaucRuntimeProtoV1 LuaucRuntimeProtoV1;
+typedef struct LuaucRuntimeCoverageSiteV1 LuaucRuntimeCoverageSiteV1;
 typedef struct LuaucRuntimeModuleV1 LuaucRuntimeModuleV1;
 typedef struct LuaucRuntimeProgramV1 LuaucRuntimeProgramV1;
 typedef struct LuaucRuntimeVmConstantV1 LuaucRuntimeVmConstantV1;
 typedef struct LuaucRuntimeVmConstantItemV1 LuaucRuntimeVmConstantItemV1;
+typedef void (*LuaucRuntimeCoverageCallbackV1)(void *context, const char *debug_name,
+                                               int line_defined, int depth, const int *hits,
+                                               size_t hit_count);
 
 typedef uint32_t (*LuaucRuntimeFunctionV1)(lua_State *state, const LuaucRuntimeProtoV1 *proto);
 
@@ -116,6 +120,16 @@ struct LuaucRuntimeProtoV1 {
     uint32_t constant_count;
     const LuaucRuntimeVmConstantItemV1 *constant_items;
     uint32_t constant_item_count;
+    const LuaucRuntimeCoverageSiteV1 *coverage_sites;
+    uint32_t coverage_site_count;
+    uint32_t coverage_line_count;
+};
+
+// Immutable coverage-site template. Every VM state materializes its own mutable hit counters when
+// it creates a Proto, so independent states executing one linked artifact never share coverage.
+struct LuaucRuntimeCoverageSiteV1 {
+    uint32_t line;
+    uint32_t reserved;
 };
 
 // Immutable closed-package module metadata. Module IDs are dense table indices; each root Proto has
@@ -150,7 +164,8 @@ enum {
     LUAUC_AOT_ABI_V1 = 1,
     LUAUC_AOT_VM_CONSTANT_V1_SIZE = 16,
     LUAUC_AOT_VM_CONSTANT_ITEM_V1_SIZE = 8,
-    LUAUC_AOT_PROTO_V1_SIZE = 76,
+    LUAUC_AOT_PROTO_V1_SIZE = 88,
+    LUAUC_AOT_COVERAGE_SITE_V1_SIZE = 8,
     LUAUC_AOT_MODULE_V1_SIZE = 56,
     LUAUC_AOT_PROGRAM_V1_LEGACY_SIZE = 56,
     LUAUC_AOT_PROGRAM_V1_SIZE = 68,
@@ -258,6 +273,9 @@ uint32_t luauc_runtime_v1_push_root(lua_State *state, const LuaucRuntimeProtoV1 
                                   const char *source, size_t source_size);
 uint32_t luauc_runtime_v1_push_program(lua_State *state, const LuaucRuntimeProgramV1 *program,
                                      const char *source, size_t source_size);
+uint32_t luauc_runtime_v1_get_program_coverage(lua_State *state, void *context,
+                                             LuaucRuntimeCoverageCallbackV1 callback);
+void luauc_runtime_v1_coverage_hit(lua_State *state, uint32_t site_id);
 
 #ifdef __cplusplus
 }
@@ -276,6 +294,10 @@ static_assert(offsetof(LuaucRuntimeProtoV1, constants) == 60,
               "LuaucRuntimeProtoV1 constants offset drift");
 static_assert(offsetof(LuaucRuntimeProtoV1, constant_items) == 68,
               "LuaucRuntimeProtoV1 constant items offset drift");
+static_assert(offsetof(LuaucRuntimeProtoV1, coverage_sites) == 76,
+              "LuaucRuntimeProtoV1 coverage sites offset drift");
+static_assert(sizeof(LuaucRuntimeCoverageSiteV1) == LUAUC_AOT_COVERAGE_SITE_V1_SIZE,
+              "LuaucRuntimeCoverageSiteV1 wasm32 layout drift");
 static_assert(sizeof(LuaucRuntimeModuleV1) == LUAUC_AOT_MODULE_V1_SIZE,
               "LuaucRuntimeModuleV1 wasm32 layout drift");
 static_assert(offsetof(LuaucRuntimeModuleV1, source_name) == 48,
