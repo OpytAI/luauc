@@ -14,11 +14,19 @@ cc_headers(
 
 cc_headers(
     name = "runtime_patch_incs",
-    hdrs = [
+    hdrs = [],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+
+# Plain files are separate from the include-only CcInfo so rules_zig consumers do not feed the C++
+# error-channel template to translate-c while still making both headers declared action inputs.
+filegroup(
+    name = "runtime_patch_headers",
+    srcs = [
         "include/error_channel.h",
         "include/trap.h",
     ],
-    includes = ["include"],
     visibility = ["//visibility:public"],
 )
 

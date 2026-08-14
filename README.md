@@ -110,6 +110,10 @@ interpreter exception boundary, while the analysis header set carries the no-exc
 shim. Consumers still own executable entrypoints, protected-call providers, effects, packaging, and
 installation.
 
+Rules that compile the interpreter use `@luauc//runtime:runtime_patch_incs` for include paths and
+`@luauc//runtime:runtime_patch_headers` for declared header inputs. Keeping these targets separate
+prevents Zig from treating the C++ error-channel template as a C `@cImport` root.
+
 ## Contracts
 
 - [Architecture](docs/architecture.md)
