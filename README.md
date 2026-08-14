@@ -76,6 +76,40 @@ luauc_package(
 The default profile is `embed-v1`; `runtime_profile` and `runtime_pack` are explicit rule arguments
 when a consumer owns a different embedding contract.
 
+Consumers build a provider-owned pack with the public strict-runtime components and derive its
+manifest through `luauc_runtime_profile`:
+
+```starlark
+load("@luauc//profiles:defs.bzl", "luauc_runtime_profile")
+
+luauc_runtime_profile(
+    name = "product_runtime",
+    raw_pack = ":product_runtime_raw",
+    policy = "runtime_profile.json",
+)
+```
+
+The JSON policy binds the fixed semantic roles to exports actually present in the linked raw pack.
+The builder derives imports, types, limits, generated-runtime symbols, identities, and the normalized
+pack manifest from those bytes; it does not select a provider namespace or entrypoint.
+
+## Pinned Luau components
+
+`luauc` is the sole pin and patch authority for its Luau distribution. Downstream interpreter and
+analysis products consume stable facades instead of addressing the private `@luau` repository:
+
+- `@luauc//luau:interpreter_sources`
+- `@luauc//luau:interpreter_headers`
+- `@luauc//luau:interpreter_header_files`
+- `@luauc//luau:analysis_sources`
+- `@luauc//luau:analysis_headers`
+- `@luauc//luau:analysis_header_files`
+
+The facades carry pin-sensitive source classification. Public neutral patch headers carry the
+interpreter exception boundary, while the analysis header set carries the no-exception/threading
+shim. Consumers still own executable entrypoints, protected-call providers, effects, packaging, and
+installation.
+
 ## Contracts
 
 - [Architecture](docs/architecture.md)

@@ -34,6 +34,13 @@ The pack builder takes the strict runtime plus provider-owned adapters and polic
 Wasm module, derives its type/symbol/resource facts, emits the canonical profile, and appends that
 profile as the pack manifest. Consumers never patch the manifest after linking.
 
+`@luauc//profiles:defs.bzl` exports `luauc_runtime_profile`. Its input policy has version, profile ID,
+semantic role bindings, and optional additional retained exports. Every required role is present
+exactly once, its export kind and retention are fixed by the schema, and unknown fields fail closed.
+Host imports, function types, memory/table limits, generated-runtime symbols, pack identity, and
+license inventory are derived from the linked raw pack and declared inputs rather than duplicated in
+consumer build rules.
+
 `embed-v1` and `embed-alt-v1` are independently constructed packs with distinct host namespaces. The
 same `luauc.wasm` compiles the same source through both without selecting another backend.
 

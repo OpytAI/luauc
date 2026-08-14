@@ -5,8 +5,8 @@ cc_binary(
     srcs = [
         "main.cpp",
         "native_trap.cpp",
-        "@luau//:interp_all_hdrs",
-        "@luau//:interp_srcs",
+        "//luau:interpreter_header_files",
+        "//luau:interpreter_sources",
     ],
     copts = ["-std=c++17"],
     data = [
@@ -15,7 +15,7 @@ cc_binary(
     ],
     deps = [
         "//runtime:runtime_patch_incs",
-        "@luau//:interp_incs",
+        "//luau:interpreter_headers",
     ],
     visibility = ["//visibility:public"],
 )

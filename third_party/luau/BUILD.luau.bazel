@@ -290,3 +290,47 @@ filegroup(
     ]),
     visibility = ["//visibility:public"],
 )
+
+# Complete source and header boundary for the pinned analysis engine. These remain raw components:
+# consumers own their command entrypoint, provider adapter, capabilities, and packaging.
+filegroup(
+    name = "analysis_srcs",
+    srcs = glob(
+        [
+            "VM/src/*.cpp",
+            "Compiler/src/*.cpp",
+            "Ast/src/*.cpp",
+            "Bytecode/src/*.cpp",
+            "Common/src/*.cpp",
+            "Config/src/*.cpp",
+            "Analysis/src/*.cpp",
+        ],
+        exclude = [
+            "Analysis/src/Autocomplete.cpp",
+            "Analysis/src/AutocompleteCore.cpp",
+            "Analysis/src/FragmentAutocomplete.cpp",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "analysis_all_hdrs",
+    srcs = glob([
+        "Config/**/*.h",
+        "Analysis/**/*.h",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+# Include-only CcInfo: Analysis headers are C++ and must not be translated as Zig @cImport roots.
+cc_headers(
+    name = "analysis_incs",
+    hdrs = [],
+    includes = [
+        "Analysis/include",
+        "Analysis/src",
+        "Config/include",
+    ],
+    visibility = ["//visibility:public"],
+)

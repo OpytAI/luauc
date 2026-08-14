@@ -1,0 +1,12 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
+
+exports_files(
+    ["defs.bzl"],
+    visibility = ["//visibility:public"],
+)
+
+js_binary(
+    name = "pack_builder",
+    entry_point = "pack_builder.mjs",
+    visibility = ["//visibility:public"],
+)

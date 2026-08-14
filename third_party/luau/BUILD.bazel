@@ -10,6 +10,9 @@ exports_files([
     "patches/0002-frontend-single-thread.patch",
     "patches/0003-strict-aot-runtime-dispatch.patch",
     "patches/0004-integer-buffer-fastcalls.patch",
+    "patches/0005-analysis-no-exceptions.patch",
+    "patches/0006-analysis-named-catch.patch",
+    "patches/0007-analysis-shim.patch",
 ])
 
 js_library(
@@ -21,6 +24,9 @@ js_library(
         "patches/0002-frontend-single-thread.patch",
         "patches/0003-strict-aot-runtime-dispatch.patch",
         "patches/0004-integer-buffer-fastcalls.patch",
+        "patches/0005-analysis-no-exceptions.patch",
+        "patches/0006-analysis-named-catch.patch",
+        "patches/0007-analysis-shim.patch",
     ],
     visibility = ["//visibility:public"],
 )

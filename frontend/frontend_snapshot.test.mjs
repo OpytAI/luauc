@@ -29,6 +29,9 @@ const contractInputs = [
   "third_party/luau/patches/0002-frontend-single-thread.patch",
   "third_party/luau/patches/0003-strict-aot-runtime-dispatch.patch",
   "third_party/luau/patches/0004-integer-buffer-fastcalls.patch",
+  "third_party/luau/patches/0005-analysis-no-exceptions.patch",
+  "third_party/luau/patches/0006-analysis-named-catch.patch",
+  "third_party/luau/patches/0007-analysis-shim.patch",
 ].sort();
 
 function frontendContractDigest() {

@@ -1,12 +1,7 @@
-load("@aspect_rules_js//js:defs.bzl", "js_binary")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("//runtime:runtime_symbols.bzl", "AOT_GENERATED_RUNTIME_SYMBOLS")
+load("//profiles:defs.bzl", "luauc_runtime_profile")
 load(":defs.bzl", "raw_pack")
-
-js_binary(
-    name = "pack_builder",
-    entry_point = "pack_builder.mjs",
-)
 
 PACK_EXPORTS = [
     "__stack_pointer",
@@ -24,42 +19,19 @@ PACK_EXPORTS = [
 raw_pack("embed_v1_raw_pack", "luauc_embed_v1", PACK_EXPORTS)
 raw_pack("embed_alt_v1_raw_pack", "luauc_embed_alt_v1", PACK_EXPORTS)
 
-genrule(
-    name = "embed_v1_pack_files",
-    srcs = [
-        ":embed_v1_raw_pack",
-        "//:LICENSE",
-        "//:NOTICE",
-        "//compiler/wasm:object.zig",
-        "//runtime:abi_v1.zig",
-        "//third_party/luau:LICENSE.txt",
-        "//third_party/luau:lua_LICENSE.txt",
-    ],
-    outs = ["embed_v1.profile", "embed_v1.pack.wasm"],
-    cmd = "BAZEL_BINDIR=. $(execpath :pack_builder) $(location :embed_v1_raw_pack) $(location embed_v1.profile) $(location embed_v1.pack.wasm) embed-v1 $(location //runtime:abi_v1.zig) $(location //compiler/wasm:object.zig) $(location //:LICENSE) $(location //:NOTICE) $(location //third_party/luau:LICENSE.txt) $(location //third_party/luau:lua_LICENSE.txt)",
-    tools = [":pack_builder"],
+luauc_runtime_profile(
+    name = "embed_v1",
+    policy = "embed_v1.policy.json",
+    raw_pack = ":embed_v1_raw_pack",
+    visibility = ["//visibility:public"],
 )
 
-genrule(
-    name = "embed_alt_v1_pack_files",
-    srcs = [
-        ":embed_alt_v1_raw_pack",
-        "//:LICENSE",
-        "//:NOTICE",
-        "//compiler/wasm:object.zig",
-        "//runtime:abi_v1.zig",
-        "//third_party/luau:LICENSE.txt",
-        "//third_party/luau:lua_LICENSE.txt",
-    ],
-    outs = ["embed_alt_v1.profile", "embed_alt_v1.pack.wasm"],
-    cmd = "BAZEL_BINDIR=. $(execpath :pack_builder) $(location :embed_alt_v1_raw_pack) $(location embed_alt_v1.profile) $(location embed_alt_v1.pack.wasm) embed-alt-v1 $(location //runtime:abi_v1.zig) $(location //compiler/wasm:object.zig) $(location //:LICENSE) $(location //:NOTICE) $(location //third_party/luau:LICENSE.txt) $(location //third_party/luau:lua_LICENSE.txt)",
-    tools = [":pack_builder"],
+luauc_runtime_profile(
+    name = "embed_alt_v1",
+    policy = "embed_alt_v1.policy.json",
+    raw_pack = ":embed_alt_v1_raw_pack",
+    visibility = ["//visibility:public"],
 )
-
-filegroup(name = "embed_v1_profile", srcs = ["embed_v1.profile"], visibility = ["//visibility:public"])
-filegroup(name = "embed_v1_pack", srcs = ["embed_v1.pack.wasm"], visibility = ["//visibility:public"])
-filegroup(name = "embed_alt_v1_profile", srcs = ["embed_alt_v1.profile"], visibility = ["//visibility:public"])
-filegroup(name = "embed_alt_v1_pack", srcs = ["embed_alt_v1.pack.wasm"], visibility = ["//visibility:public"])
 
 build_test(
     name = "runtime_profiles_build_test",

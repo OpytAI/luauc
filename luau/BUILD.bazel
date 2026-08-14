@@ -1,0 +1,33 @@
+package(default_visibility = ["//visibility:public"])
+
+# Stable component facades. The private @luau repository name and its pin-specific target layout do
+# not form part of the downstream contract.
+alias(
+    name = "interpreter_sources",
+    actual = "@luau//:interp_srcs",
+)
+
+alias(
+    name = "interpreter_headers",
+    actual = "@luau//:interp_headers",
+)
+
+alias(
+    name = "interpreter_header_files",
+    actual = "@luau//:interp_all_hdrs",
+)
+
+alias(
+    name = "analysis_sources",
+    actual = "@luau//:analysis_srcs",
+)
+
+alias(
+    name = "analysis_headers",
+    actual = "@luau//:analysis_incs",
+)
+
+alias(
+    name = "analysis_header_files",
+    actual = "@luau//:analysis_all_hdrs",
+)

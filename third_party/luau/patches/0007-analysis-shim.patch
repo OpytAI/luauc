@@ -1,0 +1,52 @@
+diff --git a/Analysis/include/Luau/AnalysisEhShim.h b/Analysis/include/Luau/AnalysisEhShim.h
+new file mode 100644
+--- /dev/null
++++ b/Analysis/include/Luau/AnalysisEhShim.h
+@@ -0,0 +1,47 @@
++#pragma once
++
++// luauc PATCH: the analysis component is compiled for single-threaded wasm32-wasi with C++
++// exceptions disabled. Consumers provide this neutral terminal-error function; ordinary Luau type
++// errors remain CheckResult data and do not use it.
++#ifdef __cplusplus
++extern "C" {
++#endif
++__attribute__((noreturn)) void luauc_analysis_abort(const char* what);
++#ifdef __cplusplus
++}
++#endif
++
++// The remaining exception handlers cover terminal allocation, cancellation, limit, or internal
++// failures. Patched throw sites call luauc_analysis_abort; their handlers are therefore unreachable.
++#define try if (true)
++#define catch(...) else if (false)
++
++#ifdef __cplusplus
++namespace luauc_nothread
++{
++struct mutex
++{
++    void lock() {}
++    void unlock() {}
++    bool try_lock() { return true; }
++};
++struct condition_variable
++{
++    template<class L> void wait(L&) {}
++    template<class L, class P> void wait(L&, P) {}
++    void notify_one() {}
++    void notify_all() {}
++};
++struct scoped_lock
++{
++    template<class... A> explicit scoped_lock(A&&...) {}
++};
++struct unique_lock
++{
++    unique_lock() = default;
++    template<class... A> explicit unique_lock(A&&...) {}
++    void lock() {}
++    void unlock() {}
++};
++} // namespace luauc_nothread
++#endif

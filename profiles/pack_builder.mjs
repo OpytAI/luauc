@@ -1,9 +1,79 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
-const [rawPath, profilePath, packPath, profileId, runtimeAbiPath, objectContractPath, ...licensePaths] = process.argv.slice(2);
-if (!rawPath || !profilePath || !packPath || !profileId || !runtimeAbiPath || !objectContractPath || !licensePaths.length)
-  throw new Error("usage: pack_builder raw.wasm profile.bin pack.wasm profile-id runtime-abi object-contract license...");
+const [rawPath, profilePath, packPath, policyPath, runtimeAbiPath, objectContractPath, ...licensePaths] = process.argv.slice(2);
+if (!rawPath || !profilePath || !packPath || !policyPath || !runtimeAbiPath || !objectContractPath || !licensePaths.length)
+  throw new Error("usage: pack_builder raw.wasm profile.bin pack.wasm policy.json runtime-abi object-contract license...");
+
+const roleSpecs = new Map([
+  ["program_pointer", { role: 1, kind: 3, required: true, retain: false }],
+  ["generated_data_arena", { role: 2, kind: 3, required: true, retain: false }],
+  ["generated_data_capacity", { role: 3, kind: 3, required: true, retain: false }],
+  ["memory", { role: 4, kind: 2, required: true, retain: true }],
+  ["stack_pointer", { role: 5, kind: 3, required: false, retain: true }],
+  ["protected_dispatch", { role: 6, kind: 0, required: true, retain: true }],
+  ["alloc", { role: 7, kind: 0, required: true, retain: true }],
+  ["dealloc", { role: 8, kind: 0, required: true, retain: true }],
+  ["context_create", { role: 9, kind: 0, required: true, retain: true }],
+  ["context_destroy", { role: 10, kind: 0, required: true, retain: true }],
+  ["invoke", { role: 11, kind: 0, required: true, retain: true }],
+  ["initialize", { role: 12, kind: 0, required: true, retain: true }],
+]);
+const kindNames = new Map([["function", 0], ["table", 1], ["memory", 2], ["global", 3]]);
+
+function requireObject(value, description) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${description} must be an object`);
+  return value;
+}
+
+function requireExactKeys(value, keys, description) {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
+    throw new Error(`${description} has unknown or missing fields`);
+}
+
+function requireName(value, description) {
+  const bytes = typeof value === "string" ? Buffer.from(value) : null;
+  if (!bytes || !value.length || bytes.toString("utf8") !== value || bytes.includes(0) || [...value].some((character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f))
+    throw new Error(`${description} is not a canonical name`);
+  return value;
+}
+
+const policy = requireObject(JSON.parse(readFileSync(policyPath, "utf8")), "runtime profile policy");
+requireExactKeys(policy, ["version", "profile_id", "bindings", "retained_exports"], "runtime profile policy");
+if (policy.version !== 1) throw new Error("unsupported runtime profile policy version");
+const profileId = requireName(policy.profile_id, "profile_id");
+if (!Array.isArray(policy.bindings) || !Array.isArray(policy.retained_exports)) throw new Error("runtime profile policy arrays are malformed");
+
+const policyBindings = [];
+const seenRoles = new Set();
+const seenBindingNames = new Set();
+for (const [index, rawBinding] of policy.bindings.entries()) {
+  const binding = requireObject(rawBinding, `binding ${index}`);
+  requireExactKeys(binding, ["role", "name", "retain"], `binding ${index}`);
+  const spec = roleSpecs.get(binding.role);
+  if (!spec || seenRoles.has(spec.role)) throw new Error(`binding ${index} has an unknown or duplicate role`);
+  const bindingName = requireName(binding.name, `binding ${index} name`);
+  if (seenBindingNames.has(bindingName)) throw new Error(`binding ${index} has a duplicate export name`);
+  if (binding.retain !== spec.retain) throw new Error(`binding ${index} has invalid retention for ${binding.role}`);
+  seenRoles.add(spec.role);
+  seenBindingNames.add(bindingName);
+  policyBindings.push({ name: bindingName, role: spec.role, kind: spec.kind, retain: spec.retain });
+}
+for (const [roleName, spec] of roleSpecs) if (spec.required && !seenRoles.has(spec.role)) throw new Error(`missing required binding ${roleName}`);
+
+const additionalRetained = [];
+const seenRetainedNames = new Set(policyBindings.map((binding) => binding.name));
+for (const [index, rawRetained] of policy.retained_exports.entries()) {
+  const retained = requireObject(rawRetained, `retained export ${index}`);
+  requireExactKeys(retained, ["name", "kind"], `retained export ${index}`);
+  const retainedName = requireName(retained.name, `retained export ${index} name`);
+  const retainedKind = kindNames.get(retained.kind);
+  if (retainedKind === undefined || seenRetainedNames.has(retainedName)) throw new Error(`retained export ${index} is invalid or duplicated`);
+  seenRetainedNames.add(retainedName);
+  additionalRetained.push({ name: retainedName, kind: retainedKind });
+}
 
 const raw = readFileSync(rawPath);
 if (!raw.subarray(0, 8).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])))
@@ -87,18 +157,18 @@ const imports = vectorSection(2, (bytes, state) => {
   const module = name(bytes, state);
   const importName = name(bytes, state);
   const kind = bytes[state.at++];
-  if (kind !== 0) throw new Error("embed profile accepts function imports only");
+  if (kind !== 0) throw new Error("runtime profiles accept function imports only");
   const typeIndex = uleb(bytes, state);
   if (typeIndex >= types.length) throw new Error("host import type is out of range");
   return { module, name: importName, kind, typeIndex };
 });
 const functionTypes = vectorSection(3, (bytes, state) => uleb(bytes, state));
 const tables = vectorSection(4, (bytes, state) => {
-  if (bytes[state.at++] !== 0x70) throw new Error("embed table is not funcref");
+  if (bytes[state.at++] !== 0x70) throw new Error("runtime pack table is not funcref");
   return skipLimits(bytes, state);
 });
 const memories = vectorSection(5, (bytes, state) => skipLimits(bytes, state));
-if (tables.length !== 1 || memories.length !== 1) throw new Error("embed pack needs one table and one memory");
+if (tables.length !== 1 || memories.length !== 1) throw new Error("runtime pack needs one table and one memory");
 const exports = vectorSection(7, (bytes, state) => ({ name: name(bytes, state), kind: bytes[state.at++], index: uleb(bytes, state) }));
 const exportMap = new Map(exports.map((item) => [item.name, item]));
 
@@ -109,31 +179,13 @@ function functionTypeIndex(index) {
   return functionTypes[defined];
 }
 
-const retainedRoles = new Map([
-  ["memory", 4],
-  ["__stack_pointer", 5],
-  ["luauc_embed_v1_protected_call_run", 6],
-  ["luauc_embed_v1_alloc", 7],
-  ["luauc_embed_v1_dealloc", 8],
-  ["luauc_embed_v1_context_create", 9],
-  ["luauc_embed_v1_context_destroy", 10],
-  ["luauc_embed_v1_invoke", 11],
-  ["_start", 12],
-]);
-for (const [wanted, role] of retainedRoles) {
-  const item = exportMap.get(wanted);
-  const expectedKind = role === 4 ? 2 : role === 5 ? 3 : 0;
-  if (!item || item.kind !== expectedKind) throw new Error(`missing retained export ${wanted}`);
+for (const binding of policyBindings) {
+  const item = exportMap.get(binding.name);
+  if (!item || item.kind !== binding.kind) throw new Error(`missing profile binding ${binding.name}`);
 }
-const bindingRoles = new Map([
-  ["luauc_runtime_v1_program_pointer", [1, 3]],
-  ["luauc_runtime_v1_program_arena", [2, 3]],
-  ["luauc_runtime_v1_program_arena_capacity", [3, 3]],
-  ...[...retainedRoles].map(([name, role]) => [name, [role, role === 4 ? 2 : role === 5 ? 3 : 0]]),
-]);
-for (const [wanted, [, expectedKind]] of bindingRoles) {
-  const item = exportMap.get(wanted);
-  if (!item || item.kind !== expectedKind) throw new Error(`missing profile binding ${wanted}`);
+for (const retained of additionalRetained) {
+  const item = exportMap.get(retained.name);
+  if (!item || item.kind !== retained.kind) throw new Error(`missing retained export ${retained.name}`);
 }
 
 const runtimeSymbols = exports
@@ -144,9 +196,12 @@ const runtimeSymbols = exports
 if (!runtimeSymbols.length) throw new Error("runtime pack exports no generated-code ABI");
 
 imports.sort((lhs, rhs) => Buffer.from(`${lhs.module}\0${lhs.name}`).compare(Buffer.from(`${rhs.module}\0${rhs.name}`)));
-const retained = [...retainedRoles].map(([exportName, role]) => ({ ...exportMap.get(exportName), role }))
+const retained = [
+  ...policyBindings.filter((binding) => binding.retain).map((binding) => ({ ...exportMap.get(binding.name), role: binding.role })),
+  ...additionalRetained.map((item) => ({ ...exportMap.get(item.name), role: 0 })),
+]
   .sort((lhs, rhs) => Buffer.from(lhs.name).compare(Buffer.from(rhs.name)));
-const bindings = [...bindingRoles].map(([bindingName, [role, kind]]) => ({ name: bindingName, role, kind }))
+const bindings = policyBindings.map(({ name, role, kind }) => ({ name, role, kind }))
   .sort((lhs, rhs) => lhs.role - rhs.role);
 
 const stringParts = [];
@@ -209,7 +264,7 @@ for (let index = 0; index < imports.length; index++) {
 for (let index = 0; index < retained.length; index++) {
   const record = exportOffset + index * exportSize, item = retained[index], ref = stringRef(item.name);
   profile.writeUInt32LE(ref.offset, record); profile.writeUInt32LE(ref.size, record + 4);
-  profile[record + 8] = item.kind; profile[record + 9] = item.role;
+  profile[record + 8] = item.kind; profile[record + 9] = item.role || 0;
 }
 for (let index = 0; index < runtimeSymbols.length; index++) {
   const record = runtimeOffset + index * runtimeSize, item = runtimeSymbols[index], ref = stringRef(item.name);

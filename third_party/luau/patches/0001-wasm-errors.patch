@@ -2,7 +2,7 @@ diff --git a/Ast/src/Parser.cpp b/Ast/src/Parser.cpp
 index 1960cc4..769b23b 100644
 --- a/Ast/src/Parser.cpp
 +++ b/Ast/src/Parser.cpp
-@@ -12,6 +12,13 @@
+@@ -12,6 +12,12 @@
  #include <string.h>
  #include <unordered_set>
  
@@ -222,7 +222,7 @@ index 038ada3..49d11c6 100644
  
  #include <string.h>
  
-@@ -31,140 +31,40 @@ LUAU_FASTFLAG(LuauCustomYieldablePcalls)
+@@ -31,140 +31,38 @@ LUAU_FASTFLAG(LuauCustomYieldablePcalls)
  ** =======================================================
  */
  
