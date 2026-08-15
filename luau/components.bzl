@@ -1,6 +1,6 @@
 """Pin-owned compilation of Luau C++ components into deterministic archives."""
 
-load("//bazel:cc.bzl", "cc_object_archive", "zig_cxx_object")
+load("//bazel:cc.bzl", "cc_object_archive", "zig_c_object", "zig_cxx_object")
 
 def luauc_cpp_archive(
         name,
@@ -43,6 +43,45 @@ def luauc_cpp_archive(
             tags = tags or [],
             visibility = objects_visibility,
         )
+
+    cc_object_archive(
+        name = name,
+        objects = objects,
+        deps = deps,
+        tags = tags or [],
+        visibility = visibility,
+    )
+
+def luauc_c_archive(
+        name,
+        srcs,
+        copts,
+        extra_srcs,
+        deps,
+        visibility = None,
+        tags = None):
+    """Compiles C translation units independently and bundles a deterministic archive."""
+    if not srcs:
+        fail("luauc_c_archive requires at least one translation unit")
+
+    objects = []
+    unit_tags = (tags or []) + ["manual"]
+    for index, source in enumerate(sorted(srcs)):
+        unit = "%s_unit_%d" % (name, index)
+        zig_c_object(
+            name = unit,
+            src = source,
+            target = "wasm32-wasi",
+            copts = [
+                "-Oz",
+                "-DNDEBUG",
+            ] + copts,
+            extra_srcs = extra_srcs,
+            deps = deps,
+            tags = unit_tags,
+            visibility = ["//visibility:private"],
+        )
+        objects.append(":" + unit)
 
     cc_object_archive(
         name = name,

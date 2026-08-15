@@ -1,20 +1,130 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library", "zig_static_library")
 
 exports_files(glob(["*.luau"]))
+
+zig_library(
+    name = "runtime_abi",
+    main = "runtime_abi.zig",
+    import_name = "luauc_backend_runtime_abi",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = ["//compiler/ir:frontend_snapshot_v1"],
+)
+
+zig_library(
+    name = "static_package_v1",
+    main = "static_package_v1.zig",
+    import_name = "luauc_backend_static_package_v1",
+)
+
+zig_library(
+    name = "model",
+    main = "model.zig",
+    import_name = "luauc_backend_model",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":runtime_abi",
+        ":static_package_v1",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)
+
+zig_library(
+    name = "context",
+    main = "context.zig",
+    import_name = "luauc_backend_context",
+    deps = [
+        "//compiler/backend/emit:allocations",
+        "//compiler/backend/emit:builtin_patterns",
+        "//compiler/backend/emit:calls",
+        "//compiler/backend/emit:control",
+        "//compiler/backend/emit:core",
+        "//compiler/backend/emit:dispatch",
+        "//compiler/backend/emit:iteration",
+        "//compiler/backend/emit:memory",
+        "//compiler/backend/emit:namecall",
+        "//compiler/backend/emit:operators",
+        "//compiler/backend/emit:scalar",
+        "//compiler/backend/emit:tables",
+        ":model",
+        ":static_package_v1",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)
+
+zig_library(
+    name = "continuations",
+    main = "continuations.zig",
+    import_name = "luauc_backend_continuations",
+    deps = [
+        ":context",
+        ":model",
+        ":runtime_abi",
+        "//compiler/ir:frontend_snapshot_v1",
+    ],
+)
+
+zig_library(
+    name = "imports",
+    main = "imports.zig",
+    import_name = "luauc_backend_imports",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":model",
+        ":runtime_abi",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)
+
+zig_library(
+    name = "driver",
+    main = "driver.zig",
+    import_name = "luauc_backend_driver",
+    deps = [
+        ":context",
+        ":continuations",
+        ":imports",
+        ":model",
+        ":runtime_abi",
+        ":static_package_v1",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)
 
 zig_library(
     name = "backend",
     main = "lower.zig",
     import_name = "luauc_backend",
-    srcs = ["static_package_v1.zig"],
     visibility = ["//visibility:public"],
     deps = [
-        "//compiler/ir:frontend_snapshot_v1",
-        "//compiler/wasm:object",
+        ":driver",
+        ":model",
+        ":runtime_abi",
     ],
 )
+
+zig_library(
+    name = "component_api",
+    main = "component_api.zig",
+    import_name = "luauc_backend_component_api",
+    visibility = ["//visibility:public"],
+)
+
+zig_static_library(
+    name = "component",
+    main = "component.zig",
+    deps = [
+        ":backend",
+        ":component_api",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 zig_binary(
     name = "backend_raw",
     srcs = ["backend_host.zig"],
@@ -31,7 +141,10 @@ zig_binary(
     ],
     main = "backend_host.zig",
     tags = ["manual"],
-    deps = [":backend"],
+    deps = [
+        ":component",
+        ":component_api",
+    ],
 )
 
 zig_configure_binary(

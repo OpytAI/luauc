@@ -1,6 +1,6 @@
 const std = @import("std");
+const backend_component = @import("luauc_backend_component_api");
 const linker = @import("luauc_linker");
-const lower = @import("luauc_backend");
 const runtime_profile = @import("luauc_runtime_profile_v1");
 const source_package = @import("luauc_source_package_v1");
 
@@ -16,6 +16,8 @@ const FrontendResult = extern struct {
 
 extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_free(result: *FrontendResult) void;
+extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, result_pointer: u32) u32;
+extern fn luauc_backend_component_v1_free(result_pointer: u32) void;
 
 const ContextResult = extern struct {
     handle: u32 = 0,
@@ -297,11 +299,26 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     }
     const snapshot_package = buildSnapshotPackage(package, frontend_results) catch |err| return publishError(result, status_resource_limit, err);
     defer allocator.free(snapshot_package);
-    const object = lower.buildStaticPackage(allocator, snapshot_package) catch |err| return publishError(result, switch (err) {
-        error.OutOfMemory, error.ResourceLimit => status_resource_limit,
-        else => status_backend_failure,
-    }, err);
-    defer allocator.free(object);
+    var backend_result: backend_component.Result = .{};
+    const backend_status = luauc_backend_component_v1_compile_static_package(
+        @intCast(@intFromPtr(snapshot_package.ptr)),
+        @intCast(snapshot_package.len),
+        @intCast(@intFromPtr(&backend_result)),
+    );
+    defer luauc_backend_component_v1_free(@intCast(@intFromPtr(&backend_result)));
+    if (backend_status != backend_component.status_ok or backend_result.status != backend_component.status_ok or backend_result.data == 0 or backend_result.size == 0) {
+        const diagnostic: []const u8 = if (backend_result.diagnostic != 0 and backend_result.diagnostic_size != 0) diagnostic: {
+            const pointer: [*]const u8 = @ptrFromInt(backend_result.diagnostic);
+            break :diagnostic pointer[0..backend_result.diagnostic_size];
+        } else "backend compilation failed";
+        return publishDiagnostic(
+            result,
+            if (backend_status == backend_component.status_resource_limit or backend_result.status == backend_component.status_resource_limit) status_resource_limit else status_backend_failure,
+            diagnostic,
+        );
+    }
+    const object_pointer: [*]const u8 = @ptrFromInt(backend_result.data);
+    const object = object_pointer[0..backend_result.size];
     const linked = linker.link(allocator, slot.pack.?, object, profile, .{}) catch |err| return publishError(result, switch (err) {
         error.OutOfMemory, error.ResourceLimit, error.ArenaOverflow, error.TableOverflow => status_resource_limit,
         else => status_link_failure,

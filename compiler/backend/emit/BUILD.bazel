@@ -1,0 +1,17 @@
+load(":defs.bzl", "backend_emit_library")
+
+backend_emit_library(name = "allocations")
+backend_emit_library(name = "builtin_patterns")
+backend_emit_library(
+    name = "calls",
+    deps = ["//compiler/backend:imports"],
+)
+backend_emit_library(name = "control")
+backend_emit_library(name = "core")
+backend_emit_library(name = "dispatch")
+backend_emit_library(name = "iteration")
+backend_emit_library(name = "memory")
+backend_emit_library(name = "namecall")
+backend_emit_library(name = "operators")
+backend_emit_library(name = "scalar")
+backend_emit_library(name = "tables")

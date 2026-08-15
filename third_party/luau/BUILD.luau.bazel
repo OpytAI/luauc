@@ -77,6 +77,19 @@ AOT_RUNTIME_SRCS = [
     "VM/src/lvmutils.cpp",
 ]
 
+AOT_FRONTEND_CODEGEN_IR_SRCS = [
+    "CodeGen/src/BytecodeAnalysis.cpp",
+    "CodeGen/src/IrAnalysis.cpp",
+    "CodeGen/src/IrBuilder.cpp",
+    "CodeGen/src/IrDump.cpp",
+    "CodeGen/src/IrTranslateBuiltins.cpp",
+    "CodeGen/src/IrTranslation.cpp",
+    "CodeGen/src/IrUtils.cpp",
+    "CodeGen/src/IrValueLocationTracking.cpp",
+    "CodeGen/src/OptimizeConstProp.cpp",
+    "CodeGen/src/OptimizeDeadStore.cpp",
+]
+
 filegroup(
     name = "aot_runtime_srcs",
     srcs = AOT_RUNTIME_SRCS,
@@ -188,18 +201,7 @@ filegroup(
 # compiler-frontend exposure only and is included in the forbidden runtime CodeGen policy above.
 filegroup(
     name = "aot_frontend_codegen_ir_srcs",
-    srcs = [
-        "CodeGen/src/BytecodeAnalysis.cpp",
-        "CodeGen/src/IrAnalysis.cpp",
-        "CodeGen/src/IrBuilder.cpp",
-        "CodeGen/src/IrDump.cpp",
-        "CodeGen/src/IrTranslateBuiltins.cpp",
-        "CodeGen/src/IrTranslation.cpp",
-        "CodeGen/src/IrUtils.cpp",
-        "CodeGen/src/IrValueLocationTracking.cpp",
-        "CodeGen/src/OptimizeConstProp.cpp",
-        "CodeGen/src/OptimizeDeadStore.cpp",
-    ],
+    srcs = AOT_FRONTEND_CODEGEN_IR_SRCS,
     visibility = ["//visibility:public"],
 )
 
@@ -375,6 +377,52 @@ luauc_cpp_archive(
         ":interp_headers",
         "@luauc//runtime:runtime_patch_incs",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# The compiler frontend uses a different no-exception error channel from target guests. Compile that
+# pin-sensitive source set once, independently per translation unit, and share the resulting archive
+# between the standalone frontend and the complete compiler.
+luauc_cpp_archive(
+    name = "aot_frontend_interp_wasm32_wasi",
+    srcs = INTERP_SRCS,
+    copts = [
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = INTERP_HEADERS + ["@luauc//frontend:compiler_patch_headers"],
+    deps = [
+        ":interp_headers",
+        "@luauc//frontend:frontend_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+luauc_cpp_archive(
+    name = "aot_frontend_codegen_ir_wasm32_wasi",
+    srcs = AOT_FRONTEND_CODEGEN_IR_SRCS,
+    copts = [
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = INTERP_HEADERS + [
+        ":aot_frontend_codegen_ir_headers",
+        "@luauc//frontend:compiler_patch_headers",
+    ],
+    deps = [
+        ":aot_frontend_codegen_ir_incs",
+        ":aot_frontend_interp_wasm32_wasi",
+        ":interp_headers",
+        "@luauc//frontend:frontend_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "aot_frontend_wasm32_wasi",
+    actual = ":aot_frontend_codegen_ir_wasm32_wasi",
     visibility = ["//visibility:public"],
 )
 

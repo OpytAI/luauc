@@ -2,33 +2,23 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary")
 load("//bazel:cc.bzl", "cc_headers")
+load("//luau:components.bzl", "luauc_c_archive", "luauc_cpp_archive")
 
 cc_headers(
     name = "frontend_incs",
     hdrs = [],
     includes = ["."],
-    visibility = ["//compiler:__pkg__"],
+    visibility = ["//visibility:public"],
 )
 
 filegroup(
-    name = "embedded_compiler_csrcs",
-    srcs = [
-        "frontend_adapter.cpp",
-        "frontend_fastflags.cpp",
-        "host_wasi_stubs.c",
-    ],
-    visibility = ["//compiler:__pkg__"],
-)
-
-filegroup(
-    name = "embedded_compiler_headers",
+    name = "compiler_patch_headers",
     srcs = [
         "compiler_error_channel.h",
         "error_channel.h",
-        "frontend_identity_v1.h",
         "trap.h",
     ],
-    visibility = ["//compiler:__pkg__"],
+    visibility = ["//visibility:public"],
 )
 
 filegroup(
@@ -45,6 +35,42 @@ filegroup(
     ],
 )
 
+luauc_cpp_archive(
+    name = "adapter_wasm32_wasi",
+    srcs = [
+        "frontend_adapter.cpp",
+        "frontend_fastflags.cpp",
+    ],
+    copts = [
+        "-DLUAUC_COMPILER_HOST=1",
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        "@luau//:aot_frontend_codegen_ir_headers",
+        "//schema:frontend_snapshot_v1.h",
+        ":compiler_patch_headers",
+        "frontend_identity_v1.h",
+    ],
+    deps = [
+        ":frontend_incs",
+        "@luau//:aot_frontend_codegen_ir_incs",
+        "@luau//:interp_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+luauc_c_archive(
+    name = "host_stubs_wasm32_wasi",
+    srcs = ["host_wasi_stubs.c"],
+    copts = ["-fno-math-errno"],
+    extra_srcs = [],
+    deps = [],
+    visibility = ["//visibility:public"],
+)
+
 # This is an optional host capability, not a target guest. It may contain the source compiler,
 # temporary bytecode loader, and bytecode executor needed to materialize a Proto; none of those TUs
 # are in //runtime. The only product boundary exported from C++ is
@@ -52,28 +78,6 @@ filegroup(
 zig_binary(
     name = "frontend_raw",
     srcs = ["frontend_host.zig"],
-    copts = [
-        "-DLUAUC_COMPILER_HOST=1",
-        "-fno-exceptions",
-        "-fno-math-errno",
-        "-fno-rtti",
-    ],
-    csrcs = [
-        "@luau//:interp_srcs",
-        "@luau//:aot_frontend_codegen_ir_srcs",
-        "frontend_adapter.cpp",
-        "frontend_fastflags.cpp",
-        "host_wasi_stubs.c",
-    ],
-    extra_srcs = [
-        "@luau//:interp_all_hdrs",
-        "@luau//:aot_frontend_codegen_ir_headers",
-        "//schema:frontend_snapshot_v1.h",
-        "compiler_error_channel.h",
-        "error_channel.h",
-        "frontend_identity_v1.h",
-        "trap.h",
-    ],
     linkopts = [
         "-lc",
         "-lc++",
@@ -92,7 +96,10 @@ zig_binary(
     main = "frontend_host.zig",
     tags = ["manual"],
     deps = [
+        ":adapter_wasm32_wasi",
         ":frontend_incs",
+        ":host_stubs_wasm32_wasi",
+        "@luau//:aot_frontend_wasm32_wasi",
         "@luau//:aot_frontend_codegen_ir_incs",
         "@luau//:interp_incs",
         "//compiler/ir:frontend_snapshot_v1",

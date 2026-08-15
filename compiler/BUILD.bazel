@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library", "zig_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure", "zig_configure_binary", "zig_library", "zig_static_library", "zig_test")
 
 zig_library(
     name = "source_package_v1",
@@ -14,26 +14,29 @@ zig_test(
     main = "source_package_v1.zig",
 )
 
+zig_static_library(
+    name = "compiler_component",
+    main = "compiler_host.zig",
+    deps = [
+        ":source_package_v1",
+        "//compiler/backend:component_api",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/link:linker",
+        "//schema:runtime_profile_v1",
+    ],
+)
+
+zig_configure(
+    name = "compiler_component_wasm32_wasi",
+    actual = ":compiler_component",
+    mode = "release_small",
+    target = "//platforms:wasm32_wasi",
+    threaded = "single",
+)
+
 zig_binary(
     name = "compiler_raw",
-    main = "compiler_host.zig",
-    csrcs = [
-        "@luau//:interp_srcs",
-        "@luau//:aot_frontend_codegen_ir_srcs",
-        "//frontend:embedded_compiler_csrcs",
-    ],
-    copts = [
-        "-DLUAUC_COMPILER_HOST=1",
-        "-fno-exceptions",
-        "-fno-math-errno",
-        "-fno-rtti",
-    ],
-    extra_srcs = [
-        "@luau//:interp_all_hdrs",
-        "@luau//:aot_frontend_codegen_ir_headers",
-        "//frontend:embedded_compiler_headers",
-        "//schema:frontend_snapshot_v1.h",
-    ],
+    main = "compiler_entry.zig",
     linkopts = [
         "-lc",
         "-lc++",
@@ -50,14 +53,11 @@ zig_binary(
     ],
     tags = ["manual"],
     deps = [
-        ":source_package_v1",
-        "//compiler/backend:backend",
-        "//compiler/ir:frontend_snapshot_v1",
-        "//compiler/link:linker",
-        "//frontend:frontend_incs",
-        "//schema:runtime_profile_v1",
-        "@luau//:aot_frontend_codegen_ir_incs",
-        "@luau//:interp_incs",
+        ":compiler_component_wasm32_wasi",
+        "//compiler/backend:component",
+        "//frontend:adapter_wasm32_wasi",
+        "//frontend:host_stubs_wasm32_wasi",
+        "@luau//:aot_frontend_wasm32_wasi",
     ],
 )
 

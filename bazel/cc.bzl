@@ -50,7 +50,7 @@ def _zig_executable(ctx):
         fail("a hermetic Zig toolchain is required")
     return zig, zigtoolchaininfo
 
-def _zig_cxx_object_impl(ctx):
+def _zig_source_object_impl(ctx, driver):
     zig, zigtoolchaininfo = _zig_executable(ctx)
     source = ctx.file.src
     output = ctx.actions.declare_file(ctx.label.name + ".o")
@@ -75,7 +75,7 @@ def _zig_cxx_object_impl(ctx):
         tool_inputs.append(zigtoolchaininfo.zig_lib.file)
     ctx.actions.run(
         executable = zig,
-        arguments = ["c++", args],
+        arguments = [driver, args],
         env = {
             "ZIG_GLOBAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
             "ZIG_LOCAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
@@ -91,10 +91,28 @@ def _zig_cxx_object_impl(ctx):
     )
     return [DefaultInfo(files = depset([output]))]
 
+def _zig_cxx_object_impl(ctx):
+    return _zig_source_object_impl(ctx, "c++")
+
+def _zig_c_object_impl(ctx):
+    return _zig_source_object_impl(ctx, "cc")
+
 zig_cxx_object = rule(
     implementation = _zig_cxx_object_impl,
     attrs = {
         "src": attr.label(allow_single_file = [".cc", ".cpp", ".cxx"]),
+        "copts": attr.string_list(),
+        "extra_srcs": attr.label_list(allow_files = True),
+        "deps": attr.label_list(providers = [CcInfo]),
+        "target": attr.string(mandatory = True),
+    },
+    toolchains = ["@rules_zig//zig:toolchain_type"],
+)
+
+zig_c_object = rule(
+    implementation = _zig_c_object_impl,
+    attrs = {
+        "src": attr.label(allow_single_file = [".c"]),
         "copts": attr.string_list(),
         "extra_srcs": attr.label_list(allow_files = True),
         "deps": attr.label_list(providers = [CcInfo]),
