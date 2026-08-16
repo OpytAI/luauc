@@ -46,6 +46,48 @@ return function(value, text)
     end
     local addedDup = addDup(value, 1)
 
+    local function operatorBreadth(input, text)
+        local sum = input + 1 - 2 * 3 / 2
+        sum += input // 2
+        sum += 10 % 4
+        sum += 2 ^ 3
+        sum += -input
+        local box = setmetatable({ value = input, size = 3, text = text }, {
+            __add = function(left, right)
+                return left.value + (type(right) == "number" and right or right.value)
+            end,
+            __unm = function(left)
+                return -left.value
+            end,
+            __pow = function(left, right)
+                return left.value ^ (type(right) == "number" and right or right.value)
+            end,
+            __len = function(left)
+                return left.size
+            end,
+            __concat = function(left, right)
+                return left.text .. right.text
+            end,
+            __eq = function(left, right)
+                return left.value == right.value
+            end,
+        })
+        local other = setmetatable({ value = input, size = 3, text = text }, getmetatable(box))
+        local added = box + box
+        local powered = box ^ 2
+        local negated = -box
+        local eq = box == other
+        local cmp = 0
+        if box == other then
+            cmp = 1
+        end
+        local cat = text .. ":" .. text
+        local mcat = box .. box
+        local glen = #box
+        coroutine.yield("gc-boundary")
+        return sum + added + powered + negated + (eq and 1 or 0) + cmp + string.len(cat) + string.len(mcat) + glen
+    end
+
     local function globalBreadth(input)
         embed_seen = input
         coroutine.yield("gc-boundary")
@@ -225,6 +267,7 @@ return function(value, text)
     local tableBreadthResult = tableBreadth(value, text)
     local closureBreadthResult = closureBreadth(value, text)
     local globalBreadthResult = globalBreadth(value)
+    local operatorBreadthResult = operatorBreadth(value, text)
     local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
@@ -247,7 +290,8 @@ return function(value, text)
 
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
-            + guardResult + tableBreadthResult + closureBreadthResult + globalBreadthResult + addedDup
+            + guardResult + tableBreadthResult + closureBreadthResult + globalBreadthResult
+            + operatorBreadthResult + addedDup
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

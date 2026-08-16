@@ -1407,9 +1407,12 @@
         "//compiler/backend:mixed_table_package_object_build_test",
         "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_branch_or_materialized_boolean_fallbacks_with_register_or_scalar_vmconst_including_string_literal_equality"
+      "status": "implemented"
     },
     {
       "command": "CMP_INT",
@@ -2139,9 +2142,11 @@
         "//compiler/backend:generic_iteration_package_object_build_test",
         "conformance:luauc_generic_iteration_survives_gc_and_matches_interpreter",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_all_arithmetic_ops_register_or_scalar_vmconst_source_emitted_including_power_graphs"
+      "status": "implemented"
     },
     {
       "command": "DO_LEN",
@@ -2161,9 +2166,12 @@
         "//compiler/backend:dynamic_string_package_object_build_test",
         "conformance:luauc_dynamic_string_survives_gc_and_matches_interpreter",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_guarded_generic_length_and_source_emitted_metamethod_clusters"
+      "status": "implemented"
     },
     {
       "command": "GET_TABLE",
@@ -2272,9 +2280,12 @@
         "//compiler/backend:dynamic_string_package_object_build_test",
         "conformance:luauc_dynamic_string_survives_gc_and_matches_interpreter",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_savedpc_publish_gc_and_source_emitted_metamethod_clusters"
+      "status": "implemented"
     },
     {
       "command": "GET_UPVALUE",

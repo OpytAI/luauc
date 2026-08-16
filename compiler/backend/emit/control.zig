@@ -63,6 +63,39 @@ pub noinline fn emitDoArith(self: anytype, instruction_id: u32, instruction_valu
     // Generic arithmetic may allocate, invoke a metamethod, and relocate the stack.
     try self.emitReloadBase();
 }
+pub noinline fn emitDoLen(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+        return Error.UnsupportedControlFlow;
+    _ = try self.savedPc(try self.instruction(instruction_id - 1));
+    const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.call(self.allocator, self.do_len orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}
+pub noinline fn emitGeneralConcat(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+        return Error.UnsupportedControlFlow;
+    _ = try self.savedPc(try self.instruction(instruction_id - 1));
+    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const count_operand = try self.operand(instruction_value, 1);
+    const count = if (count_operand.kind == .constant)
+        (try self.constant(count_operand.value)).uintValue() orelse return Error.InvalidOperandType
+    else
+        return Error.InvalidOperandType;
+    if (count < 2 or count > @as(u32, self.proto.max_stack_size) - source)
+        return Error.UnsupportedControlFlow;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32Const(self.allocator, @intCast(count));
+    try self.body.call(self.allocator, self.concat orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}
 pub fn comparisonOperation(_: anytype, condition: snapshot_v1.IrCondition) Error!i32 {
     return switch (condition) {
         .equal => 0,
@@ -288,9 +321,28 @@ pub noinline fn supportsMaterializedComparisonFallback(self: anytype, block: sna
     const target_block = try self.snapshot.irBlock(self.function, target.value);
     return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
+pub noinline fn supportsLengthFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
+    if (block.kind != .fallback or block.isEmpty() or block.finish - block.start != 2)
+        return false;
+    const marker = try self.instruction(block.start);
+    const length = try self.instruction(block.start + 1);
+    const jump = try self.instruction(block.start + 2);
+    if (marker.command != .set_savedpc or length.command != abi.ir_cmd_do_len or jump.command != .jump or
+        marker.operand_count != 1 or length.operand_count != 2 or jump.operand_count != 1)
+        return false;
+    const destination = try self.operand(length, 0);
+    const source = try self.operand(length, 1);
+    const jump_target = try self.operand(jump, 0);
+    if (destination.kind != .vm_reg or source.kind != .vm_reg or jump_target.kind != .block or
+        destination.value >= self.proto.max_stack_size or source.value >= self.proto.max_stack_size)
+        return false;
+    const target = try self.snapshot.irBlock(self.function, jump_target.value);
+    return target.kind.isCompilable() and !target.isEmpty();
+}
 pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     return (try self.supportsArithmeticFallback(block)) or (try self.supportsComparisonFallback(block)) or
         (try self.supportsMaterializedComparisonFallback(block)) or
+        (try self.supportsLengthFallback(block)) or
         (try self.supportsGenericIterationFallback(block)) or
         (try self.supportsSpecializedIpairsFallback(block)) or
         (try self.xnextPreparationPattern(block) != null) or

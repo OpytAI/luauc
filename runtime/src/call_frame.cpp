@@ -1173,10 +1173,20 @@ extern "C" void luauc_runtime_v1_array_get(lua_State *L, uint32_t destinationReg
     setobj2s(L, destination, &table->array[index - 1]);
 }
 
+extern "C" void luauc_runtime_v1_do_len(lua_State *L, uint32_t destinationRegister,
+                                      uint32_t sourceRegister);
+
 extern "C" void luauc_runtime_v1_table_len(lua_State *L, uint32_t destinationRegister,
                                          uint32_t tableRegister) {
     Proto *proto = activeAotFrameProto(L, "table length");
-    LuaTable *table = activeAotPlainTable(L, proto, tableRegister, false, "table length");
+    TValue *value = activeAotRegister(L, proto, tableRegister, "table length");
+    if (!ttistable(value))
+        luaG_runerror(L, "strict AOT table length requires a table value");
+    LuaTable *table = hvalue(value);
+    if (table->metatable) {
+        luauc_runtime_v1_do_len(L, destinationRegister, tableRegister);
+        return;
+    }
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "table length");
     setnvalue(destination, double(luaH_getn(table)));
 }
@@ -1189,9 +1199,11 @@ extern "C" void luauc_runtime_v1_concat(lua_State *L, uint32_t destinationRegist
         luaG_runerror(L, "strict AOT concatenation rejected the compiled register range");
 
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "concatenation");
+    if (L->top < L->base + sourceStart + count)
+        L->top = L->base + sourceStart + count;
+    if (L->top <= destination)
+        L->top = destination + 1;
     TValue *source = L->base + sourceStart;
-    if (destination >= L->top || source + count > L->top)
-        luaG_runerror(L, "strict AOT concatenation requires a published live register range");
 
     // luaV_concat can call __concat and reallocate the stack. Preserve top as an offset, gray a
     // black thread before the operation publishes new strings into its register range, and carry no

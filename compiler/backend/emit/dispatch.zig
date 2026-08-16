@@ -31,6 +31,8 @@ const ir_cmd_check_node_value = abi.ir_cmd_check_node_value;
 const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
 const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
 const ir_cmd_check_array_size = abi.ir_cmd_check_array_size;
+const ir_cmd_do_len = abi.ir_cmd_do_len;
+const ir_cmd_concat = abi.ir_cmd_concat;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
 const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
@@ -316,6 +318,9 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                 } else if (instruction_id + 1 >= self.function.instruction_count or
                     ((try self.instruction(instruction_id + 1)).command != .call and
                         (try self.instruction(instruction_id + 1)).command != .cmp_any and
+                        (try self.instruction(instruction_id + 1)).command != .do_arith and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_do_len and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_concat and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_get_table and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table))
                     return Error.UnsupportedControlFlow;
@@ -336,6 +341,12 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                 return Error.UnsupportedControlFlow;
             try self.emitDoArith(instruction_id, instruction_value);
         },
+        ir_cmd_do_len => {
+            if (block_kind != .fallback)
+                return Error.UnsupportedControlFlow;
+            try self.emitDoLen(instruction_id, instruction_value);
+        },
+        ir_cmd_concat => try self.emitGeneralConcat(instruction_id, instruction_value),
         .check_safe_env => {
             const guards_dynamic_global = instruction_id + 1 < self.function.instruction_count and
                 (try self.instruction(instruction_id + 1)).command == .get_cached_import;

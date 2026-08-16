@@ -25,7 +25,7 @@
     "upstream_member_count": 34,
     "project_adapter_member_count": 1,
     "member_name_policy": "sorted Luau source index plus project adapter label",
-    "canonical_member_set_sha256": "220556622f26639ac7cd0160ddeb826cadc638e19e867340113a74711abdab1f"
+    "canonical_member_set_sha256": "1c518fce2800e9294148e3eb47d1453c8c978ffc52992b55196a8892b2bce8db"
   },
   "members": [
     {
@@ -236,7 +236,7 @@
       "name": "runtime_call_frame_object.o",
       "source": "runtime/src/call_frame.cpp",
       "owner": "luauc",
-      "sha256": "d858ae6292b8a0e8a7ad68b456264fa1c89c74f5acdaed2f3df8cb59dd688565"
+      "sha256": "b977a7fc3d30036d4ca5ba916b41908698511eef57380be69f6b0ea0e4114b2a"
     }
   ],
   "forbidden_members": [
