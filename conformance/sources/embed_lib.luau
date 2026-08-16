@@ -88,6 +88,73 @@ return function(value, text)
         return sum + added + powered + negated + (eq and 1 or 0) + cmp + string.len(cat) + string.len(mcat) + glen
     end
 
+    local function iterationBreadth(input)
+        local total = 0
+        for index, value in ipairs({ input, input + 1, input + 2 }) do
+            total += index * value
+        end
+        local function one(_, control)
+            if control == 0 then
+                return 1
+            end
+            return nil
+        end
+        local function two(_, control)
+            if control == 0 then
+                return 1, input
+            end
+            return nil
+        end
+        local function three(_, control)
+            if control == 0 then
+                return 1, input, input + 1
+            end
+            return nil
+        end
+        for first in one, nil, 0 do
+            total += first
+        end
+        for first, second in two, nil, 0 do
+            total += first + second
+        end
+        for first, second, third in three, nil, 0 do
+            total += first + second + third
+        end
+        local callable = setmetatable({}, {
+            __call = function(_, _, control)
+                if control == 0 then
+                    return 1, input
+                end
+                return nil
+            end,
+        })
+        for first, second in callable, nil, 0 do
+            total += first + second
+        end
+        for first, second in embed.iter(input) do
+            total += first + second
+        end
+        coroutine.yield("gc-boundary")
+        local function yielder(_, control)
+            if control == 0 then
+                return 1, input
+            end
+            return nil
+        end
+        for first, second in yielder, nil, 0 do
+            total += first + second
+        end
+        local raised = 0
+        pcall(function()
+            for _ in function()
+                error("iter-fail")
+            end do
+            end
+        end)
+        raised = 1
+        return total + raised
+    end
+
     local function globalBreadth(input)
         embed_seen = input
         coroutine.yield("gc-boundary")
@@ -268,6 +335,7 @@ return function(value, text)
     local closureBreadthResult = closureBreadth(value, text)
     local globalBreadthResult = globalBreadth(value)
     local operatorBreadthResult = operatorBreadth(value, text)
+    local iterationBreadthResult = iterationBreadth(value)
     local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
@@ -291,7 +359,7 @@ return function(value, text)
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
             + guardResult + tableBreadthResult + closureBreadthResult + globalBreadthResult
-            + operatorBreadthResult + addedDup
+            + operatorBreadthResult + iterationBreadthResult + addedDup
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

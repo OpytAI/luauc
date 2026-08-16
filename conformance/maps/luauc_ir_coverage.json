@@ -3013,9 +3013,12 @@
         "//compiler/backend:mixed_table_package_object_build_test",
         "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
         "//compiler/backend:iteration_object_lifecycle_package_object_build_test",
-        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata"
+        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_full_aux_count_one_to_255_builtin_table_and_ipairs_iteration"
+      "status": "implemented"
     },
     {
       "command": "FORGLOOP_FALLBACK",
@@ -3039,9 +3042,12 @@
         "//compiler/backend:protected_execution_package_object_build_test",
         "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt",
         "//compiler/backend:iteration_object_lifecycle_package_object_build_test",
-        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata"
+        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_universal_callable_iterator_sync_error_opyield_result_and_rejoin"
+      "status": "implemented"
     },
     {
       "command": "FORGPREP_XNEXT_FALLBACK",
@@ -3332,9 +3338,12 @@
         "//compiler/backend:protected_execution_package_object_build_test",
         "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt",
         "//compiler/backend:iteration_object_lifecycle_package_object_build_test",
-        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata"
+        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_function_iter_callable_table_userdata_and_builtin_table_preparation"
+      "status": "implemented"
     },
     {
       "command": "SUBSTITUTE",

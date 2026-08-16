@@ -61,12 +61,45 @@ static int embedStamp(lua_State *L) {
     return 1;
 }
 
-static void publishEmbedImport(lua_State *L) {
+static int embedIterNext(lua_State *L) {
+    const int control = lua_tointeger(L, 2);
+    if (control != 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    int *seed = (int *)lua_touserdatatagged(L, 1, 0);
+    lua_pushinteger(L, 1);
+    lua_pushinteger(L, seed ? *seed : 0);
+    return 2;
+}
+
+static int embedIter(lua_State *L) {
+    lua_pushcfunction(L, embedIterNext, "next");
+    lua_pushvalue(L, 1);
+    lua_pushinteger(L, 0);
+    return 3;
+}
+
+static int embedNewIter(lua_State *L) {
+    const int seed = (int)luaL_checkinteger(L, 1);
+    int *payload = (int *)lua_newuserdatatagged(L, sizeof(int), 0);
+    *payload = seed;
     lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, embedIter, "__iter");
+    lua_setfield(L, -2, "__iter");
+    lua_setreadonly(L, -1, 1);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+static void publishEmbedImport(lua_State *L) {
+    lua_createtable(L, 0, 2);
     lua_createtable(L, 0, 1);
     lua_pushcfunction(L, embedStamp, "stamp");
     lua_setfield(L, -2, "stamp");
     lua_setfield(L, -2, "util");
+    lua_pushcfunction(L, embedNewIter, "iter");
+    lua_setfield(L, -2, "iter");
     lua_setglobal(L, "embed");
 }
 
