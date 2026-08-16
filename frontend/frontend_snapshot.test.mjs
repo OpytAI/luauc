@@ -36,6 +36,14 @@ const contractInputs = [
   "third_party/luau/patches/0009-aot-coverage-data.patch",
   "third_party/luau/patches/0010-bytecode-builder-introspection.patch",
   "third_party/luau/patches/0011-compiler-owned-builder.patch",
+  "third_party/luau/patches/0012-aot-builtin-guard-fallbacks.patch",
+  "third_party/luau/patches/0013-aot-xnext-safeenv-fallback.patch",
+  "third_party/luau/patches/0014-aot-fastcall-safeenv-fallback.patch",
+  "third_party/luau/patches/0015-aot-fallback-safeenv-no-entry-exit.patch",
+  "third_party/luau/patches/0016-aot-fastcall-safeenv-retain-fallback.patch",
+  "third_party/luau/patches/0017-aot-cache-independent-imports.patch",
+  "third_party/luau/patches/0018-aot-semantic-type-fallbacks.patch",
+  "third_party/luau/patches/0019-aot-literal-and-namecall-fallbacks.patch",
 ].sort();
 
 function frontendContractDigest() {

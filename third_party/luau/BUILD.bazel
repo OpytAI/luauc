@@ -17,6 +17,14 @@ exports_files([
     "patches/0009-aot-coverage-data.patch",
     "patches/0010-bytecode-builder-introspection.patch",
     "patches/0011-compiler-owned-builder.patch",
+    "patches/0012-aot-builtin-guard-fallbacks.patch",
+    "patches/0013-aot-xnext-safeenv-fallback.patch",
+    "patches/0014-aot-fastcall-safeenv-fallback.patch",
+    "patches/0015-aot-fallback-safeenv-no-entry-exit.patch",
+    "patches/0016-aot-fastcall-safeenv-retain-fallback.patch",
+    "patches/0017-aot-cache-independent-imports.patch",
+    "patches/0018-aot-semantic-type-fallbacks.patch",
+    "patches/0019-aot-literal-and-namecall-fallbacks.patch",
 ])
 
 js_library(
@@ -35,6 +43,14 @@ js_library(
         "patches/0009-aot-coverage-data.patch",
         "patches/0010-bytecode-builder-introspection.patch",
         "patches/0011-compiler-owned-builder.patch",
+        "patches/0012-aot-builtin-guard-fallbacks.patch",
+        "patches/0013-aot-xnext-safeenv-fallback.patch",
+        "patches/0014-aot-fastcall-safeenv-fallback.patch",
+        "patches/0015-aot-fallback-safeenv-no-entry-exit.patch",
+        "patches/0016-aot-fastcall-safeenv-retain-fallback.patch",
+        "patches/0017-aot-cache-independent-imports.patch",
+        "patches/0018-aot-semantic-type-fallbacks.patch",
+        "patches/0019-aot-literal-and-namecall-fallbacks.patch",
     ],
     visibility = ["//visibility:public"],
 )

@@ -1,0 +1,14 @@
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -1056,7 +1056,9 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
+         build, LuauBuiltinFunction(bfid), ra, arg, builtinArgs, builtinArg3, nparams, nresults, fallback, pcpos + getOpLength(opcode)
+     );
+ 
+-    bool usesFallback = false;
++    // The safe-environment guard above always owns the compiled fallback, independently of
++    // whether the specialized builtin graph also references it.
++    bool usesFallback = true;
+     if (br.type != BuiltinImplType::None)
+     {
+         const uint32_t fallbackPc = pcpos + getOpLength(opcode);

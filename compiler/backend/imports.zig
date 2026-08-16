@@ -12,6 +12,7 @@ const coverage_hit_symbol = abi.coverage_hit_symbol;
 const do_arith_symbol = abi.do_arith_symbol;
 const compare_any_symbol = abi.compare_any_symbol;
 const dupclosure_symbol = abi.dupclosure_symbol;
+const newclosure_empty_symbol = abi.newclosure_empty_symbol;
 const newclosure_capture_symbol = abi.newclosure_capture_symbol;
 const get_upvalue_symbol = abi.get_upvalue_symbol;
 const set_upvalue_symbol = abi.set_upvalue_symbol;
@@ -65,6 +66,7 @@ const type_name_symbol = abi.type_name_symbol;
 const libm_symbol = abi.libm_symbol;
 const builtin_type_error_symbol = abi.builtin_type_error_symbol;
 const builtin_number_symbol = abi.builtin_number_symbol;
+const forn_prepare_symbol = abi.forn_prepare_symbol;
 const buffer_bounds_error_symbol = abi.buffer_bounds_error_symbol;
 const check_safe_env_symbol = abi.check_safe_env_symbol;
 const prep_varargs_symbol = abi.prep_varargs_symbol;
@@ -130,6 +132,7 @@ pub const ImportNeeds = struct {
     do_arith: bool = false,
     compare_any: bool = false,
     dupclosure: bool = false,
+    newclosure_empty: bool = false,
     newclosure_capture: bool = false,
     get_upvalue: bool = false,
     set_upvalue: bool = false,
@@ -183,6 +186,7 @@ pub const ImportNeeds = struct {
     type_name: bool = false,
     builtin_type_error: bool = false,
     builtin_number: bool = false,
+    forn_prepare: bool = false,
     buffer_bounds_error: bool = false,
     libm: bool = false,
     prep_varargs: bool = false,
@@ -198,6 +202,7 @@ pub const RuntimeImports = struct {
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
+    newclosure_empty: ?wasm.FunctionRef,
     newclosure_capture: ?wasm.FunctionRef,
     get_upvalue: ?wasm.FunctionRef,
     set_upvalue: ?wasm.FunctionRef,
@@ -252,6 +257,7 @@ pub const RuntimeImports = struct {
     libm: ?wasm.FunctionRef,
     builtin_type_error: ?wasm.FunctionRef,
     builtin_number: ?wasm.FunctionRef,
+    forn_prepare: ?wasm.FunctionRef,
     buffer_bounds_error: ?wasm.FunctionRef,
     prep_varargs: ?wasm.FunctionRef,
     get_varargs_fixed: ?wasm.FunctionRef,
@@ -288,15 +294,17 @@ pub fn isRequireImportInstruction(
 }
 
 fn isStaticRequireCall(snapshot: snapshot_v1.Snapshot, function: snapshot_v1.IrFunction, instruction_id: u32) Error!bool {
-    if (instruction_id < 6)
+    if (instruction_id < 5)
         return false;
-    const marker = try snapshot.irInstruction(function, instruction_id - 6);
-    const get_import = try snapshot.irInstruction(function, instruction_id - 5);
-    if (!((marker.command == .nop or marker.command == .check_safe_env) and
-        (try snapshot.irInstruction(function, instruction_id - 4)).command == .load_tvalue and
-        (try snapshot.irInstruction(function, instruction_id - 3)).command == .store_tvalue and
-        (try snapshot.irInstruction(function, instruction_id - 2)).command == .interrupt and
-        (try snapshot.irInstruction(function, instruction_id - 1)).command == .set_savedpc))
+
+    const get_id = instruction_id - 5;
+    const get_import = try snapshot.irInstruction(function, get_id);
+    if (get_import.command != .get_cached_import)
+        return false;
+    if ((try snapshot.irInstruction(function, get_id + 1)).command != .load_tvalue or
+        (try snapshot.irInstruction(function, get_id + 2)).command != .store_tvalue or
+        (try snapshot.irInstruction(function, get_id + 3)).command != .interrupt or
+        (try snapshot.irInstruction(function, get_id + 4)).command != .set_savedpc)
         return false;
     return isRequireImportInstruction(snapshot, function, try snapshot.proto(function.proto_id), get_import);
 }
@@ -320,7 +328,19 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
                 .closed => needs.dupclosure = true,
                 .captured => needs.newclosure_capture = true,
             },
-            .newclosure => needs.newclosure_capture = true,
+            .newclosure => {
+                if (instruction_value.operand_count != 3)
+                    return Error.InvalidOperandCount;
+                const count_operand = try snapshot.irOperand(instruction_value, 0);
+                if (count_operand.kind != .constant)
+                    return Error.InvalidOperandType;
+                const count = (try snapshot.irConstant(function, count_operand.value)).uintValue() orelse
+                    return Error.InvalidOperandType;
+                if (count == 0)
+                    needs.newclosure_empty = true
+                else
+                    needs.newclosure_capture = true;
+            },
             .get_upvalue => needs.get_upvalue = true,
             .set_upvalue => needs.set_upvalue = true,
             .close_upvals => needs.close_upvalues = true,
@@ -462,12 +482,26 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
                 needs.check_safe_env = true;
             },
             ir_cmd_invoke_libm => needs.libm = true,
-            .check_safe_env => needs.check_safe_env = true,
-            .check_tag => if (instruction_value.operand_count == 3 and
-                (try snapshot.irOperand(instruction_value, 2)).kind == .vm_exit)
-            {
-                needs.builtin_type_error = true;
-                needs.set_location = true;
+            .check_safe_env => {
+                needs.check_safe_env = true;
+                if (instruction_value.operand_count != 1)
+                    return Error.InvalidOperandCount;
+                const failure = try snapshot.irOperand(instruction_value, 0);
+                if (failure.kind != .block)
+                    return Error.UnsupportedControlFlow;
+            },
+            .check_tag => if (instruction_value.operand_count == 3) {
+                const failure = try snapshot.irOperand(instruction_value, 2);
+                if (failure.kind == .vm_exit) {
+                    if (failure.value >= proto.code_count)
+                        return Error.UnsupportedControlFlow;
+                    const word = try snapshot.bytecodeWord(proto, failure.value);
+                    if (@as(u8, @truncate(word)) == abi.lop_fornprep)
+                        needs.forn_prepare = true
+                    else
+                        needs.builtin_type_error = true;
+                    needs.set_location = true;
+                }
             },
             ir_cmd_get_type, ir_cmd_get_typeof => needs.type_name = true,
             .num_to_int64 => {
@@ -518,6 +552,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const do_arith_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32 };
     const compare_any_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const dupclosure_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
+    const newclosure_empty_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const newclosure_capture_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 };
     const get_upvalue_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const set_upvalue_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
@@ -551,6 +586,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const type_name_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const builtin_type_error_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32 };
     const builtin_number_params = [_]wasm.ValueType{ .i32, .i32 };
+    const forn_prepare_params = [_]wasm.ValueType{ .i32, .i32 };
     const state_params = [_]wasm.ValueType{.i32};
     const unary_f64_results = [_]wasm.ValueType{.f64};
     const libm_params = [_]wasm.ValueType{ .i32, .f64, .f64 };
@@ -578,6 +614,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const dupclosure = if (needs.dupclosure) blk: {
         const helper_type = try object.addType(.{ .params = &dupclosure_params, .results = &no_results });
         break :blk try object.importFunction("env", dupclosure_symbol, helper_type);
+    } else null;
+    const newclosure_empty = if (needs.newclosure_empty) blk: {
+        const helper_type = try object.addType(.{ .params = &newclosure_empty_params, .results = &no_results });
+        break :blk try object.importFunction("env", newclosure_empty_symbol, helper_type);
     } else null;
     const newclosure_capture = if (needs.newclosure_capture) blk: {
         const helper_type = try object.addType(.{ .params = &newclosure_capture_params, .results = &no_results });
@@ -811,6 +851,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &builtin_number_params, .results = &unary_f64_results });
         break :blk try object.importFunction("env", builtin_number_symbol, helper_type);
     } else null;
+    const forn_prepare = if (needs.forn_prepare) blk: {
+        const helper_type = try object.addType(.{ .params = &forn_prepare_params, .results = &no_results });
+        break :blk try object.importFunction("env", forn_prepare_symbol, helper_type);
+    } else null;
     const buffer_bounds_error = if (needs.buffer_bounds_error) blk: {
         const helper_type = try object.addType(.{ .params = &state_params, .results = &no_results });
         break :blk try object.importFunction("env", buffer_bounds_error_symbol, helper_type);
@@ -822,6 +866,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .do_arith = do_arith,
         .compare_any = compare_any,
         .dupclosure = dupclosure,
+        .newclosure_empty = newclosure_empty,
         .newclosure_capture = newclosure_capture,
         .get_upvalue = get_upvalue,
         .set_upvalue = set_upvalue,
@@ -876,6 +921,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .libm = libm,
         .builtin_type_error = builtin_type_error,
         .builtin_number = builtin_number,
+        .forn_prepare = forn_prepare,
         .buffer_bounds_error = buffer_bounds_error,
         .prep_varargs = prep_varargs,
         .get_varargs_fixed = get_varargs_fixed,

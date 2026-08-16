@@ -3,6 +3,7 @@
 #include "lualib.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,6 +53,20 @@ typedef struct LuaucEmbedCoverageCollector {
     uint32_t truncated;
 } LuaucEmbedCoverageCollector;
 
+static char context_error[512];
+static uint32_t context_error_size;
+
+static void setContextError(const char *message, size_t size) {
+    if (!message) {
+        context_error_size = 0;
+        return;
+    }
+    if (size > sizeof(context_error))
+        size = sizeof(context_error);
+    memcpy(context_error, message, size);
+    context_error_size = (uint32_t)size;
+}
+
 static void collectCoverage(void *context, const char *, int, int depth, const int *hits,
                             size_t size) {
     LuaucEmbedCoverageCollector *collector = (LuaucEmbedCoverageCollector *)context;
@@ -82,25 +97,56 @@ uint32_t luauc_embed_v1_alloc(uint32_t size) {
     return size == 0 ? 0 : (uint32_t)(uintptr_t)malloc(size);
 }
 
+uint32_t luauc_embed_v1_last_error(void) {
+    return (uint32_t)(uintptr_t)context_error;
+}
+
+uint32_t luauc_embed_v1_last_error_size(void) {
+    return context_error_size;
+}
+
 void luauc_embed_v1_dealloc(uint32_t pointer) {
     free((void *)(uintptr_t)pointer);
 }
 
 uint32_t luauc_embed_v1_context_create(void) {
+    context_error_size = 0;
     LuaucEmbedContext *context = (LuaucEmbedContext *)calloc(1, sizeof(LuaucEmbedContext));
-    if (!context)
+    if (!context) {
+        static const char message[] = "embed context allocation failed";
+        setContextError(message, sizeof(message) - 1);
         return 0;
+    }
     context->state = luaL_newstate();
     if (!context->state) {
+        static const char message[] = "Luau state allocation failed";
+        setContextError(message, sizeof(message) - 1);
         free(context);
         return 0;
     }
     luaL_openlibs(context->state);
     luaL_sandbox(context->state);
     static const char source_name[] = "@main.luau";
-    if (luauc_runtime_v1_push_program(context->state, luauc_runtime_v1_program_pointer,
-                                      source_name, sizeof(source_name) - 1) != 0 ||
-        lua_pcall(context->state, 0, 1, 0) != 0 || !lua_isfunction(context->state, -1)) {
+    const int push_status = luauc_runtime_v1_push_program(
+        context->state, luauc_runtime_v1_program_pointer, source_name, sizeof(source_name) - 1);
+    const int call_status = push_status == 0 ? lua_pcall(context->state, 0, 1, 0) : LUA_ERRRUN;
+    if (push_status != 0 || call_status != 0 || !lua_isfunction(context->state, -1)) {
+        size_t error_size = 0;
+        const char *error = lua_gettop(context->state) > 0
+                                ? lua_tolstring(context->state, -1, &error_size)
+                                : NULL;
+        if (error) {
+            setContextError(error, error_size);
+        } else {
+            const int length = snprintf(
+                context_error, sizeof(context_error),
+                "Luau initialization failed: push=%d call=%d top=%d type=%s", push_status,
+                call_status, lua_gettop(context->state),
+                lua_typename(context->state, lua_type(context->state, -1)));
+            context_error_size = length < 0 ? 0 : (uint32_t)length;
+            if (context_error_size >= sizeof(context_error))
+                context_error_size = sizeof(context_error) - 1;
+        }
         lua_close(context->state);
         free(context);
         return 0;
@@ -173,14 +219,36 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
     int status = lua_resume(thread, state, 2);
     static const char gc_boundary[] = "gc-boundary";
     size_t yielded_size = 0;
-    const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
-    if (status != LUA_YIELD || !yielded || yielded_size != sizeof(gc_boundary) - 1 ||
-        memcmp(yielded, gc_boundary, sizeof(gc_boundary) - 1) != 0) {
+    uint32_t suspension_count = 0;
+    while (status == LUA_YIELD && suspension_count < 8) {
+        const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
+        if (!yielded || yielded_size != sizeof(gc_boundary) - 1 ||
+            memcmp(yielded, gc_boundary, sizeof(gc_boundary) - 1) != 0)
+            break;
+
+        // The suspended AOT thread remains rooted by the thread object on the main state's stack.
+        // Collect the complete VM heap before every generated continuation re-enters the function.
+        lua_settop(thread, 0);
+        lua_gc(state, LUA_GCCOLLECT, 0);
+        status = lua_resume(thread, state, 0);
+        suspension_count++;
+    }
+    if (status != LUA_OK || suspension_count == 0) {
+        char diagnostic[128];
+        const int top = lua_gettop(thread);
+        const char *yielded = status != LUA_OK && top > 0 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
         const char *failure = status == LUA_OK ? "compiled entry did not yield at the GC boundary"
-                                               : lua_tolstring(thread, -1, &yielded_size);
-        if (!failure)
-            failure = "non-string Luau suspension failure",
-            yielded_size = sizeof("non-string Luau suspension failure") - 1;
+                                               : yielded;
+        if (!failure) {
+            const int value_type = top == 0 ? LUA_TNONE : lua_type(thread, -1);
+            const int length = snprintf(diagnostic, sizeof(diagnostic),
+                                        "Luau suspension failure: status=%d top=%d type=%s", status,
+                                        top, lua_typename(thread, value_type));
+            failure = diagnostic;
+            yielded_size = length < 0 ? 0 : (size_t)length;
+            if (yielded_size >= sizeof(diagnostic))
+                yielded_size = sizeof(diagnostic) - 1;
+        }
         else if (status == LUA_OK)
             yielded_size = sizeof("compiled entry did not yield at the GC boundary") - 1;
         if (yielded_size <= request->output_capacity) {
@@ -192,12 +260,6 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
         lua_settop(state, 1);
         return 3;
     }
-
-    // The suspended AOT thread remains rooted by the thread object on the main state's stack.
-    // Collect the complete VM heap before resuming through generated CALL continuations.
-    lua_settop(thread, 0);
-    lua_gc(state, LUA_GCCOLLECT, 0);
-    status = lua_resume(thread, state, 0);
     size_t output_size = 0;
     const char *output = lua_tolstring(thread, -1, &output_size);
     if (!output)

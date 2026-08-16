@@ -225,8 +225,10 @@ pub noinline fn emitPlainTableNamecallBlock(
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitPlainTableNamecallOperation(pattern);
     try self.body.branch(self.allocator, 1);

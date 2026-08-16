@@ -28,6 +28,24 @@ const ArrayGuard = struct {
     index_value: u32,
 };
 
+const BufferPointer = struct {
+    kind: snapshot_v1.IrOperandKind,
+    value: u32,
+};
+
+const BlockBufferPointer = struct {
+    block: u32,
+    pointer: BufferPointer,
+};
+
+const BufferGuard = struct {
+    base_kind: snapshot_v1.IrOperandKind,
+    base_value: u32,
+    min_offset: i32,
+    max_offset: i32,
+    failure_block: ?u32,
+};
+
 /// Immutable, function-scoped analysis shared by lowering, continuation admission, ownership
 /// checks, and diagnostics. Construction is linear in the serialized IR plus CFG edges; no pass
 /// rebuilds dense block matrices or searches the entire function for a local ownership query.
@@ -44,6 +62,8 @@ pub const FunctionPlan = struct {
     table_pointer_provenance: []bool,
     guarded_array_addresses: []bool,
     array_address_guards: []?ArrayGuard,
+    guarded_buffer_operations: []bool,
+    resume_safe_blocks: []bool,
 
     pub const RegionDominators = struct {
         allocator: std.mem.Allocator,
@@ -287,6 +307,90 @@ pub const FunctionPlan = struct {
         const predecessors = try fillEdges(allocator, predecessor_offsets, edges.items, false);
         errdefer allocator.free(predecessors);
 
+        const guarded_buffer_operations = try buildGuardedBufferOperations(
+            allocator,
+            snapshot,
+            function,
+            instruction_blocks,
+            predecessor_offsets,
+            predecessors,
+        );
+        errdefer allocator.free(guarded_buffer_operations);
+
+        // Runtime suspension discards Wasm locals. A continuation cannot re-enter below an SSA
+        // producer that dominates the rejoin: doing so would skip the producer while retaining a
+        // downstream use. Mark all such dominator subtrees in one interval pass rather than
+        // rebuilding reachability and dominance for every CALL.
+        const dominators = try buildDominators(
+            allocator,
+            function.entry_block,
+            successor_offsets,
+            successors,
+            predecessor_offsets,
+            predecessors,
+        );
+        defer allocator.free(dominators.immediate);
+        defer allocator.free(dominators.enter);
+        defer allocator.free(dominators.exit);
+        const resume_safe_blocks = try allocator.alloc(bool, block_count);
+        errdefer allocator.free(resume_safe_blocks);
+        @memset(resume_safe_blocks, true);
+        const dominance_events = try allocator.alloc(i32, block_count * 2 + 2);
+        defer allocator.free(dominance_events);
+        @memset(dominance_events, 0);
+        instruction_id = 0;
+        while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+            const consumer_block = instruction_blocks[instruction_id];
+            if (consumer_block == snapshot_v1.no_id)
+                continue;
+            const instruction = try snapshot.irInstruction(function, instruction_id);
+            var operand_id: u32 = 0;
+            while (operand_id < instruction.operand_count) : (operand_id += 1) {
+                const operand = try snapshot.irOperand(instruction, operand_id);
+                if (operand.kind != .instruction)
+                    continue;
+                if (operand.value >= function.instruction_count)
+                    return Error.UnsupportedControlFlow;
+                const producer_block = instruction_blocks[operand.value];
+                if (producer_block == snapshot_v1.no_id) {
+                    resume_safe_blocks[consumer_block] = false;
+                    continue;
+                }
+                if (producer_block == consumer_block) {
+                    if (operand.value >= instruction_id)
+                        return Error.UnsupportedControlFlow;
+                    continue;
+                }
+                if (dominators.immediate[producer_block] == snapshot_v1.no_id or
+                    dominators.immediate[consumer_block] == snapshot_v1.no_id or
+                    dominators.enter[producer_block] > dominators.enter[consumer_block] or
+                    dominators.exit[consumer_block] > dominators.exit[producer_block])
+                {
+                    resume_safe_blocks[consumer_block] = false;
+                    continue;
+                }
+                const start: usize = dominators.enter[producer_block];
+                const finish: usize = dominators.exit[producer_block] + 1;
+                dominance_events[start] = std.math.add(i32, dominance_events[start], 1) catch
+                    return Error.ResourceLimit;
+                dominance_events[finish] = std.math.sub(i32, dominance_events[finish], 1) catch
+                    return Error.ResourceLimit;
+            }
+        }
+        var active_events: i32 = 0;
+        var event_index: usize = 0;
+        while (event_index < dominance_events.len) : (event_index += 1) {
+            active_events = std.math.add(i32, active_events, dominance_events[event_index]) catch
+                return Error.ResourceLimit;
+            dominance_events[event_index] = active_events;
+        }
+        block_id = 0;
+        while (block_id < function.block_count) : (block_id += 1) {
+            if (dominators.immediate[block_id] == snapshot_v1.no_id or
+                dominance_events[dominators.enter[block_id]] != 0)
+                resume_safe_blocks[block_id] = false;
+        }
+
         return .{
             .allocator = allocator,
             .instruction_blocks = instruction_blocks,
@@ -300,6 +404,8 @@ pub const FunctionPlan = struct {
             .table_pointer_provenance = table_pointer_provenance,
             .guarded_array_addresses = guarded_array_addresses,
             .array_address_guards = array_address_guards,
+            .guarded_buffer_operations = guarded_buffer_operations,
+            .resume_safe_blocks = resume_safe_blocks,
         };
     }
 
@@ -315,6 +421,8 @@ pub const FunctionPlan = struct {
         self.allocator.free(self.table_pointer_provenance);
         self.allocator.free(self.guarded_array_addresses);
         self.allocator.free(self.array_address_guards);
+        self.allocator.free(self.guarded_buffer_operations);
+        self.allocator.free(self.resume_safe_blocks);
         self.* = undefined;
     }
 
@@ -345,6 +453,15 @@ pub const FunctionPlan = struct {
     pub fn isGuardedArrayAddress(self: FunctionPlan, instruction_id: u32) bool {
         return instruction_id < self.guarded_array_addresses.len and
             self.guarded_array_addresses[instruction_id];
+    }
+
+    pub fn isGuardedBufferOperation(self: FunctionPlan, instruction_id: u32) bool {
+        return instruction_id < self.guarded_buffer_operations.len and
+            self.guarded_buffer_operations[instruction_id];
+    }
+
+    pub fn isResumeSafeBlock(self: FunctionPlan, block_id: u32) bool {
+        return block_id < self.resume_safe_blocks.len and self.resume_safe_blocks[block_id];
     }
 
     pub fn successorSlice(self: FunctionPlan, block_id: u32) ?[]const u32 {
@@ -641,6 +758,180 @@ fn writtenVmRegister(
         return null;
     const destination = try snapshot.irOperand(instruction, 0);
     return if (destination.kind == .vm_reg) destination.value else null;
+}
+
+fn buildGuardedBufferOperations(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    instruction_blocks: []const u32,
+    predecessor_offsets: []const u32,
+    predecessors: []const u32,
+) Error![]bool {
+    const guarded = try allocator.alloc(bool, function.instruction_count);
+    errdefer allocator.free(guarded);
+    @memset(guarded, false);
+
+    var block_guards = std.AutoHashMap(BlockBufferPointer, BufferGuard).init(allocator);
+    defer block_guards.deinit();
+
+    var instruction_id: u32 = 0;
+    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        const instruction = try snapshot.irInstruction(function, instruction_id);
+        const guard = (try bufferGuard(snapshot, function, instruction)) orelse continue;
+        const block = instruction_blocks[instruction_id];
+        if (block == snapshot_v1.no_id)
+            continue;
+        const pointer = try snapshot.irOperand(instruction, 0);
+        try block_guards.put(.{
+            .block = block,
+            .pointer = .{ .kind = pointer.kind, .value = pointer.value },
+        }, guard);
+    }
+
+    var local_guards = std.AutoHashMap(BufferPointer, BufferGuard).init(allocator);
+    defer local_guards.deinit();
+    var block_id: u32 = 0;
+    while (block_id < function.block_count) : (block_id += 1) {
+        local_guards.clearRetainingCapacity();
+        const block = try snapshot.irBlock(function, block_id);
+        if (block.isEmpty())
+            continue;
+
+        instruction_id = block.start;
+        while (instruction_id <= block.finish) : (instruction_id += 1) {
+            const instruction = try snapshot.irInstruction(function, instruction_id);
+            if (try bufferGuard(snapshot, function, instruction)) |guard| {
+                const pointer = try snapshot.irOperand(instruction, 0);
+                try local_guards.put(.{ .kind = pointer.kind, .value = pointer.value }, guard);
+                continue;
+            }
+
+            const width = bufferAccessWidth(instruction.command) orelse continue;
+            if (instruction.operand_count < 2)
+                continue;
+            const pointer = try snapshot.irOperand(instruction, 0);
+            const index = try snapshot.irOperand(instruction, 1);
+            const pointer_key: BufferPointer = .{ .kind = pointer.kind, .value = pointer.value };
+            if (local_guards.get(pointer_key)) |guard| {
+                if (try bufferGuardCovers(snapshot, function, guard, index, width))
+                    guarded[instruction_id] = true;
+                continue;
+            }
+
+            const predecessor_start = predecessor_offsets[block_id];
+            const predecessor_finish = predecessor_offsets[block_id + 1];
+            if (predecessor_finish - predecessor_start != 1)
+                continue;
+            const predecessor = predecessors[predecessor_start];
+            const guard = block_guards.get(.{ .block = predecessor, .pointer = pointer_key }) orelse continue;
+            if (guard.failure_block != null and guard.failure_block.? == block_id)
+                continue;
+            if (try bufferGuardCovers(snapshot, function, guard, index, width))
+                guarded[instruction_id] = true;
+        }
+    }
+
+    return guarded;
+}
+
+fn bufferGuard(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    instruction: snapshot_v1.IrInstruction,
+) Error!?BufferGuard {
+    if (instruction.command != abi.ir_cmd_check_buffer_len or instruction.operand_count != 6)
+        return null;
+    const base = try snapshot.irOperand(instruction, 1);
+    const min = try operandIntConstant(snapshot, function, try snapshot.irOperand(instruction, 2)) orelse return null;
+    const max = try operandIntConstant(snapshot, function, try snapshot.irOperand(instruction, 3)) orelse return null;
+    const failure = try snapshot.irOperand(instruction, 5);
+    if (min >= max or (base.kind != .instruction and base.kind != .constant))
+        return null;
+    return .{
+        .base_kind = base.kind,
+        .base_value = base.value,
+        .min_offset = min,
+        .max_offset = max,
+        .failure_block = if (failure.kind == .block) failure.value else null,
+    };
+}
+
+fn bufferGuardCovers(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    guard: BufferGuard,
+    index: snapshot_v1.IrOperand,
+    width: u32,
+) Error!bool {
+    const offset = (try bufferIndexOffset(
+        snapshot,
+        function,
+        .{ .kind = guard.base_kind, .value = guard.base_value },
+        index,
+    )) orelse return false;
+    const finish = std.math.add(i64, @as(i64, offset), @as(i64, width)) catch return false;
+    return offset >= guard.min_offset and finish <= guard.max_offset;
+}
+
+fn bufferIndexOffset(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    base: snapshot_v1.IrOperand,
+    index: snapshot_v1.IrOperand,
+) Error!?i32 {
+    if (sameOperandKey(base.kind, base.value, index))
+        return 0;
+    if (try operandIntConstant(snapshot, function, base)) |base_value| {
+        if (try operandIntConstant(snapshot, function, index)) |index_value|
+            return std.math.sub(i32, index_value, base_value) catch null;
+    }
+    if (index.kind != .instruction or index.value >= function.instruction_count)
+        return null;
+    const arithmetic = try snapshot.irInstruction(function, index.value);
+    if (arithmetic.operand_count != 2 or
+        (arithmetic.command != .add_int and arithmetic.command != .sub_int))
+        return null;
+    const lhs = try snapshot.irOperand(arithmetic, 0);
+    const rhs = try snapshot.irOperand(arithmetic, 1);
+    if (sameOperandKey(lhs.kind, lhs.value, base)) {
+        const displacement = (try operandIntConstant(snapshot, function, rhs)) orelse return null;
+        return if (arithmetic.command == .add_int)
+            displacement
+        else
+            std.math.sub(i32, 0, displacement) catch null;
+    }
+    if (arithmetic.command == .add_int and sameOperandKey(rhs.kind, rhs.value, base))
+        return (try operandIntConstant(snapshot, function, lhs)) orelse null;
+    return null;
+}
+
+fn operandIntConstant(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    operand: snapshot_v1.IrOperand,
+) Error!?i32 {
+    if (operand.kind != .constant)
+        return null;
+    return (try snapshot.irConstant(function, operand.value)).intValue();
+}
+
+fn bufferAccessWidth(command: snapshot_v1.IrCommand) ?u32 {
+    return switch (command) {
+        abi.ir_cmd_buffer_readi8, abi.ir_cmd_buffer_readu8, abi.ir_cmd_buffer_writei8 => 1,
+        abi.ir_cmd_buffer_readi16, abi.ir_cmd_buffer_readu16, abi.ir_cmd_buffer_writei16 => 2,
+        abi.ir_cmd_buffer_readi32,
+        abi.ir_cmd_buffer_readf32,
+        abi.ir_cmd_buffer_writei32,
+        abi.ir_cmd_buffer_writef32,
+        => 4,
+        abi.ir_cmd_buffer_readf64,
+        abi.ir_cmd_buffer_readi64,
+        abi.ir_cmd_buffer_writef64,
+        abi.ir_cmd_buffer_writei64,
+        => 8,
+        else => null,
+    };
 }
 
 fn buildOffsets(

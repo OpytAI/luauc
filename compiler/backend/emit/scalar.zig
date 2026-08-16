@@ -427,6 +427,15 @@ pub noinline fn emitGetUpvalue(self: anytype, instruction_id: u32, instruction_v
 pub noinline fn emitNewClosure(self: anytype, instruction_id: u32) Error!void {
     const pattern = try self.newClosurePattern(instruction_id);
     const child_id = std.math.add(u32, self.function_id_base, pattern.child_proto_id) catch return Error.ResourceLimit;
+    if (pattern.capture_count == 0) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(pattern.destination));
+        try self.body.i32Const(self.allocator, @intCast(child_id));
+        try self.body.i32Const(self.allocator, @intFromBool(pattern.check_gc));
+        try self.body.call(self.allocator, self.newclosure_empty orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+        return;
+    }
     var capture_index: u32 = 0;
     while (capture_index < pattern.capture_count) : (capture_index += 1) {
         const capture = try self.initializedCapture(capture_index, pattern.capture_ir_start);

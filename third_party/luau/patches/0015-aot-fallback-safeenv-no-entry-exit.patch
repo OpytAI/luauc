@@ -1,0 +1,29 @@
+diff --git a/CodeGen/src/IrBuilder.cpp b/CodeGen/src/IrBuilder.cpp
+--- a/CodeGen/src/IrBuilder.cpp
++++ b/CodeGen/src/IrBuilder.cpp
+@@ -729,11 +729,6 @@ void IrBuilder::loadAndCheckTag(IrOp loc, uint8_t tag, IrOp fallback)
+ }
+ 
+ void IrBuilder::checkSafeEnv(int pcpos)
+-{
+-    checkSafeEnv(pcpos, vmExit(pcpos));
+-}
+-
+-void IrBuilder::checkSafeEnv(int pcpos, IrOp fallback)
+ {
+     IrBlock& active = function.blocks[activeBlockIdx];
+ 
+@@ -745,7 +740,12 @@ void IrBuilder::checkSafeEnv(int pcpos, IrOp fallback)
+             active.flags |= kBlockFlagSafeEnvCheck;
+     }
+ 
+-    inst(IrCmd::CHECK_SAFE_ENV, fallback);
++    inst(IrCmd::CHECK_SAFE_ENV, vmExit(pcpos));
++}
++
++void IrBuilder::checkSafeEnv(int pcpos, IrOp fallback)
++{
++    inst(IrCmd::CHECK_SAFE_ENV, fallback);
+ }
+ 
+ void IrBuilder::clone(std::vector<uint32_t> sourceIdxs, bool removeCurrentTerminator)

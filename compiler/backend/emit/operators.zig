@@ -496,8 +496,10 @@ pub noinline fn emitPowBlock(self: anytype, block_id: u32, block: snapshot_v1.Ir
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitSavedPcLocation(pattern.marker);
     try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
@@ -512,8 +514,10 @@ pub noinline fn emitConstantArithmeticBlock(self: anytype, block_id: u32, block:
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitSavedPcLocation(pattern.marker);
     try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
@@ -528,8 +532,10 @@ pub noinline fn emitDynamicLengthBlock(self: anytype, block_id: u32, block: snap
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitDynamicLength(pattern);
     try self.body.branch(self.allocator, 1);

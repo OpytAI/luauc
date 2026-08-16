@@ -21,6 +21,7 @@ const lua_tag_number = abi.lua_tag_number;
 const lua_tag_integer = abi.lua_tag_integer;
 const lua_tag_vector = abi.lua_tag_vector;
 const lua_tag_string = abi.lua_tag_string;
+const lua_tag_table = abi.lua_tag_table;
 
 pub fn instruction(self: anytype, id: u32) Error!snapshot_v1.IrInstruction {
     return self.snapshot.irInstruction(self.function, id);
@@ -173,8 +174,6 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
         env_operand.value != newclosure_id - 1 or child_index_operand.kind != .constant)
         return Error.InvalidOperandType;
     const capture_count = (try self.constant(nups_operand.value)).uintValue() orelse return Error.InvalidOperandType;
-    if (capture_count == 0)
-        return Error.UnsupportedControlFlow;
     const child_index = (try self.constant(child_index_operand.value)).uintValue() orelse
         return Error.InvalidOperandType;
     const child_proto_id = try self.snapshot.protoChild(self.proto, child_index);
@@ -193,6 +192,23 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
     const destination = try self.vmRegisterIndex(pointer_destination);
 
     var cursor = std.math.add(u32, newclosure_id, 3) catch return Error.ResourceLimit;
+    if (capture_count == 0) {
+        const gc_marker = try self.instruction(cursor);
+        if (gc_marker.command != .check_gc and gc_marker.command != .nop)
+            return Error.UnsupportedControlFlow;
+        try self.requireOperandCount(gc_marker, 0);
+        try self.requireSingleCompilableBlockRange(newclosure_id - 2, cursor);
+        return .{
+            .start = newclosure_id - 2,
+            .finish = cursor,
+            .destination = destination,
+            .child_proto_id = child_proto_id,
+            .capture_count = 0,
+            .capture_ir_start = cursor,
+            .marker_start = cursor + 1,
+            .check_gc = gc_marker.command == .check_gc,
+        };
+    }
     const leading_marker = try self.instruction(cursor);
     if (leading_marker.command == .nop) {
         try self.requireOperandCount(leading_marker, 0);
@@ -510,6 +526,33 @@ pub noinline fn emitStoreSplitTValue(
         try self.tvalueByteOffset(instruction_value, 3)
     else
         0;
+    const reloaded_table_register: ?u32 = if (tag_value == lua_tag_table and source.kind == .instruction and
+        self.plan.isProvenTablePointer(source.value))
+    reload: {
+        const producer_block = self.plan.instructionBlock(source.value) orelse
+            return Error.UnsupportedControlFlow;
+        const consumer_block = self.plan.instructionBlock(instruction_id) orelse
+            return Error.UnsupportedControlFlow;
+        if (producer_block == consumer_block)
+            break :reload null;
+        const register = (try self.loadedPointerRegister(source)) orelse
+            return Error.UnsupportedControlFlow;
+        const predecessors = self.plan.predecessorSlice(consumer_block) orelse
+            return Error.UnsupportedControlFlow;
+        if (predecessors.len != 1 or predecessors[0] != producer_block)
+            return Error.UnsupportedControlFlow;
+        const producer = try self.snapshot.irBlock(self.function, producer_block);
+        var cursor = source.value + 1;
+        while (cursor <= producer.finish) : (cursor += 1)
+            if (try self.storesVmRegister(try self.instruction(cursor), register))
+                return Error.UnsupportedControlFlow;
+        const consumer = try self.snapshot.irBlock(self.function, consumer_block);
+        cursor = consumer.start;
+        while (cursor < instruction_id) : (cursor += 1)
+            if (try self.storesVmRegister(try self.instruction(cursor), register))
+                return Error.UnsupportedControlFlow;
+        break :reload register;
+    } else null;
 
     // A numeric-string builtin argument enters the optimized numeric arm through an
     // AOT-owned coercion.  Numeric consumers use the converted instruction result,
@@ -583,7 +626,12 @@ pub noinline fn emitStoreSplitTValue(
         },
         lua_tag_string, 7, 8, 9, 10, 11, 12 => {
             try self.emitTValueAddress(destination_operand);
-            try self.emitPointerValue(source);
+            if (reloaded_table_register) |register| {
+                try self.body.localGet(self.allocator, self.base_local);
+                try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+            } else {
+                try self.emitPointerValue(source);
+            }
             try self.body.i32Store(self.allocator, 2, value_offset);
         },
         else => return Error.UnsupportedOperand,

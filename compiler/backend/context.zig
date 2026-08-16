@@ -38,6 +38,7 @@ pub const Context = struct {
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
+    newclosure_empty: ?wasm.FunctionRef,
     newclosure_capture: ?wasm.FunctionRef,
     get_upvalue: ?wasm.FunctionRef,
     set_upvalue: ?wasm.FunctionRef,
@@ -92,6 +93,7 @@ pub const Context = struct {
     libm: ?wasm.FunctionRef,
     builtin_type_error: ?wasm.FunctionRef,
     builtin_number: ?wasm.FunctionRef,
+    forn_prepare: ?wasm.FunctionRef,
     buffer_bounds_error: ?wasm.FunctionRef,
     prep_varargs: ?wasm.FunctionRef,
     get_varargs_fixed: ?wasm.FunctionRef,
@@ -106,6 +108,7 @@ pub const Context = struct {
     continuation_local: u32,
     table_index_local: u32,
     call_continuations: []const CallContinuation,
+    continuation_indices: []const u32,
     string_keys: *StringKeyPool,
 
     // core
@@ -236,6 +239,7 @@ pub const Context = struct {
     // memory
     pub const emitCheckDivInt64 = memory.emitCheckDivInt64;
     pub const emitBuiltinTypeError = memory.emitBuiltinTypeError;
+    pub const emitFornPreparation = memory.emitFornPreparation;
     pub const emitCheckTag = memory.emitCheckTag;
     pub const emitInvalidSignedConversion = memory.emitInvalidSignedConversion;
     pub const emitNumToInt = memory.emitNumToInt;
@@ -276,10 +280,7 @@ pub const Context = struct {
     pub const nonnegativeConstant = memory.nonnegativeConstant;
     pub const genericIterationAux = memory.genericIterationAux;
     pub const sameOperand = memory.sameOperand;
-    pub const operandIntConstant = memory.operandIntConstant;
-    pub const compilableBlockContaining = memory.compilableBlockContaining;
     pub const bufferAccessWidth = memory.bufferAccessWidth;
-    pub const bufferIndexOffset = memory.bufferIndexOffset;
     pub const bufferOperationOwnedByRange = memory.bufferOperationOwnedByRange;
     pub const integerCreatePatternAt = memory.integerCreatePatternAt;
     pub const emitIntegerCreate = memory.emitIntegerCreate;
@@ -313,6 +314,7 @@ pub const Context = struct {
     pub const dupTableRegisterForPointer = allocations.dupTableRegisterForPointer;
     pub const literalFieldSetPatternAt = allocations.literalFieldSetPatternAt;
     pub const literalFieldSetPatternContaining = allocations.literalFieldSetPatternContaining;
+    pub const guardedLiteralFieldSetPatternAt = allocations.guardedLiteralFieldSetPatternAt;
     pub const emitLiteralFieldSet = allocations.emitLiteralFieldSet;
     pub const tableInsertAppendPatternAt = allocations.tableInsertAppendPatternAt;
     pub const tableInsertAppendPatternContaining = allocations.tableInsertAppendPatternContaining;
@@ -355,6 +357,7 @@ pub const Context = struct {
     pub const inlineStringGetPatternAt = builtin_patterns.inlineStringGetPatternAt;
     pub const inlineGeneralStringSetPatternAt = builtin_patterns.inlineGeneralStringSetPatternAt;
     pub const inlinePreloadedStringSetPatternAt = builtin_patterns.inlinePreloadedStringSetPatternAt;
+    pub const inlineOwnedStringSetPatternAt = builtin_patterns.inlineOwnedStringSetPatternAt;
     pub const inlineStringSetPatternAt = builtin_patterns.inlineStringSetPatternAt;
     pub const stringTablePattern = builtin_patterns.stringTablePattern;
 
@@ -450,6 +453,7 @@ pub const Context = struct {
     pub const supportsFallback = control.supportsFallback;
     pub const supportsNamecallFallback = control.supportsNamecallFallback;
     pub const supportsOrdinaryCallFallback = control.supportsOrdinaryCallFallback;
+    pub const ordinaryCallFallbackTarget = control.ordinaryCallFallbackTarget;
     pub const isOwnedSemanticTableFallbackBlock = control.isOwnedSemanticTableFallbackBlock;
     pub const isOwnedDynamicLengthFallbackBlock = control.isOwnedDynamicLengthFallbackBlock;
     pub const isBypassedEmissionBlock = control.isBypassedEmissionBlock;
@@ -481,7 +485,11 @@ pub const Context = struct {
     pub const vmString = calls.vmString;
     pub const builtinIdentityMatches = calls.builtinIdentityMatches;
     pub const builtinFallback = calls.builtinFallback;
+    pub const guardFailureBlock = calls.guardFailureBlock;
+    pub const isGuardFailure = calls.isGuardFailure;
+    pub const guardFailureIsBuiltin = calls.guardFailureIsBuiltin;
     pub const emitSingleGlobalImport = calls.emitSingleGlobalImport;
+    pub const emitDecodedGlobalImport = calls.emitDecodedGlobalImport;
     pub const staticRequireTarget = calls.staticRequireTarget;
     pub const emitStaticRequire = calls.emitStaticRequire;
     pub const isTableInsertAppendSafeEnv = calls.isTableInsertAppendSafeEnv;

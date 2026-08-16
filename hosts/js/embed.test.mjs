@@ -24,7 +24,7 @@ try {
   for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
     const result = invoke(instance, number, text, context);
     const protoResult = number % 2 !== 0 ? number * 3 + text.length : number - text.length;
-    const expectedNumber = 15 * number + 49 + text.length + protoResult;
+    const expectedNumber = 15 * number + 123 + text.length + protoResult;
     const expectedText = `${text}:${number + 1}:2/1/11:missing`;
     if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
       throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${expectedNumber}/${expectedText}`);
@@ -36,4 +36,4 @@ try {
 } finally {
   destroyContext(instance, context);
 }
-console.log(`JavaScript embed-v1 compiled one covered multi-module artifact (${first.artifact.length} bytes) and ran three runtime inputs with direct/table/function NAMECALL, mutation, errors, yield, full GC, and coverage`);
+console.log(`JavaScript embed-v1 compiled one covered multi-module artifact (${first.artifact.length} bytes) and ran three runtime inputs with NAMECALL, mutation, guarded builtin slow paths, repeated yield/full-GC continuation, errors, and coverage`);

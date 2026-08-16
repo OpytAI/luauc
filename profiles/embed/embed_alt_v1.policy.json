@@ -16,5 +16,8 @@
     { "role": "invoke", "name": "luauc_embed_v1_invoke", "retain": true },
     { "role": "initialize", "name": "_start", "retain": true }
   ],
-  "retained_exports": []
+  "retained_exports": [
+    { "name": "luauc_embed_v1_last_error", "kind": "function" },
+    { "name": "luauc_embed_v1_last_error_size", "kind": "function" }
+  ]
 }

@@ -7,7 +7,6 @@ const abi = @import("luauc_backend_runtime_abi");
 const Error = model.Error;
 const IntegerCreatePattern = model.IntegerCreatePattern;
 const isBufferBuiltinId = model.isBufferBuiltinId;
-const status_unsupported_type = abi.status_unsupported_type;
 const status_internal_error = abi.status_internal_error;
 const ir_cmd_check_buffer_len = abi.ir_cmd_check_buffer_len;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
@@ -40,7 +39,7 @@ const lua_tag_table = abi.lua_tag_table;
 const lua_tag_userdata = abi.lua_tag_userdata;
 const lua_tag_buffer = abi.lua_tag_buffer;
 const lua_utag_limit = abi.lua_utag_limit;
-const lbf_integer_create = abi.lbf_integer_create;
+const lop_fornprep = abi.lop_fornprep;
 
 pub noinline fn emitCheckDivInt64(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 3);
@@ -64,21 +63,17 @@ pub noinline fn emitCheckDivInt64(self: anytype, instruction_value: snapshot_v1.
     switch (failure.kind) {
         .block => {
             const target_block = try self.snapshot.irBlock(self.function, failure.value);
-            if (target_block.kind == .fallback and !try self.supportsFallback(target_block)) {
-                try self.emitStatusReturn(status_unsupported_type);
-            } else {
-                const target = if (target_block.kind == .fallback)
-                    failure.value
-                else
-                    try self.requireCompiledTarget(failure);
-                try self.body.i32Const(self.allocator, @intCast(target));
-                try self.body.localSet(self.allocator, self.dispatch_local);
-                try self.body.branch(self.allocator, 2);
-            }
+            if (target_block.kind == .fallback and !try self.supportsFallback(target_block))
+                return Error.UnsupportedControlFlow;
+            const target = if (target_block.kind == .fallback)
+                failure.value
+            else
+                try self.requireCompiledTarget(failure);
+            try self.body.i32Const(self.allocator, @intCast(target));
+            try self.body.localSet(self.allocator, self.dispatch_local);
+            try self.body.branch(self.allocator, 2);
         },
-        // Strict AOT has no bytecode VM exit to resume yet. Match the existing CHECK_TAG
-        // boundary until the WP5 error helper can preserve the precise Luau error identity.
-        .vm_exit => try self.emitStatusReturn(status_unsupported_type),
+        .vm_exit => return Error.UnsupportedControlFlow,
         .undef => try self.emitStatusReturn(status_internal_error),
         else => return Error.InvalidOperandType,
     }
@@ -122,6 +117,38 @@ pub noinline fn emitBuiltinTypeError(
     try self.emitInternalErrorIf();
     return true;
 }
+pub noinline fn emitFornPreparation(
+    self: anytype,
+    instruction_value: snapshot_v1.IrInstruction,
+    pc: u32,
+) Error!bool {
+    if (pc >= self.proto.code_count)
+        return false;
+    const word = try self.snapshot.bytecodeWord(self.proto, pc);
+    if (@as(u8, @truncate(word)) != lop_fornprep)
+        return false;
+
+    const checked = try self.operand(instruction_value, 0);
+    const expected = try self.operand(instruction_value, 1);
+    if (checked.kind != .instruction or expected.kind != .constant or
+        (try self.constant(expected.value)).tagValue() != lua_tag_number)
+        return false;
+    const load = try self.instruction(checked.value);
+    if (load.command != .load_tag or load.operand_count != 1)
+        return false;
+    const source_register = try self.vmRegisterIndex(try self.operand(load, 0));
+    const base_register = (word >> 8) & 0xff;
+    if (base_register > self.proto.max_stack_size or self.proto.max_stack_size - base_register < 3 or
+        source_register < base_register or source_register - base_register >= 3)
+        return false;
+
+    try self.emitPcLocation(pc);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(base_register));
+    try self.body.call(self.allocator, self.forn_prepare orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    return true;
+}
 pub noinline fn emitCheckTag(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 3);
     try self.emitI32Value(try self.operand(instruction_value, 0));
@@ -132,24 +159,20 @@ pub noinline fn emitCheckTag(self: anytype, instruction_value: snapshot_v1.IrIns
     switch (failure.kind) {
         .block => {
             const target_block = try self.snapshot.irBlock(self.function, failure.value);
-            if (target_block.kind == .fallback and !try self.supportsFallback(target_block)) {
-                // Preserve the existing numeric tier for fallback shapes that have not been
-                // normalized yet. A guard hit fails through the explicit status boundary; the
-                // unsupported fallback instructions are never emitted or accidentally entered.
-                try self.emitStatusReturn(status_unsupported_type);
-            } else {
-                const target = if (target_block.kind == .fallback)
-                    failure.value
-                else
-                    try self.requireCompiledTarget(failure);
-                try self.body.i32Const(self.allocator, @intCast(target));
-                try self.body.localSet(self.allocator, self.dispatch_local);
-                // CHECK_TAG's conditional is nested inside the selected-block conditional.
-                try self.body.branch(self.allocator, 2);
-            }
+            if (target_block.kind == .fallback and !try self.supportsFallback(target_block))
+                return Error.UnsupportedControlFlow;
+            const target = if (target_block.kind == .fallback)
+                failure.value
+            else
+                try self.requireCompiledTarget(failure);
+            try self.body.i32Const(self.allocator, @intCast(target));
+            try self.body.localSet(self.allocator, self.dispatch_local);
+            // CHECK_TAG's conditional is nested inside the selected-block conditional.
+            try self.body.branch(self.allocator, 2);
         },
-        .vm_exit => if (!try self.emitBuiltinTypeError(instruction_value, failure.value))
-            try self.emitStatusReturn(status_unsupported_type),
+        .vm_exit => if (!try self.emitFornPreparation(instruction_value, failure.value) and
+            !try self.emitBuiltinTypeError(instruction_value, failure.value))
+            return Error.UnsupportedControlFlow,
         .undef => try self.emitStatusReturn(status_internal_error),
         else => return Error.InvalidOperandType,
     }
@@ -487,7 +510,7 @@ pub noinline fn emitGetHashNodeAddr(
         self.slots[table.value].shape != .pointer)
         return Error.InvalidOperandType;
     try self.body.localGet(self.allocator, 0);
-    try self.emitPointerValue(table);
+    try self.body.i32Const(self.allocator, @intCast(family.source));
     try self.emitI32Value(try self.operand(instruction_value, 1));
     try self.body.call(self.allocator, self.hash_node_addr orelse return Error.UnsupportedCommand);
     try self.emitInstructionResultSet(instruction_id);
@@ -630,20 +653,18 @@ pub noinline fn emitGuardFailure(self: anytype, failure: snapshot_v1.IrOperand) 
     switch (failure.kind) {
         .block => {
             const target_block = try self.snapshot.irBlock(self.function, failure.value);
-            if (target_block.kind == .fallback and !try self.supportsFallback(target_block)) {
-                try self.emitStatusReturn(status_unsupported_type);
-            } else {
-                const target = if (target_block.kind == .fallback)
-                    failure.value
-                else
-                    try self.requireCompiledTarget(failure);
-                try self.body.i32Const(self.allocator, @intCast(target));
-                try self.body.localSet(self.allocator, self.dispatch_local);
-                // The guard conditional is nested inside the selected-block conditional.
-                try self.body.branch(self.allocator, 2);
-            }
+            if (target_block.kind == .fallback and !try self.supportsFallback(target_block))
+                return Error.UnsupportedControlFlow;
+            const target = if (target_block.kind == .fallback)
+                failure.value
+            else
+                try self.requireCompiledTarget(failure);
+            try self.body.i32Const(self.allocator, @intCast(target));
+            try self.body.localSet(self.allocator, self.dispatch_local);
+            // The guard conditional is nested inside the selected-block conditional.
+            try self.body.branch(self.allocator, 2);
         },
-        .vm_exit => try self.emitStatusReturn(status_unsupported_type),
+        .vm_exit => return Error.UnsupportedControlFlow,
         .undef => try self.emitStatusReturn(status_internal_error),
         else => return Error.InvalidOperandType,
     }
@@ -731,21 +752,6 @@ pub fn genericIterationAux(self: anytype, operand_value: snapshot_v1.IrOperand) 
 pub fn sameOperand(_: anytype, lhs: snapshot_v1.IrOperand, rhs: snapshot_v1.IrOperand) bool {
     return lhs.kind == rhs.kind and lhs.value == rhs.value;
 }
-pub fn operandIntConstant(self: anytype, operand_value: snapshot_v1.IrOperand) Error!?i32 {
-    if (operand_value.kind != .constant)
-        return null;
-    return (try self.constant(operand_value.value)).intValue();
-}
-pub fn compilableBlockContaining(self: anytype, instruction_id: u32) Error!?snapshot_v1.IrBlock {
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (block.kind.isCompilable() and !block.isEmpty() and
-            instruction_id >= block.start and instruction_id <= block.finish)
-            return block;
-    }
-    return null;
-}
 pub fn bufferAccessWidth(_: anytype, command: snapshot_v1.IrCommand) ?u32 {
     return switch (command) {
         ir_cmd_buffer_readi8, ir_cmd_buffer_readu8, ir_cmd_buffer_writei8 => 1,
@@ -763,71 +769,20 @@ pub fn bufferAccessWidth(_: anytype, command: snapshot_v1.IrCommand) ?u32 {
         else => null,
     };
 }
-pub fn bufferIndexOffset(
-    self: anytype,
-    base: snapshot_v1.IrOperand,
-    index: snapshot_v1.IrOperand,
-) Error!?i32 {
-    if (self.sameOperand(base, index))
-        return 0;
-    if (try self.operandIntConstant(base)) |base_value| {
-        if (try self.operandIntConstant(index)) |index_value|
-            return std.math.sub(i32, index_value, base_value) catch null;
-    }
-    if (index.kind != .instruction or index.value >= self.function.instruction_count)
-        return null;
-    const arithmetic = try self.instruction(index.value);
-    if (arithmetic.operand_count != 2 or
-        (arithmetic.command != .add_int and arithmetic.command != .sub_int))
-        return null;
-    const lhs = try self.operand(arithmetic, 0);
-    const rhs = try self.operand(arithmetic, 1);
-    if (self.sameOperand(lhs, base)) {
-        const displacement = (try self.operandIntConstant(rhs)) orelse return null;
-        return if (arithmetic.command == .add_int)
-            displacement
-        else
-            std.math.sub(i32, 0, displacement) catch null;
-    }
-    if (arithmetic.command == .add_int and self.sameOperand(rhs, base))
-        return (try self.operandIntConstant(lhs)) orelse null;
-    return null;
-}
 pub fn bufferOperationOwnedByRange(
     self: anytype,
     instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!bool {
-    const width = self.bufferAccessWidth(instruction_value.command) orelse return false;
+    _ = self.bufferAccessWidth(instruction_value.command) orelse return false;
     if (instruction_value.operand_count < 3)
         return false;
     const pointer = try self.operand(instruction_value, 0);
-    const index = try self.operand(instruction_value, 1);
     const tag = try self.operand(instruction_value, instruction_value.operand_count - 1);
     if (tag.kind != .constant or (try self.constant(tag.value)).tagValue() != lua_tag_buffer or
         try self.loadedPointerRegister(pointer) == null)
         return false;
-
-    const block = (try self.compilableBlockContaining(instruction_id)) orelse return false;
-    var cursor = instruction_id;
-    while (cursor > block.start) {
-        cursor -= 1;
-        const candidate = try self.instruction(cursor);
-        if (candidate.command != ir_cmd_check_buffer_len or candidate.operand_count != 6)
-            continue;
-        if (!self.sameOperand(pointer, try self.operand(candidate, 0)))
-            continue;
-        const offset = (try self.bufferIndexOffset(try self.operand(candidate, 1), index)) orelse
-            continue;
-        const min_offset = (try self.operandIntConstant(try self.operand(candidate, 2))) orelse
-            continue;
-        const max_offset = (try self.operandIntConstant(try self.operand(candidate, 3))) orelse
-            continue;
-        const end_offset = std.math.add(i64, @as(i64, offset), @as(i64, width)) catch continue;
-        if (offset >= min_offset and end_offset <= max_offset)
-            return true;
-    }
-    return false;
+    return self.plan.isGuardedBufferOperation(instruction_id);
 }
 pub noinline fn integerCreatePatternAt(self: anytype, check_id: u32) Error!?IntegerCreatePattern {
     if (check_id < 5 or check_id + 2 >= self.function.instruction_count)
@@ -868,7 +823,6 @@ pub noinline fn integerCreatePatternAt(self: anytype, check_id: u32) Error!?Inte
     if (source.kind != .vm_reg or !self.sameOperand(source, loaded) or
         checked.kind != .instruction or checked.value != check_id - 5 or
         expected.kind != .constant or (try self.constant(expected.value)).tagValue() != lua_tag_number or
-        type_exit.kind != .vm_exit or range_exit.kind != .vm_exit or type_exit.value != range_exit.value or
         converted.kind != .instruction or converted.value != check_id - 3 or
         rounded.kind != .instruction or rounded.value != check_id - 2 or
         lhs.kind != .instruction or lhs.value != check_id - 1 or
@@ -878,8 +832,8 @@ pub noinline fn integerCreatePatternAt(self: anytype, check_id: u32) Error!?Inte
         stored.kind != .instruction or stored.value != check_id - 2 or
         tag.kind != .constant or (try self.constant(tag.value)).tagValue() != lua_tag_integer)
         return null;
-    const fallback = (try self.builtinFallback(type_exit.value)) orelse return null;
-    if (fallback.id != lbf_integer_create)
+    if (!self.sameOperand(type_exit, range_exit) or
+        !try self.guardFailureIsBuiltin(type_exit, "integer", "create"))
         return null;
     return .{
         .check = check_id,

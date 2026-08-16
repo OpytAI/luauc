@@ -671,7 +671,8 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
             if (guarded_table.kind != .vm_reg or guarded_table.value != table or
                 checked_tag.kind != .instruction or checked_tag.value != publication_id + 2 or
                 required_tag.kind != .constant or (try self.constant(required_tag.value)).tagValue() != lua_tag_table or
-                exit.kind != .vm_exit or loaded_table.kind != .vm_reg or loaded_table.value != table or
+                ((exit.kind != .vm_exit) and (exit.kind != .block or exit.value != fallback.value)) or
+                loaded_table.kind != .vm_reg or loaded_table.value != table or
                 pointer.value != publication_id + 4)
                 return null;
         }
@@ -699,6 +700,39 @@ pub noinline fn literalFieldSetPatternContaining(self: anytype, instruction_id: 
                 if (instruction_id <= pattern.finish) return pattern;
     }
     return null;
+}
+pub noinline fn guardedLiteralFieldSetPatternAt(self: anytype, start: u32) Error!?LiteralFieldSetPattern {
+    if (start + 3 >= self.function.instruction_count)
+        return null;
+    const load_tag = try self.instruction(start);
+    const check_tag = try self.instruction(start + 1);
+    const load_pointer = try self.instruction(start + 2);
+    if (load_tag.command != .load_tag or load_tag.operand_count != 1 or
+        check_tag.command != .check_tag or check_tag.operand_count != 3 or
+        load_pointer.command != .load_pointer or load_pointer.operand_count != 1 or
+        (try self.instruction(start + 3)).command != ir_cmd_get_slot_node_addr)
+        return null;
+
+    const pattern = (try self.literalFieldSetPatternAt(start + 3)) orelse return null;
+    const table = try self.operand(load_tag, 0);
+    const checked = try self.operand(check_tag, 0);
+    const tag = try self.operand(check_tag, 1);
+    const guard_fallback = try self.operand(check_tag, 2);
+    const pointer_table = try self.operand(load_pointer, 0);
+    const slot = try self.instruction(pattern.start);
+    const match = try self.instruction(pattern.start + 1);
+    const slot_pointer = try self.operand(slot, 0);
+    const semantic_fallback = try self.operand(match, 2);
+    if (table.kind != .vm_reg or table.value != pattern.table or
+        checked.kind != .instruction or checked.value != start or
+        tag.kind != .constant or (try self.constant(tag.value)).tagValue() != lua_tag_table or
+        guard_fallback.kind != .block or semantic_fallback.kind != .block or
+        guard_fallback.value != semantic_fallback.value or
+        pointer_table.kind != .vm_reg or pointer_table.value != table.value or
+        slot_pointer.kind != .instruction or slot_pointer.value != start + 2)
+        return null;
+    self.requireSingleCompilableBlockRange(start, pattern.finish) catch return null;
+    return pattern;
 }
 pub noinline fn emitLiteralFieldSet(self: anytype, pattern: LiteralFieldSetPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -792,25 +826,36 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
         const readonly = try self.instruction(start);
         if (readonly.operand_count != 2 or
             (try self.operand(readonly, 0)).kind != .instruction or
-            (try self.operand(readonly, 0)).value != length_pointer.value or
-            (try self.operand(readonly, 1)).kind != .vm_exit)
+            (try self.operand(readonly, 0)).value != length_pointer.value)
+            return null;
+        const failure = try self.operand(readonly, 1);
+        if (!try self.guardFailureIsBuiltin(failure, "table", "insert"))
             return null;
         if (number) {
-            const exit = try self.operand(readonly, 1);
-            if (exit.value < 2)
-                return null;
-            const fast_pc = exit.value - 2;
-            const fast_word = try self.snapshot.bytecodeWord(self.proto, fast_pc);
-            if (@as(u8, @truncate(fast_word)) != lop_fastcall2k or
-                ((fast_word >> 8) & 0xff) != 52 or ((fast_word >> 16) & 0xff) != table_register)
-                return null;
-            const call_pc = std.math.add(u32, fast_pc, ((fast_word >> 24) & 0xff) + 1) catch return null;
-            if (call_pc >= self.proto.code_count)
-                return null;
-            const call_word = try self.snapshot.bytecodeWord(self.proto, call_pc);
-            if (@as(u8, @truncate(call_word)) != lop_call or ((call_word >> 16) & 0xff) != 3)
-                return null;
-            source = ((call_word >> 8) & 0xff) + 2;
+            if (failure.kind == .block) {
+                const fallback_block = (try self.guardFailureBlock(failure)) orelse return null;
+                const call = try self.instruction(fallback_block.finish - 1);
+                const function_register = self.vmRegisterIndex(try self.operand(call, 0)) catch return null;
+                if ((self.intConstant(try self.operand(call, 1)) catch return null) != 2 or
+                    (self.intConstant(try self.operand(call, 2)) catch return null) != 0)
+                    return null;
+                source = std.math.add(u32, function_register, 2) catch return null;
+            } else {
+                if (failure.value < 2)
+                    return null;
+                const fast_pc = failure.value - 2;
+                const fast_word = try self.snapshot.bytecodeWord(self.proto, fast_pc);
+                if (@as(u8, @truncate(fast_word)) != lop_fastcall2k or
+                    ((fast_word >> 8) & 0xff) != 52 or ((fast_word >> 16) & 0xff) != table_register)
+                    return null;
+                const call_pc = std.math.add(u32, fast_pc, ((fast_word >> 24) & 0xff) + 1) catch return null;
+                if (call_pc >= self.proto.code_count)
+                    return null;
+                const call_word = try self.snapshot.bytecodeWord(self.proto, call_pc);
+                if (@as(u8, @truncate(call_word)) != lop_call or ((call_word >> 16) & 0xff) != 3)
+                    return null;
+                source = ((call_word >> 8) & 0xff) + 2;
+            }
             if (source >= self.proto.max_stack_size)
                 return null;
         }

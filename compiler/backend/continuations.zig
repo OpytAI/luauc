@@ -312,12 +312,15 @@ pub fn validateGenericIterationContinuationRegion(
 pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) Error![]CallContinuation {
     var continuations: std.ArrayList(CallContinuation) = .empty;
     errdefer continuations.deinit(allocator);
+    var ordinary_target_safety = std.AutoHashMap(u32, bool).init(allocator);
+    defer ordinary_target_safety.deinit();
     var block_id: u32 = 0;
     while (block_id < context.function.block_count) : (block_id += 1) {
         const block = try context.snapshot.irBlock(context.function, block_id);
         if (block.isEmpty() or (!block.kind.isCompilable() and block.kind != .fallback))
             continue;
-        if (try context.isBypassedEmissionBlock(block_id, block))
+        const ordinary_fallback_target = try context.ordinaryCallFallbackTarget(block);
+        if (ordinary_fallback_target == null and try context.isBypassedEmissionBlock(block_id, block))
             continue;
         var instruction_id = block.start;
         while (instruction_id <= block.finish) : (instruction_id += 1) {
@@ -350,14 +353,26 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
                 const suffix_start = std.math.add(u32, instruction_id, 1) catch return Error.ResourceLimit;
                 if (suffix_start > block.finish)
                     return continuationFailure(context, instruction_id);
-                const tail_valid = try validateStringTableContinuationTail(
-                    allocator,
-                    context,
-                    block,
-                    suffix_start,
-                );
-                if (!(tail_valid orelse
-                    try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish)))
+                const valid = if (ordinary_fallback_target) |target|
+                    try validateOrdinaryFallbackContinuation(
+                        allocator,
+                        context,
+                        block,
+                        suffix_start,
+                        target,
+                        &ordinary_target_safety,
+                    )
+                else valid: {
+                    const tail_valid = try validateStringTableContinuationTail(
+                        allocator,
+                        context,
+                        block,
+                        suffix_start,
+                    );
+                    break :valid tail_valid orelse
+                        try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish);
+                };
+                if (!valid)
                     return continuationFailure(context, instruction_id);
                 break :blk .{ .call_suffix = .{
                     .block_id = block_id,
@@ -368,14 +383,28 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
                 if (instruction_id == block.start)
                     break :blk .{ .interrupt_block_retry = .{ .block_id = block_id } };
                 const suffix_start = std.math.add(u32, instruction_id, 1) catch return Error.ResourceLimit;
-                const tail_valid = try validateStringTableContinuationTail(
-                    allocator,
-                    context,
-                    block,
-                    suffix_start,
-                );
-                if (suffix_start > block.finish or !(tail_valid orelse
-                    try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish)))
+                if (suffix_start > block.finish)
+                    return continuationFailure(context, instruction_id);
+                const valid = if (ordinary_fallback_target) |target|
+                    try validateOrdinaryFallbackContinuation(
+                        allocator,
+                        context,
+                        block,
+                        suffix_start,
+                        target,
+                        &ordinary_target_safety,
+                    )
+                else valid: {
+                    const tail_valid = try validateStringTableContinuationTail(
+                        allocator,
+                        context,
+                        block,
+                        suffix_start,
+                    );
+                    break :valid tail_valid orelse
+                        try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish);
+                };
+                if (!valid)
                     return continuationFailure(context, instruction_id);
                 break :blk .{ .interrupt_suffix = .{
                     .block_id = block_id,
@@ -406,6 +435,45 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
         }
     }
     return continuations.toOwnedSlice(allocator);
+}
+
+fn validateOrdinaryFallbackContinuation(
+    allocator: std.mem.Allocator,
+    context: Context,
+    block: snapshot_v1.IrBlock,
+    suffix_start: u32,
+    target: u32,
+    target_safety: *std.AutoHashMap(u32, bool),
+) Error!bool {
+    if (suffix_start > block.finish)
+        return false;
+    var instruction_id = suffix_start;
+    while (instruction_id <= block.finish) : (instruction_id += 1) {
+        const instruction_value = try context.instruction(instruction_id);
+        var operand_id: u32 = 0;
+        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
+            const operand_value = try context.operand(instruction_value, operand_id);
+            if (operand_value.kind == .instruction and
+                (operand_value.value < suffix_start or operand_value.value >= instruction_id))
+                return false;
+            if (operand_value.kind == .block and operand_value.value != target)
+                return false;
+        }
+    }
+    if (context.plan.isResumeSafeBlock(target))
+        return true;
+    if (target_safety.get(target)) |safe|
+        return safe;
+    const target_block = try context.snapshot.irBlock(context.function, target);
+    const safe = try validateContinuationRegion(
+        allocator,
+        context,
+        target,
+        target_block.start,
+        target_block.finish,
+    );
+    try target_safety.put(target, safe);
+    return safe;
 }
 
 fn continuationFailure(context: Context, instruction_id: u32) Error {

@@ -153,6 +153,7 @@ fn lowerFunction(
         .do_arith = imports.do_arith,
         .compare_any = imports.compare_any,
         .dupclosure = imports.dupclosure,
+        .newclosure_empty = imports.newclosure_empty,
         .newclosure_capture = imports.newclosure_capture,
         .get_upvalue = imports.get_upvalue,
         .set_upvalue = imports.set_upvalue,
@@ -206,6 +207,7 @@ fn lowerFunction(
         .type_name = imports.type_name,
         .builtin_type_error = imports.builtin_type_error,
         .builtin_number = imports.builtin_number,
+        .forn_prepare = imports.forn_prepare,
         .buffer_bounds_error = imports.buffer_bounds_error,
         .libm = imports.libm,
         .prep_varargs = imports.prep_varargs,
@@ -221,6 +223,7 @@ fn lowerFunction(
         .continuation_local = 5,
         .table_index_local = 6,
         .call_continuations = &.{},
+        .continuation_indices = &.{},
         .string_keys = string_keys,
     };
     context.classifyBuiltinNumberLoads() catch |err| {
@@ -233,6 +236,17 @@ fn lowerFunction(
     };
     defer allocator.free(call_continuations);
     context.call_continuations = call_continuations;
+    const continuation_indices = try allocator.alloc(u32, function.instruction_count);
+    defer allocator.free(continuation_indices);
+    @memset(continuation_indices, snapshot_v1.no_id);
+    for (call_continuations, 0..) |continuation, index| {
+        if (continuation.instruction_id >= continuation_indices.len or
+            continuation_indices[continuation.instruction_id] != snapshot_v1.no_id)
+            return Error.UnsupportedControlFlow;
+        continuation_indices[continuation.instruction_id] = std.math.cast(u32, index) orelse
+            return Error.ResourceLimit;
+    }
+    context.continuation_indices = continuation_indices;
     if (call_continuations.len == 0 and context.exchange_continuation != null)
         context.exchange_continuation = null;
     if (call_continuations.len != 0 and context.exchange_continuation == null)
@@ -275,10 +289,13 @@ fn lowerFunction(
     block_id = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        const bypassed = context.isBypassedEmissionBlock(block_id, block) catch |err| {
-            diagnostics.recordBlock(@errorName(err), block_id);
-            return err;
-        };
+        const bypassed = if (block.kind == .fallback and try context.supportsOrdinaryCallFallback(block))
+            false
+        else
+            context.isBypassedEmissionBlock(block_id, block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            };
         if (block.kind.isCompilable() and !block.isEmpty() and !bypassed)
             context.emitBlock(block_id, block) catch |err| {
                 diagnostics.recordBlock(@errorName(err), block_id);

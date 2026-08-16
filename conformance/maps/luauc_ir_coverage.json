@@ -616,8 +616,12 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3292; CodeGen/src/IrLoweringA64.cpp:698",
-      "tests": [],
-      "status": "partial_vm_exit_and_error_identity"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "SEXTI8_INT",
@@ -2311,7 +2315,10 @@
       "value": 131,
       "class": "guard_slowpath",
       "wasm_features": [],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_forn_prepare"
+      ],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
@@ -2324,9 +2331,11 @@
         "conformance:luauc_arithmetic_slow_path_rejoins_compiled_code",
         "conformance:luauc_compiled_proto_graph_calls_rejoin",
         "//compiler/backend:scalar_breadth_object_build_test",
-        "conformance:luauc_scalar_arithmetic_and_branch_breadth_matches_interpreter"
+        "conformance:luauc_scalar_arithmetic_and_branch_breadth_matches_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_numeric_fallback_rejoin_and_vm_exit"
+      "status": "implemented"
     },
     {
       "command": "CHECK_TRUTHY",
@@ -2340,8 +2349,12 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2270; CodeGen/src/IrLoweringA64.cpp:2328",
-      "tests": [],
-      "status": "partial_vm_exit_slowpath_boundary"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "CHECK_READONLY",
@@ -2437,9 +2450,11 @@
         "//compiler/backend:table_clone_append_package_object_build_test",
         "conformance:luauc_table_template_clone_and_append_matches_interpreter",
         "//compiler/backend:protected_execution_package_object_build_test",
-        "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt"
+        "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_literal_static_require_exact_fast_builtin_plain_table_insert_append_or_dynamic_global_import_guards"
+      "status": "implemented"
     },
     {
       "command": "CHECK_ARRAY_SIZE",
@@ -2578,8 +2593,12 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2578; CodeGen/src/IrLoweringA64.cpp:2616",
-      "tests": [],
-      "status": "partial_vm_exit_slowpath_boundary"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "CHECK_CMP_INT",
@@ -2593,8 +2612,12 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2592; CodeGen/src/IrLoweringA64.cpp:2630",
-      "tests": [],
-      "status": "partial_vm_exit_slowpath_boundary"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "CHECK_CMP_INT64",
@@ -2608,8 +2631,12 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3319; CodeGen/src/IrLoweringA64.cpp:2659",
-      "tests": [],
-      "status": "partial_vm_exit_slowpath_boundary"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "INTERRUPT",
@@ -2639,9 +2666,11 @@
       "class": "gc_protocol",
       "wasm_features": [],
       "runtime_symbols": [
+        "luauc_runtime_v1_newclosure_empty",
         "luauc_runtime_v1_newclosure_capture",
         "luauc_runtime_v1_concat",
         "luauc_runtime_v1_new_table",
+        "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_dup_table",
         "luauc_runtime_v1_check_gc"
       ],
@@ -2664,9 +2693,11 @@
         "//compiler/backend:table_clone_append_package_object_build_test",
         "conformance:luauc_table_template_clone_and_append_matches_interpreter",
         "//compiler/backend:iteration_object_lifecycle_package_object_build_test",
-        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata"
+        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_marker_timing_for_closure_concat_table_allocation_template_and_natural_deferred_groups"
+      "status": "implemented"
     },
     {
       "command": "BARRIER_OBJ",

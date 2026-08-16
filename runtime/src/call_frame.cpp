@@ -24,6 +24,7 @@
 #include <string.h>
 
 static_assert(LUAUC_RUNTIME_V1_MULTRET == LUA_MULTRET, "Luau MULTRET sentinel drift");
+static_assert(sizeof(TValue) == 16, "strict AOT TValue layout mismatch");
 
 static constexpr uint32_t AOT_FASTCALL_NO_OPERAND = UINT32_MAX;
 static constexpr uint64_t AOT_COVERAGE_MAX_HITS = (UINT64_C(1) << 23) - 1;
@@ -936,6 +937,16 @@ extern "C" uint32_t luauc_runtime_v1_check_safe_env(lua_State *L) {
     return environment->safeenv ? LUAUC_RUNTIME_V1_OK : LUAUC_RUNTIME_V1_UNSUPPORTED_TYPE;
 }
 
+extern "C" void luauc_runtime_v1_forn_prepare(lua_State *L, uint32_t baseRegister) {
+    Proto *proto = activeAotFrameProto(L, "numeric loop preparation");
+    if (baseRegister > proto->maxstacksize || proto->maxstacksize - baseRegister < 3 ||
+        L->base + baseRegister + 3 > L->top)
+        luaG_runerror(L, "strict AOT numeric loop preparation exceeds the live frame");
+
+    TValue *loop = L->base + baseRegister;
+    luaV_prepareFORN(L, loop, loop + 1, loop + 2);
+}
+
 extern "C" int32_t luauc_runtime_v1_fastcall(lua_State *L, uint32_t builtinId,
                                            uint32_t destinationRegister, uint32_t sourceRegister,
                                            uint32_t argumentTwo, uint32_t argumentThree,
@@ -1539,6 +1550,32 @@ extern "C" void luauc_runtime_v1_dupclosure(lua_State *L, uint32_t destinationRe
         L->top = L->base + destinationRegister + 1;
 }
 
+extern "C" void luauc_runtime_v1_newclosure_empty(lua_State *L, uint32_t destinationRegister,
+                                                 uint32_t childProtoId, uint32_t checkGc) {
+    if (!L || !L->ci || !isLua(L->ci))
+        luaG_runerror(L, "strict AOT NEWCLOSURE entered without an active Luau frame");
+
+    Closure *parentClosure = clvalue(L->ci->func);
+    Proto *parent = parentClosure->l.p;
+    if (destinationRegister >= parent->maxstacksize)
+        luaG_runerror(L, "strict AOT NEWCLOSURE destination is outside the compiled frame");
+    if (checkGc > 1)
+        luaG_runerror(L, "strict AOT NEWCLOSURE rejected invalid GC marker %u", checkGc);
+
+    Proto *child = findDirectAotChild(parent, childProtoId);
+    if (!child)
+        luaG_runerror(L, "strict AOT NEWCLOSURE rejected non-child Proto %u", childProtoId);
+    if (child->nups != 0)
+        luaG_runerror(L, "strict AOT empty NEWCLOSURE received captured upvalues");
+
+    Closure *closure = luaF_newLclosure(L, 0, parentClosure->env, child);
+    setclvalue(L, L->base + destinationRegister, closure);
+    if (L->top <= L->base + destinationRegister)
+        L->top = L->base + destinationRegister + 1;
+    if (checkGc != 0)
+        luaC_checkGC(L);
+}
+
 extern "C" void luauc_runtime_v1_newclosure_capture(lua_State *L, uint32_t destinationRegister,
                                                   uint32_t childProtoId, uint32_t captureIndex,
                                                   uint32_t captureKind, uint32_t sourceIndex,
@@ -1885,12 +1922,10 @@ extern "C" void luauc_runtime_v1_barrier_table_forward(lua_State *L, void *table
     luaC_barriert(L, table, source);
 }
 
-extern "C" void *luauc_runtime_v1_hash_node_addr(lua_State *L, void *tablePointer,
+extern "C" void *luauc_runtime_v1_hash_node_addr(lua_State *L, uint32_t tableRegister,
                                                  uint32_t hash) {
-    activeAotFrameProto(L, "hash node address");
-    LuaTable *table = static_cast<LuaTable *>(tablePointer);
-    if (!table || table->tt != LUA_TTABLE)
-        luaG_runerror(L, "strict AOT hash node address lost table provenance");
+    Proto *proto = activeAotFrameProto(L, "hash node address");
+    LuaTable *table = activeAotTable(L, proto, tableRegister, false, "hash node address");
     return gnode(table, hash & (sizenode(table) - 1));
 }
 

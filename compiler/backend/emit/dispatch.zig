@@ -269,8 +269,6 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .check_cmp_int64 => try self.emitCheckCompareInt64(instruction_value),
         .check_gc => {
             if (try self.newClosurePatternContaining(instruction_id) == null) {
-                if (!try self.checkGcClosesDeferredTableAllocation(instruction_id))
-                    return Error.UnsupportedControlFlow;
                 try self.body.localGet(self.allocator, 0);
                 try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
                 try self.emitReloadBase();
@@ -498,6 +496,11 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             instruction_id = operation.finish;
             continue;
         }
+        if (try self.guardedLiteralFieldSetPatternAt(instruction_id)) |pattern| {
+            try self.emitLiteralFieldSet(pattern);
+            instruction_id = pattern.finish;
+            continue;
+        }
         if (dynamic_length) |pattern| {
             if (instruction_id == pattern.start) {
                 try self.emitDynamicLength(pattern);
@@ -529,6 +532,10 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         return self.emitConstantArithmeticBlock(block_id, block, pattern);
     if (try self.powPattern(block)) |pattern|
         return self.emitPowBlock(block_id, block, pattern);
+    if (try self.plainTableNamecallPattern(block)) |pattern|
+        return self.emitPlainTableNamecallBlock(block_id, block, pattern);
+    if (try self.supportsOrdinaryCallFallback(block))
+        return emitDispatchBlock(self, block_id, block);
     if (try self.isFastcallFallback(block_id, block))
         return self.emitFastcallFallbackBlock(block_id, block);
     if (try self.specializedIpairsPattern(block)) |pattern|
@@ -554,6 +561,9 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
     if (block.kind == .fallback and !try self.supportsFallback(block))
         return Error.UnsupportedControlFlow;
 
+    return emitDispatchBlock(self, block_id, block);
+}
+fn emitDispatchBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
     try self.body.localGet(self.allocator, self.dispatch_local);
     try self.body.i32Const(self.allocator, @intCast(block_id));
     try self.body.i32Eq(self.allocator);

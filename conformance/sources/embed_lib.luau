@@ -1,4 +1,47 @@
 return function(value, text)
+    local function guardBreadth(input)
+        local first = integer.create(math.floor(math.abs(input)) + 18)
+        local three = integer.create(3)
+        local four = integer.create(4)
+        local zero = integer.create(0)
+        local field = math.floor(math.abs(input)) % 8
+
+        assert(integer.tonumber(integer.div(first, three)) == math.floor(integer.tonumber(first) / 3))
+        assert(integer.tonumber(integer.extract(first, zero, four)) == bit32.extract(integer.tonumber(first), 0, 4))
+        assert(integer.tonumber(integer.clamp(first, integer.create(2), integer.create(5))) == 5)
+        assert(bit32.extract(integer.tonumber(first), field, 4) >= 0)
+
+        local failures = 0
+        failures += pcall(function()
+            integer.div(first, zero)
+        end) and 0 or 1
+        failures += pcall(function()
+            integer.extract(first, zero, integer.create(65))
+        end) and 0 or 2
+        failures += pcall(function()
+            bit32.extract(integer.tonumber(first), 40, 1)
+        end) and 0 or 4
+        failures += pcall(function()
+            integer.add(first, {})
+        end) and 0 or 8
+        failures += pcall(function()
+            assert(false, "guard assertion")
+        end) and 0 or 16
+        assert(failures == 31)
+        return failures
+    end
+
+    local function unsafeAssert(input)
+        return assert(input, "unsafe assertion")
+    end
+    local originalEnvironment = getfenv(unsafeAssert)
+    setfenv(unsafeAssert, setmetatable({
+        assert = function(input)
+            coroutine.yield("gc-boundary")
+            return input and 41 or 43
+        end,
+    }, { __index = originalEnvironment }))
+
     local function dynamicRoundtrip(object, key)
         local current = object[key]
         object[key] = current
@@ -97,6 +140,7 @@ return function(value, text)
         end,
     })
     local functionResult = callStep(functionReceiver, value + 2)
+    local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
     local missingOk, missingMessage = pcall(function()
@@ -118,6 +162,7 @@ return function(value, text)
 
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
+            + guardResult
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

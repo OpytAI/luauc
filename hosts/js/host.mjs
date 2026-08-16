@@ -268,7 +268,14 @@ export function instantiateArtifact(artifact, namespace = "luauc_embed_v1") {
 
 export function createContext(instance) {
   const context = instance.exports.luauc_embed_v1_context_create();
-  if (!context) throw new Error("embed-v1 context creation failed");
+  if (!context) {
+    const pointer = instance.exports.luauc_embed_v1_last_error?.() ?? 0;
+    const size = instance.exports.luauc_embed_v1_last_error_size?.() ?? 0;
+    const detail = pointer && size
+      ? new TextDecoder().decode(new Uint8Array(instance.exports.memory.buffer, pointer, size))
+      : "unknown initialization failure";
+    throw new Error(`embed-v1 context creation failed: ${detail}`);
+  }
   return context;
 }
 

@@ -215,6 +215,7 @@ function snapshotSection(snapshot, wantedKind) {
 
 function snapshotShape(snapshot) {
   const protos = snapshotSection(snapshot, 3);
+  const bytecode = snapshotSection(snapshot, 5);
   const lineinfo = snapshotSection(snapshot, 11);
   const abslineinfo = snapshotSection(snapshot, 12);
   const functions = snapshotSection(snapshot, 15);
@@ -244,6 +245,16 @@ function snapshotShape(snapshot) {
     instructionCount(functionId) {
       if (functionId >= functions.count) throw new Error(`function ${functionId} is out of bounds`);
       return snapshot.readUInt32LE(functionOffset(functionId) + 28);
+    },
+    bytecodeWord(functionId, pc) {
+      if (functionId >= functions.count) throw new Error(`function ${functionId} is out of bounds`);
+      const protoId = snapshot.readUInt32LE(functionOffset(functionId) + 4);
+      if (protoId >= protos.count) throw new Error(`proto ${protoId} is out of bounds`);
+      const proto = protos.offset + protoId * protos.recordSize;
+      const codeStart = snapshot.readUInt32LE(proto + 36);
+      const codeCount = snapshot.readUInt32LE(proto + 40);
+      if (pc >= codeCount) throw new Error(`bytecode ${functionId}/${pc} is out of bounds`);
+      return snapshot.readUInt32LE(bytecode.offset + (codeStart + pc) * bytecode.recordSize);
     },
     sourceLine(protoId, pc) {
       if (protoId >= protos.count) throw new Error(`proto ${protoId} is out of bounds`);
@@ -531,8 +542,17 @@ function executeEmbedNamecallFamilyPackageShape() {
   const shape = snapshotShape(snapshot);
   const commandCounts = new Map();
   const operandKinds = new Map();
+  const safeEnvironmentVmExits = [];
   let arrayAddressOperand = null;
+  let crossBlockTablePointerLoad = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    const blockByInstruction = new Map();
+    for (let blockId = 0; blockId < shape.blockCount(functionId); blockId++) {
+      const block = shape.block(functionId, blockId);
+      if (block.start === 0xffffffff) continue;
+      for (let instructionId = block.start; instructionId <= block.finish; instructionId++)
+        blockByInstruction.set(instructionId, blockId);
+    }
     for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
       const instruction = shape.instruction(functionId, instructionId);
       const command = instruction.command;
@@ -543,6 +563,19 @@ function executeEmbedNamecallFamilyPackageShape() {
       );
       if (command === 9 && arrayAddressOperand === null)
         arrayAddressOperand = instruction.operand(0);
+      if (command === 21 && instruction.operandCount >= 3 && instruction.operand(1).kind === 2 &&
+          instruction.operand(2).kind === 4 &&
+          instruction.constant(1).bits === 7n)
+      {
+        const producerId = instruction.operand(2).value;
+        const producer = shape.instruction(functionId, producerId);
+        if (producer.command === 2 && producer.operandCount === 1 && producer.operand(0).kind === 6 &&
+            blockByInstruction.get(producerId) !== blockByInstruction.get(instructionId))
+          crossBlockTablePointerLoad ??= producer.operand(0);
+      }
+      if (command === 135 && instruction.operand(0).kind === 9) {
+        safeEnvironmentVmExits.push(`${functionId}:${instructionId}/pc${instruction.operand(0).value}`);
+      }
     }
     try {
       backendObject(snapshot, functionId);
@@ -631,7 +664,12 @@ function executeEmbedNamecallFamilyPackageShape() {
       throw new Error(`${name}: function ${functionId} failed: ${error.message}${blockContext}`);
     }
   }
-  for (const command of [1, 2, 7, 9, 10, 11, 21, 97, 103, 104, 125, 126, 133, 134, 136, 137, 138, 139, 149, 164])
+  if (safeEnvironmentVmExits.length)
+    throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
+  for (const command of [
+    1, 2, 7, 9, 10, 11, 21, 33, 97, 103, 104, 125, 126, 131, 132, 133, 134, 135,
+    136, 137, 138, 139, 142, 143, 144, 146, 149, 164,
+  ])
     if (!commandCounts.get(command))
       throw new Error(`${name}: natural source did not emit command ${command}`);
   const requireOperandKind = (command, operand, kind) => {
@@ -651,11 +689,17 @@ function executeEmbedNamecallFamilyPackageShape() {
   requireOperandKind(125, 2, 2); // GET_TABLE immediate numeric key
   requireOperandKind(126, 2, 6); // SET_TABLE dynamic TValue key
   requireOperandKind(126, 2, 2); // SET_TABLE immediate numeric key
+  requireOperandKind(135, 0, 5); // CHECK_SAFE_ENV compiled slow arm
   if (arrayAddressOperand?.kind !== 4)
     throw new Error(`${name}: missing instruction-proven array address`);
   const malformedAddress = Buffer.from(snapshot);
   malformedAddress.writeUInt32LE(0, arrayAddressOperand.offset + 4);
   expectPackageRejection(malformedAddress, "array address without proven table/bounds ownership");
+  if (crossBlockTablePointerLoad === null)
+    throw new Error(`${name}: missing cross-block table-pointer rematerialization evidence`);
+  const malformedTablePointer = Buffer.from(snapshot);
+  malformedTablePointer.writeUInt32LE(0, crossBlockTablePointerLoad.offset + 4);
+  expectPackageRejection(malformedTablePointer, "cross-block table pointer lost its guarded VM register");
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
@@ -726,8 +770,16 @@ async function executeTableInsertAppendPackageShape() {
   const barrier = shape.instruction(1, appendStart + 7);
   const tableRegister = pointer.operand(0);
   const sourceRegister = load.operand(0);
+  const appendFailure = readonly.operand(1);
+  const appendFallback = appendFailure.kind === 5 ? shape.block(1, appendFailure.value) : null;
+  const appendFallbackCommands = appendFallback === null ? [] : Array.from(
+    { length: appendFallback.finish - appendFallback.start + 1 },
+    (_, offset) => shape.instruction(1, appendFallback.start + offset).command,
+  );
   if (pointer.command !== 2 || tableRegister.kind !== 6 ||
       readonly.command !== 133 || readonly.operand(0).kind !== 4 || readonly.operand(0).value !== appendStart ||
+      appendFailure.kind !== 5 || !appendFallbackCommands.includes(127) ||
+      !appendFallbackCommands.includes(154) || appendFallbackCommands.at(-1) !== 88 ||
       length.command !== 98 || length.operand(0).kind !== 4 || length.operand(0).value !== appendStart ||
       increment.command !== 22 || increment.operand(0).kind !== 4 || increment.operand(0).value !== appendStart + 2 ||
       increment.constant(1).bits !== 1n ||
@@ -739,6 +791,15 @@ async function executeTableInsertAppendPackageShape() {
       barrier.command !== 149 || barrier.operand(0).kind !== 4 || barrier.operand(0).value !== appendStart ||
       barrier.operand(1).kind !== 6 || barrier.operand(1).value !== sourceRegister.value || barrier.operand(2).kind !== 1)
     throw new Error(`${name}: optimized append graph changed`);
+
+  const safeEnvironmentVmExits = commands.flatMap((command, instructionId) => {
+    if (command !== 135) return [];
+    const failure = shape.instruction(1, instructionId).operand(0);
+    if (failure.kind !== 9) return [];
+    return [`${instructionId}/pc${failure.value}`];
+  });
+  if (safeEnvironmentVmExits.length)
+    throw new Error(`${name}: safe-environment VM exits ${safeEnvironmentVmExits.join(",")}`);
 
   const object = backendPackage(snapshot);
   const module = await WebAssembly.compile(linkPackage(object, packageFunctionSymbols(2)));
@@ -844,7 +905,7 @@ async function executePlainTableNamecallPackageShape() {
   const key = branch.operand(1);
   if (check.operand(0).kind !== 4 || check.operand(0).value !== 35 ||
       check.constant(1).kind !== 4 || check.constant(1).bits !== 7n ||
-      check.operand(2).kind !== 9 || check.operand(2).value !== 8 ||
+      check.operand(2).kind !== 5 || check.operand(2).value !== 6 ||
       hash.operand(0).kind !== 4 || hash.operand(0).value !== 37 ||
       hash.constant(1).kind !== 2 || hash.constant(1).bits !== 8460347n ||
       key.kind !== 7 || branch.operand(2).kind !== 5 || branch.operand(2).value !== 7 ||
@@ -891,12 +952,12 @@ async function executePlainTableNamecallPackageShape() {
   const semanticBlocks = [5, 6, 7, 8].map((blockId) => shape.block(1, blockId));
   const expectedBlocks = [
     { kind: 2, useCount: 3, start: 60, finish: 64 },
-    { kind: 1, useCount: 4, start: 58, finish: 59 },
+    { kind: 1, useCount: 5, start: 58, finish: 59 },
     { kind: 2, useCount: 1, start: 40, finish: 44 },
     { kind: 2, useCount: 1, start: 45, finish: 57 },
   ];
   if (JSON.stringify(semanticBlocks) !== JSON.stringify(expectedBlocks) ||
-      JSON.stringify(blockReferences.slice(5)) !== JSON.stringify([3, 4, 1, 1]))
+      JSON.stringify(blockReferences.slice(5)) !== JSON.stringify([3, 5, 1, 1]))
     throw new Error(`${name}: NAMECALL block ownership changed: ${JSON.stringify({ semanticBlocks, blockReferences })}`);
 
   {
@@ -930,16 +991,20 @@ async function executePlainTableNamecallPackageShape() {
     .filter(({ module: importModule, kind }) => importModule === "env" && kind === "function")
     .map(({ name: importName }) => importName);
   const expectedNamecallHelpers = [
-    "luauc_runtime_v1_check_node_no_next",
-    "luauc_runtime_v1_hash_node_addr",
     "luauc_runtime_v1_namecall_plain",
-    "luauc_runtime_v1_node_slot_match",
     "luauc_runtime_v1_set_location",
-    "luauc_runtime_v1_slot_node_addr",
-    "luauc_runtime_v1_try_get_tm",
   ];
   if (expectedNamecallHelpers.some((helper) => helpers.filter((candidate) => candidate === helper).length !== 1))
     throw new Error(`${name}: NAMECALL helper/location imports changed: ${JSON.stringify(helpers)}`);
+  for (const obsolete of [
+    "luauc_runtime_v1_check_node_no_next",
+    "luauc_runtime_v1_hash_node_addr",
+    "luauc_runtime_v1_node_slot_match",
+    "luauc_runtime_v1_slot_node_addr",
+    "luauc_runtime_v1_try_get_tm",
+  ])
+    if (helpers.includes(obsolete))
+      throw new Error(`${name}: fused NAMECALL retained raw node helper ${obsolete}`);
 
   const productSource = readFileSync(
     runfile(process.env.LUAUC_TABLE_NAMECALL_SOURCE, "LUAUC_TABLE_NAMECALL_SOURCE"),
@@ -1028,13 +1093,14 @@ async function executeDynamicArrayTablePackage() {
       "luauc_runtime_v1_array_set",
       "luauc_runtime_v1_array_get",
       "luauc_runtime_v1_do_len",
+      "luauc_runtime_v1_table_set_number",
     ].includes(importName));
   if (JSON.stringify(helpers) !== JSON.stringify([
     "luauc_runtime_v1_new_table",
     "luauc_runtime_v1_set_list",
-    "luauc_runtime_v1_array_set",
     "luauc_runtime_v1_array_get",
     "luauc_runtime_v1_do_len",
+    "luauc_runtime_v1_table_set_number",
   ])) throw new Error(`${name}: unexpected table helper imports ${JSON.stringify(helpers)}`);
   return { objectSize: first.length, functionCount: 3 };
 }
@@ -1486,43 +1552,43 @@ async function executeGlobalStatePackage() {
   );
   const snapshot = frontendSnapshot(source, "@aot/global_state.luau");
   const shape = snapshotShape(snapshot);
-  const globalImport = shape.instruction(1, 1);
-  const getEnv = shape.instruction(1, 2);
-  const getSlot = shape.instruction(1, 3);
-  const getMatch = shape.instruction(1, 4);
-  const getFallback = shape.instruction(1, 8);
-  const setEnv = shape.instruction(1, 23);
-  const setSlot = shape.instruction(1, 24);
-  const setMatch = shape.instruction(1, 25);
-  const readonly = shape.instruction(1, 26);
-  const barrier = shape.instruction(1, 29);
-  const setFallback = shape.instruction(1, 31);
-  if (snapshot.length !== 8333 || shape.protoCount !== 2 || shape.functionCount !== 2 ||
+  const globalImport = shape.instruction(1, 0);
+  const getEnv = shape.instruction(1, 1);
+  const getSlot = shape.instruction(1, 2);
+  const getMatch = shape.instruction(1, 3);
+  const getFallback = shape.instruction(1, 7);
+  const setEnv = shape.instruction(1, 22);
+  const setSlot = shape.instruction(1, 23);
+  const setMatch = shape.instruction(1, 24);
+  const readonly = shape.instruction(1, 25);
+  const barrier = shape.instruction(1, 28);
+  const setFallback = shape.instruction(1, 30);
+  if (snapshot.length !== 8309 || shape.protoCount !== 2 || shape.functionCount !== 2 ||
       globalImport.command !== 127 || globalImport.operand(0).kind !== 6 ||
       globalImport.operand(0).value !== 2 || globalImport.operand(1).kind !== 7 ||
       globalImport.operand(1).value !== 1 || globalImport.constant(2).bits !== 0x40000000n ||
       globalImport.constant(3).bits !== 1n ||
       getEnv.command !== 8 || getEnv.operandCount !== 0 || getSlot.command !== 10 ||
-      getSlot.operand(0).kind !== 4 || getSlot.operand(0).value !== 2 ||
+      getSlot.operand(0).kind !== 4 || getSlot.operand(0).value !== 1 ||
       getSlot.constant(1).bits !== 2n || getSlot.operand(2).kind !== 7 || getSlot.operand(2).value !== 2 ||
-      getMatch.command !== 137 || getMatch.operand(0).value !== 3 || getMatch.operand(1).value !== 2 ||
+      getMatch.command !== 137 || getMatch.operand(0).value !== 2 || getMatch.operand(1).value !== 2 ||
       getMatch.operand(2).kind !== 5 || getMatch.operand(2).value !== 1 ||
-      shape.instruction(1, 5).command !== 7 || shape.instruction(1, 6).command !== 20 ||
-      shape.instruction(1, 6).operand(0).value !== 4 || shape.instruction(1, 7).command !== 88 ||
-      shape.instruction(1, 7).operand(0).value !== 13 || getFallback.command !== 160 ||
+      shape.instruction(1, 4).command !== 7 || shape.instruction(1, 5).command !== 20 ||
+      shape.instruction(1, 5).operand(0).value !== 4 || shape.instruction(1, 6).command !== 88 ||
+      shape.instruction(1, 6).operand(0).value !== 13 || getFallback.command !== 160 ||
       getFallback.constant(0).bits !== 2n || getFallback.operand(1).value !== 4 ||
-      getFallback.operand(2).value !== 2 || shape.instruction(1, 9).command !== 88 ||
-      shape.instruction(1, 9).operand(0).value !== 2 || setEnv.command !== 8 ||
+      getFallback.operand(2).value !== 2 || shape.instruction(1, 8).command !== 88 ||
+      shape.instruction(1, 8).operand(0).value !== 2 || setEnv.command !== 8 ||
       setSlot.command !== 10 || setSlot.constant(1).bits !== 5n || setSlot.operand(2).value !== 2 ||
       setMatch.command !== 137 || setMatch.operand(2).value !== 5 || readonly.command !== 133 ||
-      readonly.operand(0).value !== 23 || readonly.operand(1).value !== 5 ||
-      shape.instruction(1, 27).command !== 7 || shape.instruction(1, 27).operand(0).value !== 3 ||
-      shape.instruction(1, 28).command !== 20 || barrier.command !== 149 ||
-      barrier.operand(0).value !== 23 || barrier.operand(1).value !== 3 || barrier.operand(2).kind !== 1 ||
-      shape.instruction(1, 30).command !== 88 || shape.instruction(1, 30).operand(0).value !== 6 ||
+      readonly.operand(0).value !== 22 || readonly.operand(1).value !== 5 ||
+      shape.instruction(1, 26).command !== 7 || shape.instruction(1, 26).operand(0).value !== 3 ||
+      shape.instruction(1, 27).command !== 20 || barrier.command !== 149 ||
+      barrier.operand(0).value !== 22 || barrier.operand(1).value !== 3 || barrier.operand(2).kind !== 1 ||
+      shape.instruction(1, 29).command !== 88 || shape.instruction(1, 29).operand(0).value !== 6 ||
       setFallback.command !== 161 || setFallback.constant(0).bits !== 5n ||
       setFallback.operand(1).value !== 3 || setFallback.operand(2).value !== 2 ||
-      shape.instruction(1, 32).command !== 88 || shape.instruction(1, 32).operand(0).value !== 6)
+      shape.instruction(1, 31).command !== 88 || shape.instruction(1, 31).operand(0).value !== 6)
     throw new Error(`${name}: pinned decoded global get/set IR shape changed`);
 
   for (let functionId = 0; functionId < 2; functionId++) {
@@ -1563,17 +1629,35 @@ async function executeFastBuiltinsPackage() {
   if (shape.protoCount !== 16 || shape.functionCount !== 16)
     throw new Error(`${name}: expected the complete 16-function builtin capability package`);
   const commandCounts = new Map();
+  const safeEnvironmentVmExits = [];
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
-      const command = shape.instruction(functionId, instructionId).command;
+      const instruction = shape.instruction(functionId, instructionId);
+      const command = instruction.command;
       commandCounts.set(command, (commandCounts.get(command) ?? 0) + 1);
+      if (command === 135 && instruction.operand(0).kind === 9) {
+        const pc = instruction.operand(0).value;
+        safeEnvironmentVmExits.push(
+          `${functionId}:${instructionId}/pc${pc}/op${shape.bytecodeWord(functionId, pc) & 0xff}`,
+        );
+      }
     }
   }
+  if (safeEnvironmentVmExits.length)
+    throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
   for (const [command, label] of [
+    [33, "CHECK_DIV_INT64"],
     [99, "STRING_LEN"],
     [120, "FASTCALL"],
     [121, "INVOKE_FASTCALL"],
     [122, "CHECK_FASTCALL_RES"],
+    [131, "CHECK_TAG"],
+    [132, "CHECK_TRUTHY"],
+    [135, "CHECK_SAFE_ENV"],
+    [142, "CHECK_CMP_NUM"],
+    [143, "CHECK_CMP_INT"],
+    [144, "CHECK_CMP_INT64"],
+    [146, "CHECK_GC"],
     [154, "CALL fallback"],
     [197, "INVOKE_LIBM"],
     [198, "GET_TYPE"],
@@ -1581,6 +1665,54 @@ async function executeFastBuiltinsPackage() {
   ]) {
     if (!commandCounts.get(command))
       throw new Error(`${name}: complete source graph lost ${label}`);
+  }
+
+  const failureOperandByCommand = new Map([
+    [33, 2],
+    [131, 2],
+    [132, 2],
+    [135, 0],
+    [142, 3],
+    [143, 3],
+    [144, 3],
+  ]);
+  const guardedSlowArms = new Set();
+  const guardedFailureSites = new Map();
+  const guardedFallbackCalls = new Map();
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
+      const instruction = shape.instruction(functionId, instructionId);
+      const failureOperand = failureOperandByCommand.get(instruction.command);
+      if (failureOperand === undefined || failureOperand >= instruction.operandCount) continue;
+      const failure = instruction.operand(failureOperand);
+      if (failure.kind !== 5) continue;
+      guardedSlowArms.add(instruction.command);
+      if (!guardedFailureSites.has(instruction.command))
+        guardedFailureSites.set(instruction.command, failure);
+      const fallback = shape.block(functionId, failure.value);
+      for (let fallbackId = fallback.start; fallbackId <= fallback.finish; fallbackId++) {
+        if (shape.instruction(functionId, fallbackId).command === 154)
+          guardedFallbackCalls.set(`${functionId}/${fallbackId}`, { functionId, instructionId: fallbackId });
+      }
+    }
+  }
+  for (const command of failureOperandByCommand.keys())
+    if (!guardedSlowArms.has(command))
+      throw new Error(`${name}: guard ${command} did not target a compiled slow arm`);
+  if (guardedFallbackCalls.size === 0)
+    throw new Error(`${name}: guarded builtin slow arms contain no real CALL`);
+  for (const [command, failure] of guardedFailureSites) {
+    const mutated = Buffer.from(snapshot);
+    mutated[failure.offset] = 1;
+    expectPackageRejection(mutated, `guard ${command} accepted an undefined failure destination`);
+  }
+
+  {
+    const mutated = Buffer.from(snapshot);
+    const offsets = referenceSnapshotOffsets(mutated);
+    for (const fallback of guardedFallbackCalls.values())
+      mutated[offsets.instruction(fallback.functionId, fallback.instructionId)] = 0;
+    expectPackageRejection(mutated, "guarded builtin slow arms lost every real CALL");
   }
 
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
@@ -1600,7 +1732,6 @@ async function executeFastBuiltinsPackage() {
     "luauc_runtime_v1_fastcall",
     "luauc_runtime_v1_libm",
     "luauc_runtime_v1_type_name",
-    "luauc_runtime_v1_builtin_type_error",
     "luauc_runtime_v1_table_insert_append",
     "luauc_runtime_v1_table_get_string",
   ]) {
@@ -1622,22 +1753,27 @@ async function executeBufferScalarMatrixPackage() {
   const secondSnapshot = frontendSnapshot(source, "@aot/buffer_scalar_matrix.luau");
   if (!firstSnapshot.equals(secondSnapshot)) throw new Error(`${name}: frontend snapshot is nondeterministic`);
   const shape = snapshotShape(firstSnapshot);
-  const functions = snapshotSection(firstSnapshot, 15);
-  const childFunction = functions.offset + functions.recordSize;
-  if (shape.protoCount !== 9 || shape.functionCount !== 9 ||
-      firstSnapshot.readUInt32LE(childFunction + 20) !== 16 ||
-      firstSnapshot.readUInt32LE(childFunction + 28) !== 286 ||
-      shape.instruction(1, 9).command !== 110 || shape.instruction(1, 10).command !== 140 ||
-      shape.instruction(1, 10).constant(2).bits !== 0n || shape.instruction(1, 10).constant(3).bits !== 27n ||
-      shape.instruction(1, 13).command !== 203 || shape.instruction(1, 34).command !== 206 ||
-      shape.instruction(1, 55).command !== 208 || shape.instruction(1, 76).command !== 210 ||
-      shape.instruction(1, 96).command !== 212 || shape.instruction(1, 116).command !== 214 ||
-      shape.instruction(1, 127).command !== 201 || shape.instruction(1, 141).command !== 202 ||
-      shape.instruction(1, 161).command !== 204 || shape.instruction(1, 181).command !== 205 ||
-      shape.instruction(1, 201).command !== 207 || shape.instruction(1, 221).command !== 207 ||
-      shape.instruction(1, 241).command !== 209 || shape.instruction(1, 261).command !== 211 ||
-      shape.instruction(1, 280).command !== 213 || shape.instruction(1, 285).command !== 155)
-    throw new Error(`${name}: pinned dynamic-base buffer graph changed`);
+  if (shape.protoCount !== 9 || shape.functionCount !== 9)
+    throw new Error(`${name}: expected the complete nine-function buffer package`);
+  const idsFor = (command) => Array.from(
+    { length: shape.instructionCount(1) },
+    (_, id) => id,
+  ).filter((id) => shape.instruction(1, id).command === command);
+  for (const [command, minimum] of [
+    [201, 1], [202, 1], [203, 1], [204, 1], [205, 1], [206, 1], [207, 2],
+    [208, 1], [209, 1], [210, 1], [211, 1], [212, 1], [213, 1], [214, 1],
+  ]) {
+    if (idsFor(command).length < minimum)
+      throw new Error(`${name}: command ${command} count is ${idsFor(command).length}, expected at least ${minimum}`);
+  }
+  const mergedGuardId = idsFor(140).find((id) => {
+    const guard = shape.instruction(1, id);
+    return guard.operandCount >= 5 && guard.operand(2).kind === 2 && guard.operand(3).kind === 2;
+  });
+  const firstWriteId = idsFor(203)[0];
+  const firstNumToUintId = idsFor(112)[0];
+  if (mergedGuardId === undefined || idsFor(155).length === 0)
+    throw new Error(`${name}: dynamic-base guard/conversion/return graph changed`);
 
   for (let functionId = 0; functionId < 9; functionId++)
     backendObject(firstSnapshot, functionId);
@@ -1645,35 +1781,36 @@ async function executeBufferScalarMatrixPackage() {
   const offsets = referenceSnapshotOffsets(firstSnapshot);
   {
     const mutated = Buffer.from(firstSnapshot);
-    mutated.writeUInt32LE(11, offsets.operand(1, 10, 4) + 4);
+    mutated.writeUInt32LE(firstWriteId, offsets.operand(1, mergedGuardId, 4) + 4);
     expectPackageRejection(mutated, "buffer exact-integer guard no longer uses the original base double");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
-    mutated.writeUInt32LE(8, offsets.operand(1, 13, 0) + 4);
+    mutated.writeUInt32LE(firstWriteId, offsets.operand(1, firstWriteId, 0) + 4);
     expectPackageRejection(mutated, "buffer write no longer uses the guarded buffer pointer");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
     const numberTag = offsets.findConstant(1, 4, 3n);
-    mutated.writeUInt32LE(numberTag, offsets.operand(1, 13, 3) + 4);
+    mutated.writeUInt32LE(numberTag, offsets.operand(1, firstWriteId, 3) + 4);
     expectPackageRejection(mutated, "buffer write carries NUMBER instead of BUFFER tag");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
     const truncatedRange = offsets.findConstant(1, 0, 19n);
-    mutated.writeUInt32LE(truncatedRange, offsets.operand(1, 10, 3) + 4);
+    mutated.writeUInt32LE(truncatedRange, offsets.operand(1, mergedGuardId, 3) + 4);
     expectPackageRejection(mutated, "merged buffer bound no longer covers all 27 packed bytes");
   }
-  {
+  if (firstNumToUintId !== undefined) {
     const mutated = Buffer.from(firstSnapshot);
-    mutated.writeUInt32LE(53, offsets.operand(1, 33, 0) + 4);
+    mutated.writeUInt32LE(firstWriteId, offsets.operand(1, firstNumToUintId, 0) + 4);
     expectPackageRejection(mutated, "NUM_TO_UINT no longer consumes its checked runtime value");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
-    mutated[offsets.instruction(1, 221)] = 208;
-    expectPackageRejection(mutated, "unsigned read command was replaced by a write command");
+    for (const readI32Id of idsFor(207))
+      mutated[offsets.instruction(1, readI32Id)] = 208;
+    expectPackageRejection(mutated, "every signed/unsigned read command was replaced by a write command");
   }
 
   const frame = staticPackageFrame("aot_buffer_scalar_matrix", firstSnapshot);
@@ -1686,6 +1823,7 @@ async function executeBufferScalarMatrixPackage() {
   const expectedImports = [
     ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
+    ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_newclosure_capture", "function"],
     ["env", "luauc_runtime_v1_get_upvalue", "function"],
@@ -1694,14 +1832,12 @@ async function executeBufferScalarMatrixPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_new_table", "function"],
     ["env", "luauc_runtime_v1_load_constant", "function"],
+    ["env", "luauc_runtime_v1_table_get_string", "function"],
     ["env", "luauc_runtime_v1_get_global", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
     ["env", "luauc_runtime_v1_get_varargs_fixed", "function"],
     ["env", "luauc_runtime_v1_get_varargs_multret", "function"],
     ["env", "luauc_runtime_v1_check_safe_env", "function"],
-    ["env", "luauc_runtime_v1_builtin_type_error", "function"],
-    ["env", "luauc_runtime_v1_builtin_number", "function"],
-    ["env", "luauc_runtime_v1_buffer_bounds_error", "function"],
   ];
   if (JSON.stringify(imports) !== JSON.stringify(expectedImports))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(imports)}`);
@@ -1777,6 +1913,8 @@ async function executeCase(name, source, inputs) {
   expectedImports.push(["env", "luauc_runtime_v1_do_arith", "function"]);
   expectedImports.push(["env", "luauc_runtime_v1_exchange_continuation", "function"]);
   expectedImports.push(["env", "luauc_runtime_v1_set_location", "function"]);
+  if (name === "loop")
+    expectedImports.push(["env", "luauc_runtime_v1_forn_prepare", "function"]);
   if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
@@ -1797,6 +1935,15 @@ async function executeCase(name, source, inputs) {
         committed = view.getFloat64(source, true);
       },
       luauc_runtime_v1_set_location() {},
+      luauc_runtime_v1_forn_prepare(state, baseRegister) {
+        if (state !== 1024) throw new Error(`${name}: invalid numeric loop preparation state`);
+        const view = new DataView(instance.exports.memory.buffer);
+        const base = view.getUint32(state + 12, true) + baseRegister * 16;
+        if ([0, 1, 2].every((offset) => view.getUint32(base + offset * 16 + 12, true) === 3))
+          throw new Error(`${name}: numeric loop preparation slow arm ran for numeric operands`);
+        arithmeticTypeErrors++;
+        throw new TypeError(`${name}: numeric loop preparation rejected a non-number operand`);
+      },
       luauc_runtime_v1_exchange_continuation(state, nextId) {
         if (state !== 1024) throw new Error(`${name}: invalid continuation state`);
         const previous = continuationState;

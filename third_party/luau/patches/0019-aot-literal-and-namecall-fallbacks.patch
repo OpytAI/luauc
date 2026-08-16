@@ -1,0 +1,30 @@
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -1635,7 +1635,7 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp fallback = build.fallbackBlock(pcpos);
+ 
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+ 
+     IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+ 
+@@ -1675,7 +1675,7 @@ void translateInstSetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp fallback = build.fallbackBlock(pcpos);
+ 
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+ 
+     IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+ 
+@@ -1842,7 +1842,7 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
+     IrOp firstFastPathSuccess = build.block(IrBlockKind::Internal);
+     IrOp secondFastPath = build.block(IrBlockKind::Internal);
+ 
+-    build.loadAndCheckTag(build.vmReg(rb), LUA_TTABLE, bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.loadAndCheckTag(build.vmReg(rb), LUA_TTABLE, fallback);
+     IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+ 
+     CODEGEN_ASSERT(build.function.proto);

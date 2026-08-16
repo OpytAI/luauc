@@ -181,6 +181,7 @@ uint32_t luauc_runtime_v1_builtin_type_error(lua_State *state, const char *built
                                            size_t builtin_name_length, uint32_t argument_index,
                                            uint32_t expected_tag, uint32_t source_register);
 double luauc_runtime_v1_builtin_number(lua_State *state, uint32_t source_register);
+void luauc_runtime_v1_forn_prepare(lua_State *state, uint32_t base_register);
 void luauc_runtime_v1_buffer_bounds_error(lua_State *state);
 uint32_t luauc_runtime_v1_exchange_continuation(lua_State *state, uint32_t next);
 void luauc_runtime_v1_new_table(lua_State *state, uint32_t destination_register, uint32_t array_count,
@@ -251,7 +252,7 @@ void luauc_runtime_v1_barrier_object(lua_State *state, void *owner, uint32_t sou
 void luauc_runtime_v1_barrier_table_back(lua_State *state, void *table);
 void luauc_runtime_v1_barrier_table_forward(lua_State *state, void *table,
                                            uint32_t source_register);
-void *luauc_runtime_v1_hash_node_addr(lua_State *state, void *table, uint32_t hash);
+void *luauc_runtime_v1_hash_node_addr(lua_State *state, uint32_t table_register, uint32_t hash);
 void *luauc_runtime_v1_slot_node_addr(lua_State *state, void *table, uint32_t key_constant);
 uint32_t luauc_runtime_v1_node_slot_match(lua_State *state, void *node, uint32_t key_constant);
 void *luauc_runtime_v1_try_get_tm(lua_State *state, void *table, uint32_t event);
@@ -273,6 +274,8 @@ uint32_t luauc_runtime_v1_compare_any(lua_State *state, uint32_t lhs_register, u
                                     uint32_t operation);
 void luauc_runtime_v1_dupclosure(lua_State *state, uint32_t destination_register,
                                uint32_t child_proto_id);
+void luauc_runtime_v1_newclosure_empty(lua_State *state, uint32_t destination_register,
+                                     uint32_t child_proto_id, uint32_t check_gc);
 void luauc_runtime_v1_newclosure_capture(lua_State *state, uint32_t destination_register,
                                        uint32_t child_proto_id, uint32_t capture_index,
                                        uint32_t capture_kind, uint32_t source_index,

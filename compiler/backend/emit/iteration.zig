@@ -303,8 +303,10 @@ pub noinline fn emitXnextFastPreparationBlock(
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitPcLocation(pattern.pc);
     try self.body.localGet(self.allocator, 0);
@@ -657,8 +659,10 @@ pub noinline fn emitArrayOperationBlock(
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitArrayOperation(pattern, operation);
     try self.body.branch(self.allocator, 1);
@@ -710,8 +714,10 @@ pub noinline fn emitStringTableOperationBlock(self: anytype, block_id: u32, bloc
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitStringTableOperation(pattern);
     try self.body.end(self.allocator);
@@ -753,8 +759,10 @@ pub noinline fn emitGlobalOperationBlock(self: anytype, block_id: u32, block: sn
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitGlobalOperation(pattern);
     try self.body.branch(self.allocator, 1);
@@ -859,8 +867,10 @@ pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, blo
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.emitGenericTableDirectAttempt(pattern);
     try self.body.localGet(self.allocator, self.status_local);

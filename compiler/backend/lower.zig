@@ -14,6 +14,7 @@ pub const coverage_hit_symbol = abi.coverage_hit_symbol;
 pub const do_arith_symbol = abi.do_arith_symbol;
 pub const compare_any_symbol = abi.compare_any_symbol;
 pub const dupclosure_symbol = abi.dupclosure_symbol;
+pub const newclosure_empty_symbol = abi.newclosure_empty_symbol;
 pub const newclosure_capture_symbol = abi.newclosure_capture_symbol;
 pub const get_upvalue_symbol = abi.get_upvalue_symbol;
 pub const set_upvalue_symbol = abi.set_upvalue_symbol;

@@ -11,6 +11,8 @@ PACK_EXPORTS = [
     "luauc_embed_v1_coverage",
     "luauc_embed_v1_dealloc",
     "luauc_embed_v1_invoke",
+    "luauc_embed_v1_last_error",
+    "luauc_embed_v1_last_error_size",
     "luauc_embed_v1_protected_call_run",
     "luauc_runtime_v1_program_arena",
     "luauc_runtime_v1_program_arena_capacity",

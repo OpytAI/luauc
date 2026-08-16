@@ -147,8 +147,13 @@ pub noinline fn emitStringEqualityBlock(self: anytype, block_id: u32, block: sna
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
+            // Optimizer-linearized blocks can retain a dead pattern-shaped suffix after an
+            // earlier semantic operation has already dispatched. The terminating prefix owns
+            // this entry; do not compile or reject the unreachable suffix.
+            try self.body.end(self.allocator);
+            return;
+        }
     }
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.lhs));
@@ -291,7 +296,7 @@ pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Erro
         (try self.supportsGenericIterationFallback(block)) or
         (try self.supportsSpecializedIpairsFallback(block)) or
         (try self.xnextPreparationPattern(block) != null) or
-        (try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block)) or
+        (try self.supportsOrdinaryCallFallback(block)) or (try self.isFastcallFallbackBlock(block)) or
         (try self.supportsNamecallFallback(block)) or (try self.supportsGeneralTableFallback(block));
 }
 pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
@@ -315,9 +320,9 @@ pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlo
     const target_block = try self.snapshot.irBlock(self.function, target.value);
     return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
-pub noinline fn supportsOrdinaryCallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
+pub noinline fn ordinaryCallFallbackTarget(self: anytype, block: snapshot_v1.IrBlock) Error!?u32 {
     if (block.kind != .fallback or block.isEmpty() or block.finish < block.start + 3)
-        return false;
+        return null;
     const saved_id = block.finish - 2;
     const saved = try self.instruction(saved_id);
     const call = try self.instruction(block.finish - 1);
@@ -325,44 +330,43 @@ pub noinline fn supportsOrdinaryCallFallback(self: anytype, block: snapshot_v1.I
     if (saved.command != .set_savedpc or saved.operand_count != 1 or
         call.command != .call or call.operand_count != 3 or
         jump.command != .jump or jump.operand_count != 1)
-        return false;
+        return null;
 
-    const saved_pc = self.savedPc(saved) catch return false;
+    const saved_pc = self.savedPc(saved) catch return null;
     if (saved_pc == 0 or saved_pc > self.proto.code_count)
-        return false;
+        return null;
     const call_word = try self.snapshot.bytecodeWord(self.proto, saved_pc - 1);
     if (@as(u8, @truncate(call_word)) != lop_call)
-        return false;
+        return null;
     const destination = (call_word >> 8) & 0xff;
     const parameter_count = @as(i32, @intCast((call_word >> 16) & 0xff)) - 1;
     const result_count = @as(i32, @intCast((call_word >> 24) & 0xff)) - 1;
-    if ((self.vmRegisterIndex(try self.operand(call, 0)) catch return false) != destination or
-        (self.intConstant(try self.operand(call, 1)) catch return false) != parameter_count or
-        (self.intConstant(try self.operand(call, 2)) catch return false) != result_count)
-        return false;
+    if ((self.vmRegisterIndex(try self.operand(call, 0)) catch return null) != destination or
+        (self.intConstant(try self.operand(call, 1)) catch return null) != parameter_count or
+        (self.intConstant(try self.operand(call, 2)) catch return null) != result_count)
+        return null;
     const target = try self.operand(jump, 0);
     if (target.kind != .block or target.value >= self.function.block_count)
-        return false;
+        return null;
     const target_block = try self.snapshot.irBlock(self.function, target.value);
     if (!target_block.kind.isCompilable() or target_block.isEmpty())
-        return false;
+        return null;
 
     var found_import = false;
     var instruction_id = block.start;
     while (instruction_id < saved_id) : (instruction_id += 1) {
         const instruction_value = try self.instruction(instruction_id);
-        switch (instruction_value.command) {
-            .nop, .load_tvalue, .store_tvalue, .check_safe_env, .interrupt, .fallback_getvarargs => {},
-            .get_cached_import => {
-                if (found_import or instruction_value.operand_count != 4 or
-                    (self.vmRegisterIndex(try self.operand(instruction_value, 0)) catch return false) != destination)
-                    return false;
-                found_import = true;
-            },
-            else => return false,
+        if (instruction_value.command == .get_cached_import) {
+            if (found_import or instruction_value.operand_count != 4 or
+                (self.vmRegisterIndex(try self.operand(instruction_value, 0)) catch return null) != destination)
+                return null;
+            found_import = true;
         }
     }
-    return found_import;
+    return if (found_import) target.value else null;
+}
+pub noinline fn supportsOrdinaryCallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
+    return try self.ordinaryCallFallbackTarget(block) != null;
 }
 pub noinline fn isOwnedSemanticTableFallbackBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty())
@@ -425,12 +429,16 @@ pub noinline fn isOwnedDynamicLengthFallbackBlock(self: anytype, block_id: u32, 
     return false;
 }
 pub noinline fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
+    if (block.kind == .linearized and self.function.entry_block != block_id and
+        (self.plan.blockReferences(block_id) orelse return Error.UnsupportedControlFlow) == 0)
+        return true;
     return (try self.isBypassedStringEqualityBlock(block_id)) or
         (try self.isBypassedStringLinearizedBlock(block_id, block)) or
         (try self.isBypassedGenericTableLinearizedBlock(block_id, block)) or
         (try self.isBypassedGlobalLinearizedBlock(block_id, block)) or
         (try self.isBypassedPowLinearizedBlock(block_id, block)) or
         (try self.isBypassedConstantArithmeticLinearizedBlock(block_id, block)) or
+        (try self.isBypassedPlainTableNamecallBlock(block_id)) or
         (try self.isOwnedDynamicLengthFallbackBlock(block_id, block)) or
         (try self.isOwnedSemanticTableFallbackBlock(block_id, block)) or
         (try self.isBypassedXnextFastPreparationBlock(block_id)) or
@@ -541,8 +549,8 @@ pub noinline fn emitJumpEqualTag(self: anytype, instruction_value: snapshot_v1.I
 }
 pub noinline fn emitJumpCompareInteger(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 5);
-    const true_target = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
-    const false_target = try self.requireCompiledTarget(try self.operand(instruction_value, 4));
+    const true_target = try self.requireDispatchTarget(try self.operand(instruction_value, 3));
+    const false_target = try self.requireDispatchTarget(try self.operand(instruction_value, 4));
     try self.emitI32Value(try self.operand(instruction_value, 0));
     try self.emitI32Value(try self.operand(instruction_value, 1));
     try self.emitIntegerCondition(try self.conditionOperand(instruction_value, 2));
@@ -710,11 +718,12 @@ pub noinline fn emitDupClosure(self: anytype, instruction_id: u32) Error!void {
     try self.emitReloadBase();
 }
 pub fn callContinuation(self: anytype, instruction_id: u32) ?CallContinuation {
-    for (self.call_continuations) |continuation| {
-        if (continuation.instruction_id == instruction_id)
-            return continuation;
-    }
-    return null;
+    if (instruction_id >= self.continuation_indices.len)
+        return null;
+    const index = self.continuation_indices[instruction_id];
+    if (index == snapshot_v1.no_id or index >= self.call_continuations.len)
+        return null;
+    return self.call_continuations[index];
 }
 pub noinline fn emitExchangeContinuation(self: anytype, next_id: u32) Error!void {
     try self.body.localGet(self.allocator, 0);
