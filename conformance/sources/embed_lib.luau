@@ -155,6 +155,25 @@ return function(value, text)
         return total + raised
     end
 
+    local function ksBreadth(input)
+        local inherited = { k = input }
+        local obj = setmetatable({}, {
+            __index = function(_, key)
+                return inherited[key]
+            end,
+            __newindex = function(_, key, value)
+                inherited[key] = value
+            end,
+        })
+        obj.k = input + 1
+        coroutine.yield("gc-boundary")
+        local got = obj.k
+        local shared = { n = input }
+        local tabulated = setmetatable({}, { __index = shared, __newindex = shared })
+        tabulated.n = input + 2
+        return got + tabulated.n
+    end
+
     local function globalBreadth(input)
         embed_seen = input
         coroutine.yield("gc-boundary")
@@ -336,6 +355,7 @@ return function(value, text)
     local globalBreadthResult = globalBreadth(value)
     local operatorBreadthResult = operatorBreadth(value, text)
     local iterationBreadthResult = iterationBreadth(value)
+    local ksBreadthResult = ksBreadth(value)
     local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
@@ -359,7 +379,7 @@ return function(value, text)
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
             + guardResult + tableBreadthResult + closureBreadthResult + globalBreadthResult
-            + operatorBreadthResult + iterationBreadthResult + addedDup
+            + operatorBreadthResult + iterationBreadthResult + ksBreadthResult + addedDup
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

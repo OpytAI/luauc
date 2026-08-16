@@ -3158,9 +3158,12 @@
         "//compiler/backend:dynamic_hash_table_package_object_build_test",
         "conformance:luauc_dynamic_hash_table_survives_gc_and_matches_interpreter",
         "//compiler/backend:dynamic_metamethods_package_object_build_test",
-        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter"
+        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_rewritten_literal_string_luav_index_metamethod_cluster"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_SETTABLEKS",
@@ -3180,9 +3183,12 @@
         "//compiler/backend:dynamic_hash_table_package_object_build_test",
         "conformance:luauc_dynamic_hash_table_survives_gc_and_matches_interpreter",
         "//compiler/backend:dynamic_metamethods_package_object_build_test",
-        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter"
+        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_rewritten_literal_string_luav_newindex_metamethod_cluster"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_NAMECALL",
