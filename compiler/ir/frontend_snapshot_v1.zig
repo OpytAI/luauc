@@ -62,8 +62,8 @@ pub const production_identity = ExpectedIdentity{
         0xf3, 0x03, 0x6c, 0x13, 0xb1, 0x85, 0xfd, 0xb3, 0x7f, 0xbc, 0x3f, 0x5a, 0x26, 0x1e, 0x66, 0x76,
     },
     .patchset = .{
-        0x91, 0xac, 0xf9, 0x29, 0xdb, 0xc5, 0xc2, 0xb3, 0x86, 0x90, 0x5f, 0xba, 0xd9, 0xd6, 0x26, 0xcd,
-        0x28, 0xb5, 0x63, 0x46, 0x25, 0x98, 0xad, 0x01, 0xe5, 0x1d, 0x15, 0xa6, 0x02, 0x31, 0x50, 0x0e,
+        0xc5, 0x10, 0xe8, 0x65, 0x34, 0xc3, 0x45, 0xd9, 0xd6, 0xeb, 0xd7, 0xb3, 0x02, 0x20, 0x8a, 0x66,
+        0x42, 0xc1, 0x23, 0xa4, 0x7e, 0x76, 0xe1, 0xb0, 0x17, 0xb7, 0x7f, 0x3f, 0x29, 0xa6, 0xc7, 0xeb,
     },
     .frontend_build = identity_v1.frontend_contract_sha256,
     .ir_enum = .{
@@ -384,6 +384,8 @@ pub const Proto = struct {
     id: u32,
     parent_id: u32,
     line_defined: u32,
+    bytecode_id: u32,
+    fun_id: u32,
     nups: u8,
     num_params: u8,
     is_vararg: bool,
@@ -530,6 +532,8 @@ pub const Snapshot = struct {
             .id = readU32(item, 0),
             .parent_id = readU32(item, 4),
             .line_defined = readU32(item, 16),
+            .bytecode_id = readU32(item, 20),
+            .fun_id = readU32(item, 24),
             .nups = item[29],
             .num_params = item[30],
             .is_vararg = item[31] != 0,
@@ -796,6 +800,8 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
     if (strings.count != snapshot.header.string_count or protos.count != snapshot.header.proto_count or ir_functions.count != snapshot.header.ir_function_count)
         return Error.CountMismatch;
+    if (children.count != protos.count - 1)
+        return Error.InvalidProtoGraph;
     if (compiled_bytecode.count == 0)
         return Error.InvalidCounts;
 
@@ -815,7 +821,10 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
     index = 0;
     while (index < protos.count) : (index += 1) {
         const proto = recordBytes(snapshot, protos, index);
-        if (readU32(proto, 0) != index or readU32(proto, 116) != index)
+        const bytecode_id = readU32(proto, 20);
+        const fun_id = readU32(proto, 24);
+        if (readU32(proto, 0) != index or readU32(proto, 116) != index or
+            bytecode_id >= protos.count or fun_id != bytecode_id + 1)
             return Error.InvalidProto;
         if (!allZero(proto[34..36]) or !allZero(proto[120..128]))
             return Error.ReservedNotZero;
@@ -839,11 +848,15 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
         const child_start = readU32(proto, 52);
         const child_count = readU32(proto, 56);
+        var previous_child: ?u32 = null;
         var child_index: u32 = 0;
         while (child_index < child_count) : (child_index += 1) {
             const child = readU32(recordBytes(snapshot, children, child_start + child_index), 0);
-            if (child <= index or child >= protos.count or readU32(recordBytes(snapshot, protos, child), 4) != index)
+            if (child <= index or child >= protos.count or
+                (previous_child != null and child <= previous_child.?) or
+                readU32(recordBytes(snapshot, protos, child), 4) != index)
                 return Error.InvalidProtoGraph;
+            previous_child = child;
         }
 
         const upvalue_start = readU32(proto, 60);
@@ -943,26 +956,6 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
     try validateExactPartitions(snapshot, protos, 92, abslineinfo.count, Error.InvalidProto);
     try validateExactPartitions(snapshot, protos, 100, debug_opcodes.count, Error.InvalidProto);
     try validateExactPartitions(snapshot, protos, 108, feedback.count, Error.InvalidProto);
-
-    index = 0;
-    while (index < protos.count) : (index += 1) {
-        if (index == snapshot.header.root_proto_id)
-            continue;
-        var references: u32 = 0;
-        var parent_index: u32 = 0;
-        while (parent_index < protos.count) : (parent_index += 1) {
-            const parent = recordBytes(snapshot, protos, parent_index);
-            const child_start = readU32(parent, 52);
-            const child_count = readU32(parent, 56);
-            var child_index: u32 = 0;
-            while (child_index < child_count) : (child_index += 1) {
-                if (readU32(recordBytes(snapshot, children, child_start + child_index), 0) == index)
-                    references += 1;
-            }
-        }
-        if (references != 1)
-            return Error.InvalidProtoGraph;
-    }
 
     index = 0;
     while (index < ir_functions.count) : (index += 1) {

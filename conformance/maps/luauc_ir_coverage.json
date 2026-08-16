@@ -3987,15 +3987,23 @@
       "value": 215,
       "class": "control",
       "wasm_features": [],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_closure_matches_proto_id"
+      ],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
       "safepoint": false,
       "rejoins": false,
-      "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3727; CodeGen/src/IrLoweringA64.cpp:3656",
-      "tests": [],
-      "status": "unimplemented"
+      "upstream_reference": "Bytecode/include/Luau/BytecodeCallInliner.h: appendCmpProto/inlineTarget; CodeGen/src/IrTranslation.cpp: translateInstCmpProto; CodeGen/src/IrLoweringX64.cpp:3727; CodeGen/src/IrLoweringA64.cpp:3656",
+      "tests": [
+        "//frontend:frontend_snapshot_test",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:cli_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     }
   ],
   "operand_kinds": [

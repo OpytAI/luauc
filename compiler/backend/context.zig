@@ -72,6 +72,7 @@ pub const Context = struct {
     try_get_tm: ?wasm.FunctionRef,
     check_node_no_next: ?wasm.FunctionRef,
     check_node_value: ?wasm.FunctionRef,
+    closure_matches_proto_id: ?wasm.FunctionRef,
     check_readonly: ?wasm.FunctionRef,
     table_set_string: ?wasm.FunctionRef,
     table_get_string: ?wasm.FunctionRef,
@@ -94,6 +95,7 @@ pub const Context = struct {
     require_static: ?wasm.FunctionRef,
     static_package: ?static_package_v1.Package,
     function_id_base: u32,
+    proto_id_by_bytecode_id: []const u32,
     base_local: u32,
     dispatch_local: u32,
     status_local: u32,
@@ -255,6 +257,7 @@ pub const Context = struct {
     pub const emitTryCallFastGetTm = memory.emitTryCallFastGetTm;
     pub const emitCheckNodeNoNext = memory.emitCheckNodeNoNext;
     pub const emitCheckNodeValue = memory.emitCheckNodeValue;
+    pub const emitJumpCompareProtoId = control.emitJumpCompareProtoId;
     pub const emitCheckReadonly = memory.emitCheckReadonly;
     pub const emitBufferAdjustStack = memory.emitBufferAdjustStack;
     pub const emitGuardFailure = memory.emitGuardFailure;

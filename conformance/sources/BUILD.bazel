@@ -1,15 +1,16 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 
 exports_files(
-    ["embed_lib.luau", "embed_main.luau"],
+    ["embed_lib.luau", "embed_main.luau", "proto_identity.luau"],
     visibility = ["//visibility:public"],
 )
 
 js_library(
     name = "embed_sources",
-    srcs = ["embed_lib.luau", "embed_main.luau"],
+    srcs = ["embed_lib.luau", "embed_main.luau", "proto_identity.luau"],
     visibility = ["//visibility:public"],
 )
 
 js_library(name = "embed_lib", srcs = ["embed_lib.luau"], visibility = ["//visibility:public"])
 js_library(name = "embed_main", srcs = ["embed_main.luau"], visibility = ["//visibility:public"])
+js_library(name = "proto_identity", srcs = ["proto_identity.luau"], visibility = ["//visibility:public"])

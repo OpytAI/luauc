@@ -32,13 +32,19 @@ bool pushChunk(lua_State *state, const std::string &source, const char *sourceNa
 int requireModule(lua_State *state) {
     size_t nameSize = 0;
     const char *name = luaL_checklstring(state, 1, &nameSize);
-    if (nameSize != 3 || memcmp(name, "lib", 3) != 0) {
+    const char *global = nullptr;
+    if (nameSize == 3 && memcmp(name, "lib", 3) == 0)
+        global = "__luauc_embed_lib";
+    else if (nameSize == sizeof("proto_identity") - 1 &&
+             memcmp(name, "proto_identity", sizeof("proto_identity") - 1) == 0)
+        global = "__luauc_proto_identity";
+    if (!global) {
         luaL_error(state, "unknown module '%s'", name);
         return 0;
     }
-    lua_getglobal(state, "__luauc_embed_lib");
+    lua_getglobal(state, global);
     if (!lua_isfunction(state, -1)) {
-        luaL_error(state, "module 'lib' is unavailable");
+        luaL_error(state, "module '%s' is unavailable", name);
         return 0;
     }
     return 1;
@@ -82,13 +88,15 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: luauc-pinned-interpreter <lib.luau> <main.luau>\n");
+    if (argc != 4) {
+        fprintf(stderr,
+                "usage: luauc-pinned-interpreter <lib.luau> <main.luau> <proto_identity.luau>\n");
         return 2;
     }
     std::string libSource = readFile(argv[1]);
     std::string mainSource = readFile(argv[2]);
-    if (libSource.empty() || mainSource.empty()) {
+    std::string protoIdentitySource = readFile(argv[3]);
+    if (libSource.empty() || mainSource.empty() || protoIdentitySource.empty()) {
         fprintf(stderr, "failed to read source corpus\n");
         return 2;
     }
@@ -103,6 +111,13 @@ int main(int argc, char **argv) {
         return 1;
     }
     lua_setglobal(state, "__luauc_embed_lib");
+    if (!pushChunk(state, protoIdentitySource, "@proto_identity.luau") ||
+        lua_pcall(state, 0, 1, 0) != LUA_OK || !lua_isfunction(state, -1)) {
+        reportStackError(state, "load Proto identity module");
+        lua_close(state);
+        return 1;
+    }
+    lua_setglobal(state, "__luauc_proto_identity");
     lua_pushcfunction(state, requireModule, "require");
     lua_setglobal(state, "require");
     luaL_sandbox(state);

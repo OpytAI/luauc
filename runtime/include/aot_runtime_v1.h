@@ -251,6 +251,13 @@ uint32_t luauc_runtime_v1_node_slot_match(lua_State *state, void *node, uint32_t
 void *luauc_runtime_v1_try_get_tm(lua_State *state, void *table, uint32_t event);
 uint32_t luauc_runtime_v1_check_node_no_next(lua_State *state, void *node);
 uint32_t luauc_runtime_v1_check_node_value(lua_State *state, void *node);
+
+// Returns one exactly when the live register contains a non-C Luau closure whose Proto::funid
+// matches the relocated zero-based AOT function identity. Normal type/identity mismatches are false; malformed
+// AOT frame/register metadata is an internal runtime error.
+uint32_t luauc_runtime_v1_closure_matches_proto_id(lua_State *state,
+                                                   uint32_t closure_register,
+                                                   uint32_t function_id);
 uint32_t luauc_runtime_v1_check_readonly(lua_State *state, void *table, uint32_t raise);
 void luauc_runtime_v1_return(lua_State *state, uint32_t source_register, int32_t result_count);
 uint32_t luauc_runtime_v1_interrupt(lua_State *state, uint32_t line);

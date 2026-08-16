@@ -5,7 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 import { compilePackage } from "./host.mjs";
 
 function usage() {
-  throw new Error("usage: luauc compile --compiler luauc.wasm --profile runtime.profile --pack runtime.pack.wasm --output program.wasm --entry module [--coverage none|statement|expression] name=source.luau...");
+  throw new Error("usage: luauc compile --compiler luauc.wasm --profile runtime.profile --pack runtime.pack.wasm --output program.wasm --entry module [--coverage none|statement|expression] [--inline-plan module:caller:feedback:target] name=source.luau...");
 }
 
 const bazelExecrootPaths = process.env.LUAUC_BAZEL_EXECROOT_PATHS === "1";
@@ -19,9 +19,12 @@ function parseArguments(arguments_) {
   const options = {};
   while (arguments_[0]?.startsWith("--")) {
     const option = arguments_.shift().slice(2);
-    if (!["compiler", "profile", "pack", "output", "entry", "coverage"].includes(option) || options[option] !== undefined || !arguments_.length)
+    if (!["compiler", "profile", "pack", "output", "entry", "coverage", "inline-plan"].includes(option) || !arguments_.length)
       usage();
-    options[option] = arguments_.shift();
+    const value = arguments_.shift();
+    if (option === "inline-plan") (options.inlinePlans ??= []).push(value);
+    else if (options[option] !== undefined) usage();
+    else options[option] = value;
   }
   if (["compiler", "profile", "pack", "output", "entry"].some((name) => !options[name]) || !arguments_.length)
     usage();
@@ -39,6 +42,15 @@ function parseArguments(arguments_) {
     throw new Error("duplicate canonical module name");
   if (!modules.some(({ name }) => name === options.entry))
     throw new Error(`entry module ${JSON.stringify(options.entry)} is absent`);
+  for (const value of options.inlinePlans ?? []) {
+    const parts = value.split(":");
+    if (parts.length !== 4 || !parts.slice(1).every((part) => /^(0|[1-9][0-9]*)$/.test(part))) usage();
+    const module = modules.find(({ name }) => name === parts[0]);
+    if (!module) throw new Error(`inline-plan module ${JSON.stringify(parts[0])} is absent`);
+    const [callerFunctionId, feedbackSlot, targetFunctionId] = parts.slice(1).map(Number);
+    if ([callerFunctionId, feedbackSlot, targetFunctionId].some((number) => !Number.isSafeInteger(number) || number > 0xffffffff)) usage();
+    (module.inlinePlans ??= []).push({ callerFunctionId, feedbackSlot, targetFunctionId });
+  }
   return { options, modules };
 }
 

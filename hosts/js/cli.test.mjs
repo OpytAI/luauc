@@ -11,6 +11,7 @@ const paths = Object.fromEntries(Object.entries({
   pack: process.env.LUAUC_EMBED_PACK,
   lib: process.env.LUAUC_EMBED_LIB,
   main: process.env.LUAUC_EMBED_MAIN,
+  protoIdentity: process.env.LUAUC_PROTO_IDENTITY,
 }).map(([name, value]) => [name, runfile(value)]));
 const output = join(process.env.TEST_TMPDIR, "program.wasm");
 const report = JSON.parse(execFileSync(paths.cli, [
@@ -21,18 +22,23 @@ const report = JSON.parse(execFileSync(paths.cli, [
   "--output", output,
   "--entry", "main",
   "--coverage", "statement",
+  "--inline-plan", "proto_identity:2:0:0",
   `lib=${paths.lib}`,
   `main=${paths.main}`,
+  `proto_identity=${paths.protoIdentity}`,
 ], { encoding: "utf8" }));
 const artifact = readFileSync(output);
-if (report.artifact_bytes !== artifact.length || report.module_count !== 2 || report.coverage !== "statement")
+if (report.artifact_bytes !== artifact.length || report.module_count !== 3 || report.coverage !== "statement")
   throw new Error(`CLI report does not describe its artifact: ${JSON.stringify(report)}`);
 const instance = instantiateArtifact(artifact);
 const context = createContext(instance);
 try {
   for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
     const result = invoke(instance, number, text, context);
-    if (result.status || result.resultStatus || result.error || result.number !== 9 * number + 13 || result.text !== `${text}:${number + 1}`)
+    const protoResult = number % 2 !== 0 ? number * 3 + text.length : number - text.length;
+    const expectedNumber = 15 * number + 49 + text.length + protoResult;
+    const expectedText = `${text}:${number + 1}:2/1/11:missing`;
+    if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
       throw new Error(`CLI artifact ${number}/${text}: ${JSON.stringify(result)}`);
   }
   const records = coverage(instance, context);
@@ -41,4 +47,4 @@ try {
 } finally {
   destroyContext(instance, context);
 }
-console.log(`luauc CLI compiled a covered two-module ${artifact.length}-byte artifact that ran three real inputs in JavaScript`);
+console.log(`luauc CLI compiled a covered three-module ${artifact.length}-byte artifact with a real profile-guided inline plan and ran three inputs in JavaScript`);

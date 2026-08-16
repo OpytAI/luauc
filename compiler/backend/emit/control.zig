@@ -557,6 +557,31 @@ pub noinline fn emitJumpEqualPointer(self: anytype, instruction_value: snapshot_
     try self.body.i32Eq(self.allocator);
     try self.emitConditionalDispatch(true_target, false_target);
 }
+pub noinline fn emitJumpCompareProtoId(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const closure_register = (try self.loadedPointerRegister(try self.operand(instruction_value, 0))) orelse
+        return Error.InvalidOperandType;
+    const proto_id_operand = try self.operand(instruction_value, 1);
+    if (proto_id_operand.kind != .constant)
+        return Error.InvalidOperandType;
+    const source_proto_id = (try self.constant(proto_id_operand.value)).uintValue() orelse
+        return Error.InvalidOperandType;
+    if (source_proto_id >= self.proto_id_by_bytecode_id.len)
+        return Error.UnsupportedControlFlow;
+    const target_proto_id = self.proto_id_by_bytecode_id[source_proto_id];
+    if (target_proto_id == snapshot_v1.no_id)
+        return Error.UnsupportedControlFlow;
+    const global_proto_id = std.math.add(u32, self.function_id_base, target_proto_id) catch
+        return Error.ResourceLimit;
+    const match_target = try self.requireCompiledTarget(try self.operand(instruction_value, 2));
+    const mismatch_target = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(closure_register));
+    try self.body.i32Const(self.allocator, @bitCast(global_proto_id));
+    try self.body.call(self.allocator, self.closure_matches_proto_id orelse return Error.UnsupportedCommand);
+    try self.emitConditionalDispatch(match_target, mismatch_target);
+}
 pub noinline fn emitJumpCompareFloat(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 5);
     const true_target = try self.requireDispatchTarget(try self.operand(instruction_value, 3));

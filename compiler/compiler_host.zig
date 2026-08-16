@@ -15,6 +15,7 @@ const FrontendResult = extern struct {
 };
 
 extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, result: *FrontendResult) u32;
+extern fn luauc_frontend_snapshot_v1_compile_inlined(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, plans: [*]const source_package.InlinePlan, plan_count: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_free(result: *FrontendResult) void;
 extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, result_pointer: u32) u32;
 extern fn luauc_backend_component_v1_free(result_pointer: u32) void;
@@ -290,7 +291,17 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     for (0..package.module_count) |index| {
         const module = package.module(@intCast(index)) catch |err| return publishError(result, status_invalid_request, err);
         const frontend_result = &frontend_results[index];
-        const frontend_status = luauc_frontend_snapshot_v1_compile(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, frontend_result);
+        var inline_plans: ?[]source_package.InlinePlan = null;
+        defer if (inline_plans) |plans| allocator.free(plans);
+        const frontend_status = if (module.inline_plan_count == 0)
+            luauc_frontend_snapshot_v1_compile(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, frontend_result)
+        else inlined: {
+            const plans = allocator.alloc(source_package.InlinePlan, module.inline_plan_count) catch return publishDiagnostic(result, status_resource_limit, "inline plan allocation failed");
+            inline_plans = plans;
+            for (plans, 0..) |*plan, plan_id|
+                plan.* = module.inlinePlan(@intCast(plan_id)) catch |err| return publishError(result, status_invalid_request, err);
+            break :inlined luauc_frontend_snapshot_v1_compile_inlined(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, plans.ptr, module.inline_plan_count, frontend_result);
+        };
         compiled_count += 1;
         if (frontend_status != 0 or frontend_result.status != 0 or frontend_result.data == null or frontend_result.size == 0) {
             const diagnostic = if (frontend_result.diagnostic) |pointer| pointer[0..frontend_result.diagnostic_size] else "frontend compilation failed";

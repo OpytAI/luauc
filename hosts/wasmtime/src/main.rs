@@ -11,6 +11,14 @@ struct SourceModule {
     name: Vec<u8>,
     source_name: Vec<u8>,
     source: Vec<u8>,
+    inline_plans: Vec<InlinePlan>,
+}
+
+#[derive(Clone)]
+struct InlinePlan {
+    caller_function_id: u32,
+    feedback_slot: u32,
+    target_function_id: u32,
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -48,6 +56,17 @@ fn source_request(
     profile_digest: &[u8; 32],
     pack_digest: &[u8; 32],
 ) -> Result<Vec<u8>> {
+    for module in &mut modules {
+        module
+            .inline_plans
+            .sort_by_key(|plan| (plan.caller_function_id, plan.feedback_slot));
+        if module.inline_plans.windows(2).any(|pair| {
+            pair[0].caller_function_id == pair[1].caller_function_id
+                && pair[0].feedback_slot == pair[1].feedback_slot
+        }) {
+            bail!("source package has duplicate inline plan call sites");
+        }
+    }
     modules.sort_by(|lhs, rhs| lhs.name.cmp(&rhs.name));
     if modules.is_empty() || modules.windows(2).any(|pair| pair[0].name == pair[1].name) {
         bail!("source package has no modules or duplicate names");
@@ -56,6 +75,7 @@ fn source_request(
         .iter()
         .position(|module| module.name == entry_name)
         .ok_or_else(|| anyhow!("entry module is absent"))?;
+    let inline_plan_enabled = modules.iter().any(|module| !module.inline_plans.is_empty());
 
     let mut manifest = Vec::new();
     manifest.extend_from_slice(&(modules.len() as u32).to_le_bytes());
@@ -66,6 +86,15 @@ fn source_request(
         append_sized(&mut manifest, &module.name);
         append_sized(&mut manifest, &module.source_name);
         manifest.extend_from_slice(&content_digest);
+        if inline_plan_enabled {
+            manifest.extend_from_slice(&(module.inline_plans.len() as u32).to_le_bytes());
+            for plan in &module.inline_plans {
+                manifest.extend_from_slice(&plan.caller_function_id.to_le_bytes());
+                manifest.extend_from_slice(&plan.feedback_slot.to_le_bytes());
+                manifest.extend_from_slice(&plan.target_function_id.to_le_bytes());
+                manifest.extend_from_slice(&0u32.to_le_bytes());
+            }
+        }
         content_digests.push(content_digest);
     }
     let manifest_digest = digest(&manifest);
@@ -73,7 +102,12 @@ fn source_request(
         + SOURCE_RECORD_SIZE * modules.len()
         + modules
             .iter()
-            .map(|module| module.name.len() + module.source_name.len() + module.source.len())
+            .map(|module| {
+                module.name.len()
+                    + module.source_name.len()
+                    + module.source.len()
+                    + module.inline_plans.len() * 16
+            })
             .sum::<usize>();
     let mut request = vec![0; total];
     request[0..8].copy_from_slice(b"LUAUCS1\0");
@@ -85,7 +119,11 @@ fn source_request(
     put_u32(&mut request, 24, SOURCE_RECORD_SIZE as u32);
     put_u32(&mut request, 28, 0);
     let mut request_identity = Sha256::new();
-    request_identity.update(b"luauc-source-request-v1\0");
+    request_identity.update(if inline_plan_enabled {
+        b"luauc-source-request-v1-inline-plan\0".as_slice()
+    } else {
+        b"luauc-source-request-v1\0".as_slice()
+    });
     request_identity.update(0u32.to_le_bytes());
     request_identity.update(profile_digest);
     request_identity.update(pack_digest);
@@ -94,6 +132,9 @@ fn source_request(
     request[48..80].copy_from_slice(profile_digest);
     request[80..112].copy_from_slice(pack_digest);
     request[112..144].copy_from_slice(&manifest_digest);
+    if inline_plan_enabled {
+        put_u32(&mut request, 144, 1);
+    }
 
     let mut cursor = SOURCE_HEADER_SIZE + SOURCE_RECORD_SIZE * modules.len();
     for (index, module) in modules.iter().enumerate() {
@@ -115,6 +156,20 @@ fn source_request(
         request[cursor..cursor + module.source.len()].copy_from_slice(&module.source);
         cursor += module.source.len();
         request[record + 24..record + 56].copy_from_slice(&content_digests[index]);
+        if !module.inline_plans.is_empty() {
+            put_u32(&mut request, record + 56, cursor.try_into()?);
+            put_u32(
+                &mut request,
+                record + 60,
+                module.inline_plans.len().try_into()?,
+            );
+            for plan in &module.inline_plans {
+                put_u32(&mut request, cursor, plan.caller_function_id);
+                put_u32(&mut request, cursor + 4, plan.feedback_slot);
+                put_u32(&mut request, cursor + 8, plan.target_function_id);
+                cursor += 16;
+            }
+        }
     }
     if cursor != request.len() {
         bail!("source package layout drifted");
@@ -377,8 +432,8 @@ fn run_inputs(engine: &Engine, artifact: &[u8], arguments: &[String]) -> Result<
 }
 
 fn compile_run(arguments: &[String]) -> Result<()> {
-    if arguments.len() < 7 || (arguments.len() - 5) % 2 != 0 {
-        bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <number> <text> [<number> <text> ...]");
+    if arguments.len() < 8 || (arguments.len() - 6) % 2 != 0 {
+        bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <proto_identity.luau> <number> <text> [<number> <text> ...]");
     }
     let compiler = fs::read(&arguments[0]).context("read compiler")?;
     let profile = fs::read(&arguments[1]).context("read profile")?;
@@ -388,11 +443,23 @@ fn compile_run(arguments: &[String]) -> Result<()> {
             name: b"lib".to_vec(),
             source_name: b"@lib.luau".to_vec(),
             source: fs::read(&arguments[3]).context("read lib source")?,
+            inline_plans: vec![],
         },
         SourceModule {
             name: b"main".to_vec(),
             source_name: b"@main.luau".to_vec(),
             source: fs::read(&arguments[4]).context("read main source")?,
+            inline_plans: vec![],
+        },
+        SourceModule {
+            name: b"proto_identity".to_vec(),
+            source_name: b"@proto_identity.luau".to_vec(),
+            source: fs::read(&arguments[5]).context("read Proto identity source")?,
+            inline_plans: vec![InlinePlan {
+                caller_function_id: 2,
+                feedback_slot: 0,
+                target_function_id: 0,
+            }],
         },
     ];
     let engine = Engine::default();
@@ -406,7 +473,7 @@ fn compile_run(arguments: &[String]) -> Result<()> {
         bail!("Wasmtime compiler output is nondeterministic");
     }
     println!("artifact={}", hex(&digest(&artifact)));
-    run_inputs(&engine, &artifact, &arguments[5..])
+    run_inputs(&engine, &artifact, &arguments[6..])
 }
 
 fn main() -> Result<()> {
@@ -418,6 +485,6 @@ fn main() -> Result<()> {
             let artifact = fs::read(&arguments[1]).context("read artifact")?;
             run_inputs(&engine, &artifact, &arguments[2..])
         }
-        _ => bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <number> <text>... | run <artifact.wasm> <number> <text>..."),
+        _ => bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <proto_identity.luau> <number> <text>... | run <artifact.wasm> <number> <text>..."),
     }
 }

@@ -8,6 +8,10 @@ pub const max_modules: u32 = 128;
 pub const max_request_bytes: u32 = 16 * 1024 * 1024;
 pub const max_module_name_bytes: u32 = 1024;
 pub const max_source_name_bytes: u32 = 4096;
+pub const inline_plan_size: u32 = 16;
+pub const max_inline_plans_per_module: u32 = 4096;
+pub const feature_inline_plan: u32 = 1 << 0;
+pub const supported_features: u32 = feature_inline_plan;
 
 pub const Error = error{
     InvalidMagic,
@@ -26,6 +30,14 @@ pub const Error = error{
     NonCanonicalModuleOrder,
     NonCanonicalLayout,
     IntegerOverflow,
+    InvalidInlinePlan,
+};
+
+pub const InlinePlan = extern struct {
+    caller_function_id: u32,
+    feedback_slot: u32,
+    target_function_id: u32,
+    reserved: u32,
 };
 
 pub const Module = struct {
@@ -34,6 +46,20 @@ pub const Module = struct {
     source_name: []const u8,
     content: []const u8,
     content_sha256: [32]u8,
+    inline_plan_bytes: []const u8,
+    inline_plan_count: u32,
+
+    pub fn inlinePlan(self: Module, id: u32) Error!InlinePlan {
+        if (id >= self.inline_plan_count)
+            return Error.InvalidInlinePlan;
+        const bytes = self.inline_plan_bytes[id * inline_plan_size ..][0..inline_plan_size];
+        return .{
+            .caller_function_id = readU32(bytes, 0),
+            .feedback_slot = readU32(bytes, 4),
+            .target_function_id = readU32(bytes, 8),
+            .reserved = readU32(bytes, 12),
+        };
+    }
 };
 
 pub const Package = struct {
@@ -41,6 +67,7 @@ pub const Package = struct {
     module_count: u32,
     entry_module_id: u32,
     coverage_level: u32,
+    feature_flags: u32,
     request_id: [16]u8,
     runtime_profile_sha256: [32]u8,
     runtime_pack_sha256: [32]u8,
@@ -53,12 +80,19 @@ pub const Package = struct {
         const record = self.bytes[record_offset..][0..record_size];
         var digest: [32]u8 = undefined;
         @memcpy(&digest, record[24..56]);
+        const plan_offset = readU32(record, 56);
+        const plan_count = readU32(record, 60);
         return .{
             .id = id,
             .name = self.bytes[readU32(record, 0)..][0..readU32(record, 4)],
             .source_name = self.bytes[readU32(record, 8)..][0..readU32(record, 12)],
             .content = self.bytes[readU32(record, 16)..][0..readU32(record, 20)],
             .content_sha256 = digest,
+            .inline_plan_bytes = if (plan_count == 0)
+                &.{}
+            else
+                self.bytes[plan_offset..][0 .. plan_count * inline_plan_size],
+            .inline_plan_count = plan_count,
         };
     }
 };
@@ -74,7 +108,10 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
     if (readU16(bytes, 10) != header_size or readU32(bytes, 12) != bytes.len or
         readU32(bytes, 24) != record_size or coverage_level > 2)
         return Error.InvalidHeader;
-    for (bytes[144..160]) |reserved|
+    const feature_flags = readU32(bytes, 144);
+    if (feature_flags & ~supported_features != 0)
+        return Error.InvalidHeader;
+    for (bytes[148..160]) |reserved|
         if (reserved != 0)
             return Error.InvalidHeader;
 
@@ -101,6 +138,7 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
     if (cursor > bytes.len)
         return Error.NonCanonicalLayout;
     var previous_name: ?[]const u8 = null;
+    var total_inline_plans: u32 = 0;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     var header_fields: [8]u8 = undefined;
     writeU32(&header_fields, 0, module_count);
@@ -111,15 +149,14 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
     while (id < module_count) : (id += 1) {
         const record_offset = try add(header_size, try mul(id, record_size));
         const record = bytes[record_offset..][0..record_size];
-        for (record[56..64]) |reserved|
-            if (reserved != 0)
-                return Error.InvalidHeader;
         const name_offset = readU32(record, 0);
         const name_size = readU32(record, 4);
         const source_offset = readU32(record, 8);
         const source_size = readU32(record, 12);
         const content_offset = readU32(record, 16);
         const content_size = readU32(record, 20);
+        const plan_offset = readU32(record, 56);
+        const plan_count = readU32(record, 60);
         if (name_size == 0 or name_size > max_module_name_bytes or name_offset != cursor)
             return Error.NonCanonicalLayout;
         const name_end = try add(name_offset, name_size);
@@ -129,7 +166,17 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
         if (source_end > bytes.len or content_offset != source_end or content_size == 0)
             return Error.NonCanonicalLayout;
         const content_end = try add(content_offset, content_size);
-        if (content_end > bytes.len)
+        if (content_end > bytes.len or plan_count > max_inline_plans_per_module)
+            return Error.NonCanonicalLayout;
+        total_inline_plans = std.math.add(u32, total_inline_plans, plan_count) catch
+            return Error.IntegerOverflow;
+        const plan_bytes = try mul(plan_count, inline_plan_size);
+        if ((feature_flags & feature_inline_plan == 0 and (plan_offset != 0 or plan_count != 0)) or
+            (plan_count == 0 and plan_offset != 0) or
+            (plan_count != 0 and plan_offset != content_end))
+            return Error.NonCanonicalLayout;
+        const plan_end = if (plan_count == 0) content_end else try add(plan_offset, plan_bytes);
+        if (plan_end > bytes.len)
             return Error.NonCanonicalLayout;
 
         const name = bytes[name_offset..name_end];
@@ -150,11 +197,33 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
         std.crypto.hash.sha2.Sha256.hash(content, &content_digest, .{});
         if (!std.mem.eql(u8, &content_digest, record[24..56]))
             return Error.InvalidContentDigest;
+        var plan_index: u32 = 0;
+        while (plan_index < plan_count) : (plan_index += 1) {
+            const plan = bytes[plan_offset + plan_index * inline_plan_size ..][0..inline_plan_size];
+            if (readU32(plan, 12) != 0)
+                return Error.InvalidInlinePlan;
+            if (plan_index != 0) {
+                const previous = bytes[plan_offset + (plan_index - 1) * inline_plan_size ..][0..inline_plan_size];
+                if (readU32(previous, 0) > readU32(plan, 0) or
+                    (readU32(previous, 0) == readU32(plan, 0) and
+                        readU32(previous, 4) >= readU32(plan, 4)))
+                    return Error.InvalidInlinePlan;
+            }
+        }
         hashSized(&hasher, name);
         hashSized(&hasher, source_name);
         hasher.update(&content_digest);
-        cursor = content_end;
+        if (feature_flags & feature_inline_plan != 0) {
+            var plan_count_bytes: [4]u8 = undefined;
+            writeU32(&plan_count_bytes, 0, plan_count);
+            hasher.update(&plan_count_bytes);
+            if (plan_count != 0)
+                hasher.update(bytes[plan_offset..plan_end]);
+        }
+        cursor = plan_end;
     }
+    if (feature_flags & feature_inline_plan != 0 and total_inline_plans == 0)
+        return Error.InvalidInlinePlan;
     if (cursor != bytes.len)
         return Error.NonCanonicalLayout;
     var actual_manifest: [32]u8 = undefined;
@@ -162,7 +231,10 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
     if (!std.mem.eql(u8, &actual_manifest, &manifest_digest))
         return Error.InvalidManifestDigest;
     var request_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    request_hasher.update("luauc-source-request-v1\x00");
+    request_hasher.update(if (feature_flags & feature_inline_plan != 0)
+        "luauc-source-request-v1-inline-plan\x00"
+    else
+        "luauc-source-request-v1\x00");
     var coverage_bytes: [4]u8 = undefined;
     writeU32(&coverage_bytes, 0, coverage_level);
     request_hasher.update(&coverage_bytes);
@@ -178,6 +250,7 @@ pub fn parse(bytes: []const u8, expected_runtime_profile_sha256: [32]u8, expecte
         .module_count = module_count,
         .entry_module_id = entry_module_id,
         .coverage_level = coverage_level,
+        .feature_flags = feature_flags,
         .request_id = request_id,
         .runtime_profile_sha256 = profile_digest,
         .runtime_pack_sha256 = runtime_digest,
@@ -328,4 +401,73 @@ test "parses canonical source package and verifies every identity" {
     try std.testing.expectEqualSlices(u8, &manifest_digest, &package.manifest_sha256);
     try std.testing.expectEqualStrings("counter", (try package.module(0)).name);
     try std.testing.expectEqualStrings(contents[1], (try package.module(1)).content);
+}
+
+test "parses the canonical inline-plan extension without changing ordinary V1" {
+    const name = "main";
+    const source_name = "@main.luau";
+    const content = "return function(f, a, b) return f(a, b) end";
+    const records_end: usize = header_size + record_size;
+    const plan_bytes = [_]u8{0} ** inline_plan_size;
+    const total_size = records_end + name.len + source_name.len + content.len + plan_bytes.len;
+    var bytes = [_]u8{0} ** total_size;
+    @memcpy(bytes[0..magic.len], &magic);
+    bytes[8] = @truncate(version);
+    bytes[10] = @truncate(header_size);
+    writeU32(&bytes, 12, @intCast(bytes.len));
+    writeU32(&bytes, 16, 1);
+    writeU32(&bytes, 24, record_size);
+    writeU32(&bytes, 144, feature_inline_plan);
+    const profile_digest = [_]u8{0x12} ** 32;
+    const runtime_digest = [_]u8{0x34} ** 32;
+    @memcpy(bytes[48..80], &profile_digest);
+    @memcpy(bytes[80..112], &runtime_digest);
+
+    var cursor: usize = records_end;
+    writeU32(&bytes, header_size, @intCast(cursor));
+    writeU32(&bytes, header_size + 4, name.len);
+    @memcpy(bytes[cursor..][0..name.len], name);
+    cursor += name.len;
+    writeU32(&bytes, header_size + 8, @intCast(cursor));
+    writeU32(&bytes, header_size + 12, source_name.len);
+    @memcpy(bytes[cursor..][0..source_name.len], source_name);
+    cursor += source_name.len;
+    writeU32(&bytes, header_size + 16, @intCast(cursor));
+    writeU32(&bytes, header_size + 20, content.len);
+    @memcpy(bytes[cursor..][0..content.len], content);
+    cursor += content.len;
+    var content_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(content, &content_digest, .{});
+    @memcpy(bytes[header_size + 24 ..][0..32], &content_digest);
+    writeU32(&bytes, header_size + 56, @intCast(cursor));
+    writeU32(&bytes, header_size + 60, 1);
+    @memcpy(bytes[cursor..][0..plan_bytes.len], &plan_bytes);
+
+    var manifest = std.crypto.hash.sha2.Sha256.init(.{});
+    const manifest_header = [_]u8{ 1, 0, 0, 0, 0, 0, 0, 0 };
+    manifest.update(&manifest_header);
+    hashSized(&manifest, name);
+    hashSized(&manifest, source_name);
+    manifest.update(&content_digest);
+    manifest.update(&[_]u8{ 1, 0, 0, 0 });
+    manifest.update(&plan_bytes);
+    var manifest_digest: [32]u8 = undefined;
+    manifest.final(&manifest_digest);
+    @memcpy(bytes[112..144], &manifest_digest);
+
+    var request = std.crypto.hash.sha2.Sha256.init(.{});
+    request.update("luauc-source-request-v1-inline-plan\x00");
+    request.update(&[_]u8{0} ** 4);
+    request.update(&profile_digest);
+    request.update(&runtime_digest);
+    request.update(&manifest_digest);
+    var request_digest: [32]u8 = undefined;
+    request.final(&request_digest);
+    @memcpy(bytes[32..48], request_digest[0..16]);
+
+    const package = try parse(&bytes, profile_digest, runtime_digest);
+    try std.testing.expectEqual(feature_inline_plan, package.feature_flags);
+    const module = try package.module(0);
+    try std.testing.expectEqual(@as(u32, 1), module.inline_plan_count);
+    try std.testing.expectEqual(@as(u32, 0), (try module.inlinePlan(0)).target_function_id);
 }

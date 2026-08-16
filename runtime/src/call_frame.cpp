@@ -1915,6 +1915,20 @@ extern "C" uint32_t luauc_runtime_v1_check_node_value(lua_State *L, void *nodePo
     return ttisnil(gval(node));
 }
 
+extern "C" uint32_t luauc_runtime_v1_closure_matches_proto_id(lua_State *L,
+                                                               uint32_t closureRegister,
+                                                               uint32_t functionId) {
+    Proto *proto = activeAotFrameProto(L, "closure Proto identity guard");
+    TValue *value = activeAotRegister(L, proto, closureRegister,
+                                      "closure Proto identity guard");
+    if (value >= L->top)
+        luaG_runerror(L, "strict AOT closure Proto identity guard requires a published register");
+    if (!ttisfunction(value))
+        return 0;
+    Closure *closure = clvalue(value);
+    return !closure->isC && closure->l.p && closure->l.p->funid == functionId;
+}
+
 extern "C" uint32_t luauc_runtime_v1_check_readonly(lua_State *L, void *tablePointer,
                                                        uint32_t raise) {
     activeAotFrameProto(L, "readonly guard");

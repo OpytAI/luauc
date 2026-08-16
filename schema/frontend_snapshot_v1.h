@@ -208,6 +208,18 @@ typedef struct LuaucFrontendSnapshotV1Result {
     uint32_t status;
 } LuaucFrontendSnapshotV1Result;
 
+// One deterministic profile-guided inlining decision. Function ids are the pinned source
+// compiler's module-local BytecodeBuilder ids; feedback_slot identifies the exact CALLFB in the
+// caller. Plans are applied in lexicographic order and target another function in the same module.
+// The frontend runs the real upstream BytecodeGraph inliner, then snapshots the resulting Protos;
+// this is not an IR injection or a target-runtime bytecode execution surface.
+typedef struct LuaucFrontendInlinePlanV1 {
+    uint32_t caller_function_id;
+    uint32_t feedback_slot;
+    uint32_t target_function_id;
+    uint32_t reserved;
+} LuaucFrontendInlinePlanV1;
+
 // These statuses describe invocations that return normally. A deep patched-Luau raise or a
 // nonrecoverable allocator failure traps the zero-import frontend capability; the host must treat
 // that trap as a failed invocation and instantiate a fresh compiler capability.
@@ -229,6 +241,11 @@ uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, size_t source
                                               const uint8_t *chunk_name, size_t chunk_name_size,
                                               uint32_t coverage_level,
                                               LuaucFrontendSnapshotV1Result *out_result);
+
+uint32_t luauc_frontend_snapshot_v1_compile_inlined(
+    const uint8_t *source, size_t source_size, const uint8_t *chunk_name, size_t chunk_name_size,
+    uint32_t coverage_level, const LuaucFrontendInlinePlanV1 *plans, uint32_t plan_count,
+    LuaucFrontendSnapshotV1Result *out_result);
 
 void luauc_frontend_snapshot_v1_free(LuaucFrontendSnapshotV1Result *result);
 

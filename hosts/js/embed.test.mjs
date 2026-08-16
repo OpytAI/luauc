@@ -9,6 +9,11 @@ const pack = readFileSync(runfile(process.env.LUAUC_EMBED_PACK));
 const modules = [
   { name: "lib", source: readFileSync(runfile(process.env.LUAUC_EMBED_LIB), "utf8") },
   { name: "main", source: readFileSync(runfile(process.env.LUAUC_EMBED_MAIN), "utf8") },
+  {
+    name: "proto_identity",
+    source: readFileSync(runfile(process.env.LUAUC_PROTO_IDENTITY), "utf8"),
+    inlinePlans: [{ callerFunctionId: 2, feedbackSlot: 0, targetFunctionId: 0 }],
+  },
 ];
 const first = await compilePackage(compiler, profile, pack, modules, "main", { coverageLevel: 1 });
 const second = await compilePackage(compiler, profile, pack, modules, "main", { coverageLevel: 1 });
@@ -18,7 +23,8 @@ const context = createContext(instance);
 try {
   for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
     const result = invoke(instance, number, text, context);
-    const expectedNumber = 15 * number + 49 + text.length;
+    const protoResult = number % 2 !== 0 ? number * 3 + text.length : number - text.length;
+    const expectedNumber = 15 * number + 49 + text.length + protoResult;
     const expectedText = `${text}:${number + 1}:2/1/11:missing`;
     if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
       throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${expectedNumber}/${expectedText}`);

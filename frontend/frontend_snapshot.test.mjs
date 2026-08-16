@@ -34,6 +34,8 @@ const contractInputs = [
   "third_party/luau/patches/0007-analysis-shim.patch",
   "third_party/luau/patches/0008-analysis-explicit-control-flow.patch",
   "third_party/luau/patches/0009-aot-coverage-data.patch",
+  "third_party/luau/patches/0010-bytecode-builder-introspection.patch",
+  "third_party/luau/patches/0011-compiler-owned-builder.patch",
 ].sort();
 
 function frontendContractDigest() {
@@ -235,6 +237,7 @@ const exportNames = WebAssembly.Module.exports(module).map(({ name }) => name).s
 const expectedExportNames = [
   "_start",
   "luauc_frontend_snapshot_v1_compile",
+  "luauc_frontend_snapshot_v1_compile_inlined",
   "luauc_frontend_snapshot_v1_free",
   "luauc_frontend_snapshot_v1_last_raise_message",
   "luauc_frontend_snapshot_v1_last_raise_message_size",
@@ -256,6 +259,7 @@ for (const name of [
   "luauc_frontend_v1_dealloc",
   "luauc_frontend_v1_validate_snapshot",
   "luauc_frontend_snapshot_v1_compile",
+  "luauc_frontend_snapshot_v1_compile_inlined",
   "luauc_frontend_snapshot_v1_free",
 ]) {
   if (!(name in api)) throw new Error(`missing frontend export ${name}`);
@@ -265,25 +269,47 @@ api.luauc_frontend_v1_init();
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function compile(sourceText, chunkText, coverageLevel = 0) {
+function compile(sourceText, chunkText, coverageLevel = 0, inlinePlans = null) {
   const source = encoder.encode(sourceText);
   const chunk = encoder.encode(chunkText);
   const sourcePointer = api.luauc_frontend_v1_alloc(source.length);
   const chunkPointer = api.luauc_frontend_v1_alloc(chunk.length);
   const resultPointer = api.luauc_frontend_v1_alloc(20);
-  if (!sourcePointer || !chunkPointer || !resultPointer) throw new Error("frontend host allocation failed");
+  const planBytes = inlinePlans === null ? null : new Uint8Array(inlinePlans.length * 16);
+  if (planBytes)
+    for (let index = 0; index < inlinePlans.length; index++) {
+      const plan = inlinePlans[index];
+      new DataView(planBytes.buffer).setUint32(index * 16, plan.callerFunctionId, true);
+      new DataView(planBytes.buffer).setUint32(index * 16 + 4, plan.feedbackSlot, true);
+      new DataView(planBytes.buffer).setUint32(index * 16 + 8, plan.targetFunctionId, true);
+    }
+  const planPointer = planBytes?.length ? api.luauc_frontend_v1_alloc(planBytes.length) : 0;
+  if (!sourcePointer || !chunkPointer || !resultPointer || (planBytes?.length && !planPointer))
+    throw new Error("frontend host allocation failed");
 
   new Uint8Array(api.memory.buffer, sourcePointer, source.length).set(source);
   new Uint8Array(api.memory.buffer, chunkPointer, chunk.length).set(chunk);
+  if (planBytes?.length) new Uint8Array(api.memory.buffer, planPointer, planBytes.length).set(planBytes);
   new Uint8Array(api.memory.buffer, resultPointer, 20).fill(0);
-  const returned = api.luauc_frontend_snapshot_v1_compile(
-    sourcePointer,
-    source.length,
-    chunkPointer,
-    chunk.length,
-    coverageLevel,
-    resultPointer,
-  );
+  const returned = inlinePlans === null
+    ? api.luauc_frontend_snapshot_v1_compile(
+      sourcePointer,
+      source.length,
+      chunkPointer,
+      chunk.length,
+      coverageLevel,
+      resultPointer,
+    )
+    : api.luauc_frontend_snapshot_v1_compile_inlined(
+      sourcePointer,
+      source.length,
+      chunkPointer,
+      chunk.length,
+      coverageLevel,
+      planPointer,
+      inlinePlans.length,
+      resultPointer,
+    );
 
   const result = new DataView(api.memory.buffer, resultPointer, 20);
   const dataPointer = result.getUint32(0, true);
@@ -305,6 +331,7 @@ function compile(sourceText, chunkText, coverageLevel = 0) {
 
   api.luauc_frontend_snapshot_v1_free(resultPointer);
   api.luauc_frontend_v1_dealloc(resultPointer, 20);
+  if (planPointer) api.luauc_frontend_v1_dealloc(planPointer, planBytes.length);
   api.luauc_frontend_v1_dealloc(chunkPointer, chunk.length);
   api.luauc_frontend_v1_dealloc(sourcePointer, source.length);
   return { status, snapshot, diagnostic, validation };
@@ -354,6 +381,52 @@ if (!first.snapshot.equals(second.snapshot)) throw new Error("identical input pr
 const invalid = compile("local =", "@frontend/syntax-error.luau");
 if (invalid.status !== 2 || invalid.snapshot.length !== 0 || invalid.diagnostic.length === 0)
   throw new Error(`syntax failure was not a structured diagnostic: ${JSON.stringify(invalid)}`);
+
+const protoIdentitySource = `
+local function hot(a, b)
+    return a * 3 + b
+end
+local function cold(a, b)
+    return a - b
+end
+local function dispatch(fn, a, b)
+    local result = fn(a, b)
+    return result
+end
+return function(useHot, a, b)
+    return dispatch(if useHot then hot else cold, a, b)
+end
+`;
+const protoIdentityPlan = [{ callerFunctionId: 2, feedbackSlot: 0, targetFunctionId: 0 }];
+const inlined = compile(protoIdentitySource, "@frontend/proto_identity.luau", 0, protoIdentityPlan);
+if (inlined.status !== 0 || inlined.validation !== 0)
+  throw new Error(`profile-guided inline frontend failed: ${inlined.status}: ${inlined.diagnostic}`);
+const inlinedParsed = parseSnapshot(inlined.snapshot);
+const protoIdentityFunctions = Array.from(
+  { length: inlinedParsed.irFunctionCount },
+  (_, functionId) => functionCommands(inlined.snapshot, inlinedParsed, functionId),
+);
+if (!protoIdentityFunctions.some((commands) => commands.includes(215)))
+  throw new Error(`upstream inliner produced no JUMP_CMP_PROTOID: ${JSON.stringify(protoIdentityFunctions)}`);
+const inlinedAgain = compile(protoIdentitySource, "@frontend/proto_identity.luau", 0, protoIdentityPlan);
+if (inlinedAgain.status !== 0 || !inlined.snapshot.equals(inlinedAgain.snapshot))
+  throw new Error("profile-guided inline frontend is nondeterministic");
+const invalidInline = compile(
+  protoIdentitySource,
+  "@frontend/proto_identity-invalid.luau",
+  0,
+  [{ callerFunctionId: 2, feedbackSlot: 99, targetFunctionId: 0 }],
+);
+if (invalidInline.status !== 1 || invalidInline.snapshot.length !== 0 || invalidInline.diagnostic.length === 0)
+  throw new Error(`invalid inline plan was not rejected structurally: ${JSON.stringify(invalidInline)}`);
+const invalidInlineSource = compile(
+  "local =",
+  "@frontend/proto_identity-syntax-error.luau",
+  0,
+  [{ callerFunctionId: 0, feedbackSlot: 0, targetFunctionId: 0 }],
+);
+if (invalidInlineSource.status !== 2 || invalidInlineSource.snapshot.length !== 0 || invalidInlineSource.diagnostic.length === 0)
+  throw new Error(`inlined syntax failure was not a structured diagnostic: ${JSON.stringify(invalidInlineSource)}`);
 
 const compoundSource = 'return function() return { first = 11, second = 22, label = "seed" } end';
 const compound = compile(compoundSource, "@frontend/compound-constant.luau");

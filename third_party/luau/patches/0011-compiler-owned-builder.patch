@@ -1,0 +1,51 @@
+diff --git a/Compiler/include/Luau/Compiler.h b/Compiler/include/Luau/Compiler.h
+--- a/Compiler/include/Luau/Compiler.h
++++ b/Compiler/include/Luau/Compiler.h
+@@ -92,6 +92,10 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
+ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, AstNameTable& names, const CompileOptions& options = {});
+ void compileOrThrow(BytecodeBuilder& bytecode, const std::string& source, const CompileOptions& options = {}, const ParseOptions& parseOptions = {});
+ 
++// Compiles exactly once into a caller-owned builder. Returns an empty string on success or the same
++// encoded structured diagnostic as compile() on failure.
++std::string compileInto(BytecodeBuilder& bytecode, const std::string& source, const CompileOptions& options = {}, const ParseOptions& parseOptions = {});
++
+ // compiles bytecode into a bytecode blob, that either contains the valid bytecode or an encoded error that luau_load can decode
+ std::string compile(
+     const std::string& source,
+diff --git a/Compiler/src/Compiler.cpp b/Compiler/src/Compiler.cpp
+--- a/Compiler/src/Compiler.cpp
++++ b/Compiler/src/Compiler.cpp
+@@ -5231,6 +5231,33 @@ void compileOrThrow(BytecodeBuilder& bytecode, const std::string& source, const
+     compileOrThrow(bytecode, result, names, options);
+ }
+ 
++std::string compileInto(BytecodeBuilder& bytecode, const std::string& source, const CompileOptions& options, const ParseOptions& parseOptions)
++{
++    LUAU_TIMETRACE_SCOPE("compileInto", "Compiler");
++
++    Allocator allocator;
++    AstNameTable names(allocator);
++    ParseResult result = Parser::parse(source.c_str(), source.size(), names, allocator, parseOptions);
++
++    if (!result.errors.empty())
++    {
++        const Luau::ParseError& parseError = result.errors.front();
++        std::string error = format(":%d: %s", parseError.getLocation().begin.line + 1, parseError.what());
++        return BytecodeBuilder::getError(error);
++    }
++
++    bool raised = luaucCompileEh.run([&] {
++        compileOrThrow(bytecode, result, names, options);
++    });
++    if (raised)
++    {
++        CompileError error = luaucCompileEh.take();
++        return BytecodeBuilder::getError(format(":%d: %s", error.getLocation().begin.line + 1, error.what()));
++    }
++
++    return {};
++}
++
+ std::string compile(const std::string& source, const CompileOptions& options, const ParseOptions& parseOptions, BytecodeEncoder* encoder)
+ {
+     LUAU_TIMETRACE_SCOPE("compile", "Compiler");

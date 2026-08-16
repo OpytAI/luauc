@@ -1,0 +1,24 @@
+diff --git a/Bytecode/include/Luau/BytecodeBuilder.h b/Bytecode/include/Luau/BytecodeBuilder.h
+--- a/Bytecode/include/Luau/BytecodeBuilder.h
++++ b/Bytecode/include/Luau/BytecodeBuilder.h
+@@ -145,6 +145,20 @@ public:
+         return bytecode;
+     }
+ 
++    // luauc PATCH: the strict frontend's optional profile-guided inlining contract rebuilds the
++    // complete module after applying upstream BytecodeGraph transformations. Expose only the two
++    // immutable bounds needed to preserve function ids and the root; function bodies continue to
++    // cross through getFunctionData and the canonical graph parser/serializer.
++    size_t getFunctionCount() const
++    {
++        return functions.size();
++    }
++
++    uint32_t getMainFunction() const
++    {
++        return mainFunction;
++    }
++
+     std::string dumpFunction(uint32_t id) const;
+     std::string dumpEverything() const;
+     std::string dumpSourceRemarks() const;

@@ -15,6 +15,7 @@ AOT_GENERATED_RUNTIME_SYMBOLS = [
     "luauc_runtime_v1_check_gc",
     "luauc_runtime_v1_check_node_no_next",
     "luauc_runtime_v1_check_node_value",
+    "luauc_runtime_v1_closure_matches_proto_id",
     "luauc_runtime_v1_check_readonly",
     "luauc_runtime_v1_check_safe_env",
     "luauc_runtime_v1_check_userdata_tag",

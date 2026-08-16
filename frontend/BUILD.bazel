@@ -72,9 +72,9 @@ luauc_c_archive(
 )
 
 # This is an optional host capability, not a target guest. It may contain the source compiler,
-# temporary bytecode loader, and bytecode executor needed to materialize a Proto; none of those TUs
-# are in //runtime. The only product boundary exported from C++ is
-# one owned FrontendSnapshotV1 byte buffer.
+# temporary bytecode loader needed to materialize a Proto; none of those TUs are in //runtime and
+# no guest bytecode is executed. The only product boundary exported from C++ is one owned
+# FrontendSnapshotV1 byte buffer.
 zig_binary(
     name = "frontend_raw",
     srcs = ["frontend_host.zig"],
@@ -89,6 +89,7 @@ zig_binary(
         "--export=luauc_frontend_v1_dealloc",
         "--export=luauc_frontend_v1_validate_snapshot",
         "--export=luauc_frontend_snapshot_v1_compile",
+        "--export=luauc_frontend_snapshot_v1_compile_inlined",
         "--export=luauc_frontend_snapshot_v1_free",
         "--export=luauc_frontend_snapshot_v1_last_raise_message",
         "--export=luauc_frontend_snapshot_v1_last_raise_message_size",

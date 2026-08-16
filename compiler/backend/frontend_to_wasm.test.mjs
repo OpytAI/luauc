@@ -36,7 +36,7 @@ const wasmLd = runfile(process.env.LUAUC_WASM_LD, "LUAUC_WASM_LD");
 
 const encoder = new TextEncoder();
 
-function frontendSnapshot(sourceText, chunkText, coverageLevel = 0) {
+function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans = null) {
   const api = frontend.exports;
   api.luauc_frontend_v1_init();
   const source = encoder.encode(sourceText);
@@ -44,19 +44,41 @@ function frontendSnapshot(sourceText, chunkText, coverageLevel = 0) {
   const sourcePointer = api.luauc_frontend_v1_alloc(source.length);
   const chunkPointer = api.luauc_frontend_v1_alloc(chunk.length);
   const resultPointer = api.luauc_frontend_v1_alloc(20);
-  if (!sourcePointer || !chunkPointer || !resultPointer) throw new Error("frontend allocation failed");
+  const planBytes = inlinePlans === null ? null : Buffer.alloc(inlinePlans.length * 16);
+  if (planBytes)
+    for (let index = 0; index < inlinePlans.length; index++) {
+      const plan = inlinePlans[index];
+      planBytes.writeUInt32LE(plan.callerFunctionId, index * 16);
+      planBytes.writeUInt32LE(plan.feedbackSlot, index * 16 + 4);
+      planBytes.writeUInt32LE(plan.targetFunctionId, index * 16 + 8);
+    }
+  const planPointer = planBytes?.length ? api.luauc_frontend_v1_alloc(planBytes.length) : 0;
+  if (!sourcePointer || !chunkPointer || !resultPointer || (planBytes?.length && !planPointer))
+    throw new Error("frontend allocation failed");
 
   new Uint8Array(api.memory.buffer, sourcePointer, source.length).set(source);
   new Uint8Array(api.memory.buffer, chunkPointer, chunk.length).set(chunk);
+  if (planBytes?.length) new Uint8Array(api.memory.buffer, planPointer, planBytes.length).set(planBytes);
   new Uint8Array(api.memory.buffer, resultPointer, 20).fill(0);
-  const status = api.luauc_frontend_snapshot_v1_compile(
-    sourcePointer,
-    source.length,
-    chunkPointer,
-    chunk.length,
-    coverageLevel,
-    resultPointer,
-  );
+  const status = inlinePlans === null
+    ? api.luauc_frontend_snapshot_v1_compile(
+      sourcePointer,
+      source.length,
+      chunkPointer,
+      chunk.length,
+      coverageLevel,
+      resultPointer,
+    )
+    : api.luauc_frontend_snapshot_v1_compile_inlined(
+      sourcePointer,
+      source.length,
+      chunkPointer,
+      chunk.length,
+      coverageLevel,
+      planPointer,
+      inlinePlans.length,
+      resultPointer,
+    );
   const result = new DataView(api.memory.buffer, resultPointer, 20);
   const dataPointer = result.getUint32(0, true);
   const dataSize = result.getUint32(4, true);
@@ -66,6 +88,7 @@ function frontendSnapshot(sourceText, chunkText, coverageLevel = 0) {
 
   api.luauc_frontend_snapshot_v1_free(resultPointer);
   api.luauc_frontend_v1_dealloc(resultPointer, 20);
+  if (planPointer) api.luauc_frontend_v1_dealloc(planPointer, planBytes.length);
   api.luauc_frontend_v1_dealloc(chunkPointer, chunk.length);
   api.luauc_frontend_v1_dealloc(sourcePointer, source.length);
   return snapshot;
@@ -2768,6 +2791,65 @@ async function executeMultiResultCallPackage() {
   return { objectSize: first.length, nestedCalls, pairReturns, interrupts };
 }
 
+async function executeProtoIdentityControlPackageShape() {
+  const name = "Proto identity control";
+  const source = readFileSync(
+    runfile(process.env.LUAUC_PROTO_IDENTITY_SOURCE, "LUAUC_PROTO_IDENTITY_SOURCE"),
+    "utf8",
+  );
+  const plan = [{ callerFunctionId: 2, feedbackSlot: 0, targetFunctionId: 0 }];
+  const firstSnapshot = frontendSnapshot(source, "@proto_identity.luau", 0, plan);
+  const secondSnapshot = frontendSnapshot(source, "@proto_identity.luau", 0, plan);
+  if (!firstSnapshot.equals(secondSnapshot)) throw new Error(`${name}: frontend snapshot is nondeterministic`);
+
+  const shape = snapshotShape(firstSnapshot);
+  if (shape.protoCount !== 5 || shape.functionCount !== 5)
+    throw new Error(`${name}: expected five Protos/functions, got ${shape.protoCount}/${shape.functionCount}`);
+  let identityJump = null;
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
+      const instruction = shape.instruction(functionId, instructionId);
+      if (instruction.command !== 215) continue;
+      if (identityJump) throw new Error(`${name}: expected one JUMP_CMP_PROTOID`);
+      identityJump = { functionId, instructionId, instruction };
+    }
+    backendObject(firstSnapshot, functionId);
+  }
+  if (!identityJump || identityJump.instruction.operandCount !== 4)
+    throw new Error(`${name}: upstream inliner produced no canonical JUMP_CMP_PROTOID`);
+  const expectedProtoId = identityJump.instruction.constant(1);
+  if (expectedProtoId.kind !== 2 || expectedProtoId.bits !== 0n)
+    throw new Error(`${name}: inline guard target identity drifted: ${expectedProtoId.kind}/${expectedProtoId.bits}`);
+
+  const firstObject = backendPackage(firstSnapshot);
+  const secondObject = backendPackage(firstSnapshot);
+  if (!firstObject.equals(secondObject)) throw new Error(`${name}: package backend is nondeterministic`);
+  const linked = await WebAssembly.compile(linkPackage(firstObject, packageFunctionSymbols(shape.functionCount)));
+  if (!WebAssembly.Module.imports(linked).some(({ name: importName }) =>
+    importName === "luauc_runtime_v1_closure_matches_proto_id"))
+    throw new Error(`${name}: generated module lacks the opaque runtime identity predicate`);
+  const staticObject = backendStaticPackage(staticPackageFrame("proto_identity", firstSnapshot));
+  if (!staticObject.length) throw new Error(`${name}: static package produced no object`);
+
+  {
+    const mutated = Buffer.from(firstSnapshot);
+    const protos = snapshotSection(mutated, 3);
+    mutated.writeUInt32LE(1, protos.offset + 24);
+    expectPackageRejection(mutated, "duplicate/misaligned Proto funid");
+  }
+  {
+    const mutated = Buffer.from(firstSnapshot);
+    const functions = snapshotSection(mutated, 15);
+    const constants = snapshotSection(mutated, 19);
+    const functionRecord = functions.offset + identityJump.functionId * functions.recordSize;
+    const constantId = identityJump.instruction.operand(1).value;
+    const constantStart = mutated.readUInt32LE(functionRecord + 40);
+    mutated.writeBigUInt64LE(BigInt(shape.protoCount + 1), constants.offset + (constantStart + constantId) * constants.recordSize + 8);
+    expectPackageRejection(mutated, "JUMP_CMP_PROTOID references an unknown source funid");
+  }
+  return { objectSize: firstObject.length, functionCount: shape.functionCount };
+}
+
 const scalar = await executeCase(
   "scalar",
   "return function(n) return n * 2 + 1 end",
@@ -2813,6 +2895,7 @@ const globalState = await executeGlobalStatePackage();
 const fastBuiltins = await executeFastBuiltinsPackage();
 const bufferScalarMatrix = await executeBufferScalarMatrixPackage();
 const embedNamecallFamily = executeEmbedNamecallFamilyPackageShape();
+const protoIdentityControl = await executeProtoIdentityControlPackageShape();
 
 console.log(
   `frontend -> IR -> relocatable wasm: scalar ${scalar.objectSize} bytes, loop ${loop.objectSize} bytes; ` +
@@ -2841,6 +2924,7 @@ console.log(
     `fast builtins ${fastBuiltins.objectSize} bytes/${fastBuiltins.functionCount} functions; ` +
     `buffer scalar matrix ${bufferScalarMatrix.objectSize} bytes/${bufferScalarMatrix.functionCount} functions; ` +
     `embed NAMECALL family ${embedNamecallFamily.objectSize} bytes/${embedNamecallFamily.functionCount} functions; ` +
+    `Proto identity control ${protoIdentityControl.objectSize} bytes/${protoIdentityControl.functionCount} functions; ` +
     `multi-result package ${multiResultCall.objectSize} bytes/${multiResultCall.pairReturns} pair returns; ` +
     `interrupt calls ${scalar.interrupts}/${loop.interrupts}/${silent.interrupts}/${slowAdd.interrupts}; ` +
     `slow helpers ${slowAdd.helperCalls}`,

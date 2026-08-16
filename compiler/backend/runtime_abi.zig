@@ -43,6 +43,7 @@ pub const node_slot_match_symbol = "luauc_runtime_v1_node_slot_match";
 pub const try_get_tm_symbol = "luauc_runtime_v1_try_get_tm";
 pub const check_node_no_next_symbol = "luauc_runtime_v1_check_node_no_next";
 pub const check_node_value_symbol = "luauc_runtime_v1_check_node_value";
+pub const closure_matches_proto_id_symbol = "luauc_runtime_v1_closure_matches_proto_id";
 pub const check_readonly_symbol = "luauc_runtime_v1_check_readonly";
 pub const table_set_string_symbol = "luauc_runtime_v1_table_set_string";
 pub const table_get_string_symbol = "luauc_runtime_v1_table_get_string";
@@ -141,6 +142,7 @@ pub const ir_cmd_buffer_writef64: snapshot_v1.IrCommand = @enumFromInt(212);
 pub const ir_cmd_buffer_readi64: snapshot_v1.IrCommand = @enumFromInt(213);
 pub const ir_cmd_buffer_writei64: snapshot_v1.IrCommand = @enumFromInt(214);
 pub const ir_cmd_jump_slot_match: snapshot_v1.IrCommand = @enumFromInt(97);
+pub const ir_cmd_jump_cmp_protoid: snapshot_v1.IrCommand = @enumFromInt(215);
 
 pub const lua_state_top_offset: u32 = 8;
 pub const lua_state_base_offset: u32 = 12;

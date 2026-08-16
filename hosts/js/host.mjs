@@ -55,19 +55,39 @@ function allocation(api, bytesOrSize) {
 }
 
 async function buildRequest(modules, entryModuleId, profileDigest, packDigest, coverageLevel) {
-  modules = await Promise.all(modules.map(async ({ name, source }) => {
+  modules = await Promise.all(modules.map(async ({ name, source, inlinePlans = [] }) => {
     const canonicalName = bytes(name);
     const content = bytes(source);
+    const canonicalPlans = inlinePlans.map(({ callerFunctionId, feedbackSlot, targetFunctionId }) => {
+      for (const [field, value] of Object.entries({ callerFunctionId, feedbackSlot, targetFunctionId }))
+        if (!Number.isInteger(value) || value < 0 || value > 0xffffffff)
+          throw new TypeError(`${name} inline plan ${field} is not a uint32`);
+      return { callerFunctionId, feedbackSlot, targetFunctionId };
+    }).sort((lhs, rhs) => lhs.callerFunctionId - rhs.callerFunctionId || lhs.feedbackSlot - rhs.feedbackSlot);
+    if (canonicalPlans.some((plan, index) => index &&
+        canonicalPlans[index - 1].callerFunctionId === plan.callerFunctionId &&
+        canonicalPlans[index - 1].feedbackSlot === plan.feedbackSlot))
+      throw new Error(`${name} has duplicate inline plan call sites`);
+    const planBytes = new Uint8Array(canonicalPlans.length * 16);
+    for (let index = 0; index < canonicalPlans.length; index++) {
+      const plan = canonicalPlans[index];
+      putU32(planBytes, index * 16, plan.callerFunctionId);
+      putU32(planBytes, index * 16 + 4, plan.feedbackSlot);
+      putU32(planBytes, index * 16 + 8, plan.targetFunctionId);
+    }
     return {
       name: canonicalName,
       sourceName: bytes(`@${name}.luau`),
       content,
       contentDigest: await sha256(content),
+      planBytes,
+      planCount: canonicalPlans.length,
     };
   }));
   modules.sort((lhs, rhs) => compareBytes(lhs.name, rhs.name));
   if (!modules.length || modules.some((module, index) => index && compareBytes(modules[index - 1].name, module.name) === 0))
     throw new Error("invalid source package modules");
+  const inlinePlanEnabled = modules.some((module) => module.planCount !== 0);
 
   const manifestHeader = new Uint8Array(8);
   putU32(manifestHeader, 0, modules.length);
@@ -78,14 +98,20 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
     return concat([header, value]);
   };
   const manifest = [manifestHeader];
-  for (const module of modules)
+  for (const module of modules) {
     manifest.push(sized(module.name), sized(module.sourceName), module.contentDigest);
+    if (inlinePlanEnabled) {
+      const planCount = new Uint8Array(4);
+      putU32(planCount, 0, module.planCount);
+      manifest.push(planCount, module.planBytes);
+    }
+  }
   const manifestDigest = await sha256(concat(manifest));
 
   const headerSize = 160;
   const recordSize = 64;
   const total = modules.reduce(
-    (size, module) => size + module.name.length + module.sourceName.length + module.content.length,
+    (size, module) => size + module.name.length + module.sourceName.length + module.content.length + module.planBytes.length,
     headerSize + recordSize * modules.length,
   );
   const request = new Uint8Array(total);
@@ -100,7 +126,9 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
   const coverage = new Uint8Array(4);
   putU32(coverage, 0, coverageLevel);
   request.set((await sha256(concat([
-    bytes("luauc-source-request-v1\0"),
+    bytes(inlinePlanEnabled
+      ? "luauc-source-request-v1-inline-plan\0"
+      : "luauc-source-request-v1\0"),
     coverage,
     profileDigest,
     packDigest,
@@ -109,6 +137,7 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
   request.set(profileDigest, 48);
   request.set(packDigest, 80);
   request.set(manifestDigest, 112);
+  if (inlinePlanEnabled) putU32(request, 144, 1);
 
   let cursor = headerSize + recordSize * modules.length;
   for (let index = 0; index < modules.length; index++) {
@@ -127,7 +156,14 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
     request.set(module.content, cursor);
     cursor += module.content.length;
     request.set(module.contentDigest, record + 24);
+    if (module.planCount !== 0) {
+      putU32(request, record + 56, cursor);
+      putU32(request, record + 60, module.planCount);
+      request.set(module.planBytes, cursor);
+      cursor += module.planBytes.length;
+    }
   }
+  if (cursor !== request.length) throw new Error("source package request layout drifted");
   return request;
 }
 

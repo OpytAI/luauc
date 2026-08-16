@@ -47,6 +47,7 @@ const node_slot_match_symbol = abi.node_slot_match_symbol;
 const try_get_tm_symbol = abi.try_get_tm_symbol;
 const check_node_no_next_symbol = abi.check_node_no_next_symbol;
 const check_node_value_symbol = abi.check_node_value_symbol;
+const closure_matches_proto_id_symbol = abi.closure_matches_proto_id_symbol;
 const check_readonly_symbol = abi.check_readonly_symbol;
 const table_set_string_symbol = abi.table_set_string_symbol;
 const table_get_string_symbol = abi.table_get_string_symbol;
@@ -99,6 +100,7 @@ const ir_cmd_barrier_table_back = abi.ir_cmd_barrier_table_back;
 const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
+const ir_cmd_jump_cmp_protoid = abi.ir_cmd_jump_cmp_protoid;
 const ir_cmd_try_call_fastgettm = abi.ir_cmd_try_call_fastgettm;
 const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
 const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
@@ -144,6 +146,7 @@ pub const ImportNeeds = struct {
     try_get_tm: bool = false,
     check_node_no_next: bool = false,
     check_node_value: bool = false,
+    closure_matches_proto_id: bool = false,
     check_readonly: bool = false,
     load_constant: bool = false,
     dup_table: bool = false,
@@ -208,6 +211,7 @@ pub const RuntimeImports = struct {
     try_get_tm: ?wasm.FunctionRef,
     check_node_no_next: ?wasm.FunctionRef,
     check_node_value: ?wasm.FunctionRef,
+    closure_matches_proto_id: ?wasm.FunctionRef,
     check_readonly: ?wasm.FunctionRef,
     load_constant: ?wasm.FunctionRef,
     dup_table: ?wasm.FunctionRef,
@@ -337,6 +341,7 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
             ir_cmd_try_call_fastgettm => needs.try_get_tm = true,
             ir_cmd_check_node_no_next => needs.check_node_no_next = true,
             ir_cmd_check_node_value => needs.check_node_value = true,
+            ir_cmd_jump_cmp_protoid => needs.closure_matches_proto_id = true,
             ir_cmd_check_readonly => {
                 needs.check_readonly = true;
                 needs.set_location = true;
@@ -638,6 +643,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &generated_params, .results = &status_result });
         break :blk try object.importFunction("env", check_node_value_symbol, helper_type);
     } else null;
+    const closure_matches_proto_id = if (needs.closure_matches_proto_id) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &status_result });
+        break :blk try object.importFunction("env", closure_matches_proto_id_symbol, helper_type);
+    } else null;
     const check_readonly = if (needs.check_readonly) blk: {
         const helper_type = try object.addType(.{ .params = &forg_loop_params, .results = &status_result });
         break :blk try object.importFunction("env", check_readonly_symbol, helper_type);
@@ -805,6 +814,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .try_get_tm = try_get_tm,
         .check_node_no_next = check_node_no_next,
         .check_node_value = check_node_value,
+        .closure_matches_proto_id = closure_matches_proto_id,
         .check_readonly = check_readonly,
         .load_constant = load_constant,
         .dup_table = dup_table,

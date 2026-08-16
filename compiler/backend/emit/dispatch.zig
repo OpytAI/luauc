@@ -23,6 +23,7 @@ const ir_cmd_barrier_table_back = abi.ir_cmd_barrier_table_back;
 const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
+const ir_cmd_jump_cmp_protoid = abi.ir_cmd_jump_cmp_protoid;
 const ir_cmd_try_call_fastgettm = abi.ir_cmd_try_call_fastgettm;
 const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
 const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
@@ -371,6 +372,10 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         ir_cmd_jump_slot_match => {
             try self.emitJumpSlotMatch(instruction_id, instruction_value);
+            return true;
+        },
+        ir_cmd_jump_cmp_protoid => {
+            try self.emitJumpCompareProtoId(instruction_value);
             return true;
         },
         .return_ => {

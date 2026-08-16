@@ -39,6 +39,7 @@ fn lowerFunction(
     symbol_name: []const u8,
     static_package: ?static_package_v1.Package,
     function_id_base: u32,
+    proto_id_by_bytecode_id: []const u32,
     string_keys: *StringKeyPool,
 ) Error!wasm.FunctionRef {
     diagnostics.enterFunction(function_id);
@@ -172,6 +173,7 @@ fn lowerFunction(
         .try_get_tm = imports.try_get_tm,
         .check_node_no_next = imports.check_node_no_next,
         .check_node_value = imports.check_node_value,
+        .closure_matches_proto_id = imports.closure_matches_proto_id,
         .check_readonly = imports.check_readonly,
         .load_constant = imports.load_constant,
         .dup_table = imports.dup_table,
@@ -209,6 +211,7 @@ fn lowerFunction(
         .require_static = imports.require_static,
         .static_package = static_package,
         .function_id_base = function_id_base,
+        .proto_id_by_bytecode_id = proto_id_by_bytecode_id,
         .base_local = 2,
         .dispatch_local = 3,
         .status_local = 4,
@@ -296,6 +299,26 @@ fn lowerFunction(
     return object.defineFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden, body);
 }
 
+fn buildProtoIdentityMap(allocator: std.mem.Allocator, snapshot: snapshot_v1.Snapshot) Error![]u32 {
+    const map = try allocator.alloc(u32, snapshot.header.proto_count);
+    errdefer allocator.free(map);
+    @memset(map, snapshot_v1.no_id);
+
+    var proto_id: u32 = 0;
+    while (proto_id < snapshot.header.proto_count) : (proto_id += 1) {
+        const proto = try snapshot.proto(proto_id);
+        if (proto.bytecode_id >= snapshot.header.proto_count or
+            proto.fun_id != proto.bytecode_id + 1 or
+            map[proto.bytecode_id] != snapshot_v1.no_id)
+            return Error.InvalidProto;
+        map[proto.bytecode_id] = proto_id;
+    }
+    for (map) |mapped_proto_id|
+        if (mapped_proto_id == snapshot_v1.no_id)
+            return Error.InvalidProto;
+    return map;
+}
+
 pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_id: u32) Error![]u8 {
     diagnostics.reset();
     diagnostics.enterFunction(function_id);
@@ -303,6 +326,8 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     try snapshot_v1.validateModel(snapshot);
     if (function_id >= snapshot.header.ir_function_count)
         return Error.FunctionOutOfBounds;
+    const proto_id_by_bytecode_id = try buildProtoIdentityMap(allocator, snapshot);
+    defer allocator.free(proto_id_by_bytecode_id);
 
     var needs = runtime_imports.ImportNeeds{};
     runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs) catch |err| {
@@ -314,7 +339,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
-    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, &string_keys);
+    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, proto_id_by_bytecode_id, &string_keys);
     try emitStringKeyData(&object, string_keys);
     return object.emit();
 }
@@ -323,6 +348,8 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     diagnostics.reset();
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
     try snapshot_v1.validateModel(snapshot);
+    const proto_id_by_bytecode_id = try buildProtoIdentityMap(allocator, snapshot);
+    defer allocator.free(proto_id_by_bytecode_id);
 
     var needs = runtime_imports.ImportNeeds{};
     var function_id: u32 = 0;
@@ -339,7 +366,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{function_id});
         defer allocator.free(symbol_name);
-        _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, symbol_name, null, 0, &string_keys);
+        _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, symbol_name, null, 0, proto_id_by_bytecode_id, &string_keys);
     }
     try emitStringKeyData(&object, string_keys);
     return object.emit();
@@ -759,6 +786,8 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
         const module = try package.module(module_id);
         const snapshot = try snapshot_v1.parse(module.snapshot, snapshot_v1.production_identity);
         const function_base = function_bases[@intCast(module_id)];
+        const proto_id_by_bytecode_id = try buildProtoIdentityMap(allocator, snapshot);
+        defer allocator.free(proto_id_by_bytecode_id);
         var function_id: u32 = 0;
         while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
             const global_function_id = std.math.add(u32, function_base, function_id) catch return Error.ResourceLimit;
@@ -773,6 +802,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
                 symbol_name,
                 package,
                 function_base,
+                proto_id_by_bytecode_id,
                 &string_keys,
             );
         }

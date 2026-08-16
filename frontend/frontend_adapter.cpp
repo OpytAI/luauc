@@ -12,7 +12,12 @@
 
 #include "Luau/CodeGenOptions.h"
 #include "Luau/Bytecode.h"
+#include "Luau/BytecodeBuilder.h"
+#include "Luau/BytecodeCallInliner.h"
+#include "Luau/BytecodeGraph.h"
 #include "Luau/BytecodeUtils.h"
+#include "Luau/Common.h"
+#include "Luau/Compiler.h"
 #include "Luau/IrAnalysis.h"
 #include "Luau/IrBuilder.h"
 #include "Luau/IrData.h"
@@ -20,6 +25,7 @@
 #include "Luau/OptimizeConstProp.h"
 
 #include <algorithm>
+#include <optional>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +33,8 @@
 #include <vector>
 
 using namespace Luau::CodeGen;
+
+LUAU_FASTFLAG(LuauEmitCallFeedback)
 
 static_assert(sizeof(IrCmd) == 1, "FrontendSnapshotV1 pins IrCmd to one byte");
 static_assert(unsigned(IrCmd::JUMP_CMP_PROTOID) == 215, "IrCmd pin drift");
@@ -44,6 +52,7 @@ constexpr size_t kMaxInstructions = 1'048'576;
 constexpr size_t kMaxBlocksPerFunction = 32'768;
 constexpr size_t kMaxInstructionsPerBlock = 65'536;
 constexpr size_t kMaxStrings = 1 * 1024 * 1024;
+constexpr uint32_t kMaxInlinePlans = 4096;
 
 constexpr uint8_t kLuauPinSha256[32] = {
     0xe5, 0x1e, 0xad, 0x5f, 0x54, 0x16, 0x33, 0x69, 0x3d, 0x54, 0x80, 0x57, 0xe0, 0x43, 0x19, 0x27,
@@ -51,8 +60,8 @@ constexpr uint8_t kLuauPinSha256[32] = {
 };
 
 constexpr uint8_t kPatchsetSha256[32] = {
-    0x91, 0xac, 0xf9, 0x29, 0xdb, 0xc5, 0xc2, 0xb3, 0x86, 0x90, 0x5f, 0xba, 0xd9, 0xd6, 0x26, 0xcd,
-    0x28, 0xb5, 0x63, 0x46, 0x25, 0x98, 0xad, 0x01, 0xe5, 0x1d, 0x15, 0xa6, 0x02, 0x31, 0x50, 0x0e,
+    0xc5, 0x10, 0xe8, 0x65, 0x34, 0xc3, 0x45, 0xd9, 0xd6, 0xeb, 0xd7, 0xb3, 0x02, 0x20, 0x8a, 0x66,
+    0x42, 0xc1, 0x23, 0xa4, 0x7e, 0x76, 0xe1, 0xb0, 0x17, 0xb7, 0x7f, 0x3f, 0x29, 0xa6, 0xc7, 0xeb,
 };
 
 constexpr uint8_t kIrEnumSha256[32] = {
@@ -870,53 +879,44 @@ bool buildWireImage(std::vector<SectionData> &sections, uint32_t protoCount, uin
     return output.size() == totalSize;
 }
 
-} // namespace
-
-extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, size_t sourceSize,
-                                                         const uint8_t *chunkName,
-                                                         size_t chunkNameSize,
-                                                         uint32_t coverageLevel,
-                                                         LuaucFrontendSnapshotV1Result *result) {
-    if (!result)
-        return LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT;
-    memset(result, 0, sizeof(*result));
-
-    if ((!source && sourceSize != 0) || (!chunkName && chunkNameSize != 0) ||
-        sourceSize > kMaxSourceBytes || chunkNameSize > 4096 || coverageLevel > 2) {
-        setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT,
-                      "invalid frontend source or chunk name");
-        return result->status;
-    }
-    if (chunkName && memchr(chunkName, 0, chunkNameSize)) {
-        setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT, "chunk name contains NUL");
-        return result->status;
-    }
-
+bool compileSource(const uint8_t *source, size_t sourceSize, uint32_t coverageLevel,
+                   std::string &bytecode, LuaucFrontendSnapshotV1Result *result) {
     size_t bytecodeSize = 0;
     const char *sourceBytes = sourceSize ? reinterpret_cast<const char *>(source) : "";
     lua_CompileOptions options{};
     options.optimizationLevel = 1;
     options.debugLevel = 1;
     options.coverageLevel = int(coverageLevel);
-    char *bytecode = luau_compile(sourceBytes, sourceSize, &options, &bytecodeSize);
-    if (!bytecode || bytecodeSize == 0 || bytecodeSize > kMaxBytecodeBytes) {
-        free(bytecode);
+    char *rawBytecode = luau_compile(sourceBytes, sourceSize, &options, &bytecodeSize);
+    if (!rawBytecode || bytecodeSize == 0 || bytecodeSize > kMaxBytecodeBytes) {
+        free(rawBytecode);
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_COMPILE_ERROR,
                       "luau_compile failed or exceeded bytecode limit");
-        return result->status;
+        return false;
     }
-    if (bytecode[0] == 0) {
+    if (rawBytecode[0] == 0) {
         size_t messageOffset = 1;
         size_t messageSize = bytecodeSize > messageOffset ? bytecodeSize - messageOffset : 0;
-        setDiagnostic(result, LUAUC_SNAPSHOT_V1_COMPILE_ERROR, bytecode + messageOffset,
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_COMPILE_ERROR, rawBytecode + messageOffset,
                       messageSize);
-        free(bytecode);
+        free(rawBytecode);
+        return false;
+    }
+    bytecode.assign(rawBytecode, bytecodeSize);
+    free(rawBytecode);
+    return true;
+}
+
+uint32_t snapshotBytecode(const std::string &bytecode, const uint8_t *chunkName,
+                          size_t chunkNameSize, LuaucFrontendSnapshotV1Result *result) {
+    if (bytecode.empty() || bytecode.size() > kMaxBytecodeBytes) {
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_COMPILE_ERROR,
+                      "compiled bytecode is empty or exceeds the frontend limit");
         return result->status;
     }
 
     lua_State *state = luaL_newstate();
     if (!state) {
-        free(bytecode);
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_INTERNAL_ERROR, "luaL_newstate failed");
         return result->status;
     }
@@ -924,13 +924,12 @@ extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, si
     std::string chunk = chunkNameSize
                             ? std::string(reinterpret_cast<const char *>(chunkName), chunkNameSize)
                             : std::string("=aot");
-    int loadStatus = luau_load(state, chunk.c_str(), bytecode, bytecodeSize, 0);
+    int loadStatus = luau_load(state, chunk.c_str(), bytecode.data(), bytecode.size(), 0);
     if (loadStatus != 0) {
         const char *message = lua_tostring(state, -1);
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_LOAD_ERROR,
                       message ? message : "luau_load failed");
         lua_close(state);
-        free(bytecode);
         return result->status;
     }
 
@@ -938,7 +937,6 @@ extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, si
     if (!loaded || !ttisfunction(loaded) || clvalue(loaded)->isC || !clvalue(loaded)->l.p) {
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_INTERNAL_ERROR, "loaded chunk has no Luau Proto");
         lua_close(state);
-        free(bytecode);
         return result->status;
     }
 
@@ -947,13 +945,12 @@ extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, si
         setDiagnostic(result, LUAUC_SNAPSHOT_V1_RESOURCE_LIMIT,
                       "Proto graph is invalid or exceeds limit");
         lua_close(state);
-        free(bytecode);
         return result->status;
     }
 
     std::vector<SectionData> sections = makeSections();
     SectionData &compiledBytecode = section(sections, LUAUC_SNAPSHOT_V1_COMPILED_BYTECODE);
-    appendBytes(compiledBytecode, bytecode, bytecodeSize);
+    appendBytes(compiledBytecode, bytecode.data(), bytecode.size());
 
     StringTable strings{
         section(sections, LUAUC_SNAPSHOT_V1_STRINGS),
@@ -973,7 +970,6 @@ extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, si
         ok = serializeIr(protos, sections, failureStatus, error);
 
     lua_close(state);
-    free(bytecode);
 
     if (!ok) {
         setDiagnostic(result, failureStatus, error);
@@ -996,6 +992,170 @@ extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, si
     result->size = snapshot.size();
     result->status = LUAUC_SNAPSHOT_V1_OK;
     return result->status;
+}
+
+bool validCompileArguments(const uint8_t *source, size_t sourceSize, const uint8_t *chunkName,
+                           size_t chunkNameSize, uint32_t coverageLevel,
+                           LuaucFrontendSnapshotV1Result *result) {
+    if ((!source && sourceSize != 0) || (!chunkName && chunkNameSize != 0) ||
+        sourceSize > kMaxSourceBytes || chunkNameSize > 4096 || coverageLevel > 2) {
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT,
+                      "invalid frontend source or chunk name");
+        return false;
+    }
+    if (chunkName && memchr(chunkName, 0, chunkNameSize)) {
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT, "chunk name contains NUL");
+        return false;
+    }
+    return true;
+}
+
+bool buildInlinedBytecode(const uint8_t *source, size_t sourceSize, uint32_t coverageLevel,
+                          const LuaucFrontendInlinePlanV1 *plans, uint32_t planCount,
+                          std::string &bytecode, LuaucFrontendSnapshotV1Result *result) {
+    if (!plans || planCount == 0 || planCount > kMaxInlinePlans) {
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT, "invalid inline plan span");
+        return false;
+    }
+    for (uint32_t index = 0; index < planCount; ++index) {
+        const LuaucFrontendInlinePlanV1 &plan = plans[index];
+        if (plan.reserved != 0 ||
+            (index != 0 && (plans[index - 1].caller_function_id > plan.caller_function_id ||
+                            (plans[index - 1].caller_function_id == plan.caller_function_id &&
+                             plans[index - 1].feedback_slot >= plan.feedback_slot)))) {
+            setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT,
+                          "inline plans are not canonical and unique");
+            return false;
+        }
+    }
+
+    const bool previousFeedback = FFlag::LuauEmitCallFeedback.value;
+    FFlag::LuauEmitCallFeedback.value = true;
+    Luau::CompileOptions options{};
+    options.optimizationLevel = 1;
+    options.debugLevel = 1;
+    options.coverageLevel = int(coverageLevel);
+    Luau::BytecodeBuilder original;
+    std::string compileDiagnostic = Luau::compileInto(
+        original,
+        std::string(sourceSize ? reinterpret_cast<const char *>(source) : "", sourceSize), options);
+    if (!compileDiagnostic.empty()) {
+        FFlag::LuauEmitCallFeedback.value = previousFeedback;
+        const size_t messageOffset = compileDiagnostic[0] == 0 ? 1 : 0;
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_COMPILE_ERROR,
+                      compileDiagnostic.data() + messageOffset,
+                      compileDiagnostic.size() - messageOffset);
+        return false;
+    }
+    const size_t functionCount = original.getFunctionCount();
+    if (functionCount == 0 || functionCount > kMaxProtos) {
+        FFlag::LuauEmitCallFeedback.value = previousFeedback;
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_RESOURCE_LIMIT,
+                      "inline source function count exceeds the frontend limit");
+        return false;
+    }
+
+    std::vector<std::string_view> strings = original.getStringTable();
+    std::vector<Luau::Bytecode::CompTimeBcFunction> functions;
+    functions.reserve(functionCount);
+    for (size_t functionId = 0; functionId < functionCount; ++functionId) {
+        std::optional<Luau::Bytecode::CompTimeBcFunction> function =
+            Luau::Bytecode::fromFunctionBytecode(original.getFunctionData(uint32_t(functionId)),
+                                                 strings);
+        if (!function) {
+            FFlag::LuauEmitCallFeedback.value = previousFeedback;
+            setDiagnostic(result, LUAUC_SNAPSHOT_V1_INTERNAL_ERROR,
+                          "upstream bytecode graph parser rejected compiler output");
+            return false;
+        }
+        functions.push_back(std::move(*function));
+    }
+
+    for (uint32_t planId = 0; planId < planCount; ++planId) {
+        const LuaucFrontendInlinePlanV1 &plan = plans[planId];
+        if (plan.caller_function_id >= functions.size() ||
+            plan.target_function_id >= functions.size() || plan.target_function_id == UINT32_MAX) {
+            FFlag::LuauEmitCallFeedback.value = previousFeedback;
+            setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT,
+                          "inline plan references an unknown function");
+            return false;
+        }
+        Luau::Bytecode::CompTimeBcFunction &caller = functions[plan.caller_function_id];
+        Luau::Bytecode::BcOp call;
+        uint32_t matches = 0;
+        for (uint32_t instructionId = 0; instructionId < caller.instructions.size(); ++instructionId) {
+            if (caller.instructions[instructionId].op != LOP_CALLFB)
+                continue;
+            Luau::Bytecode::BcOp candidate{Luau::Bytecode::BcOpKind::Inst, instructionId};
+            const int32_t feedbackSlot = caller.as<Luau::Bytecode::BcCallFB<>>(candidate).FbSlot();
+            if (feedbackSlot >= 0 && uint32_t(feedbackSlot) == plan.feedback_slot) {
+                call = candidate;
+                ++matches;
+            }
+        }
+        const uint32_t targetProtoId = plan.target_function_id;
+        if (matches != 1 ||
+            !Luau::Bytecode::inlineCall(caller, functions[plan.target_function_id], call,
+                                       targetProtoId)) {
+            FFlag::LuauEmitCallFeedback.value = previousFeedback;
+            setDiagnostic(result, LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT,
+                          "inline plan does not identify an inlinable CALLFB");
+            return false;
+        }
+    }
+
+    Luau::BytecodeBuilder rebuilt;
+    for (Luau::Bytecode::CompTimeBcFunction &function : functions) {
+        if (Luau::Bytecode::toFunctionBytecode(rebuilt, function).empty()) {
+            FFlag::LuauEmitCallFeedback.value = previousFeedback;
+            setDiagnostic(result, LUAUC_SNAPSHOT_V1_INTERNAL_ERROR,
+                          "upstream bytecode graph serializer rejected transformed function");
+            return false;
+        }
+    }
+    rebuilt.setMainFunction(original.getMainFunction());
+    rebuilt.finalize();
+    bytecode = rebuilt.getBytecode();
+    FFlag::LuauEmitCallFeedback.value = previousFeedback;
+    if (bytecode.empty() || bytecode.size() > kMaxBytecodeBytes) {
+        setDiagnostic(result, LUAUC_SNAPSHOT_V1_RESOURCE_LIMIT,
+                      "inlined bytecode exceeds the frontend limit");
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+extern "C" uint32_t luauc_frontend_snapshot_v1_compile(const uint8_t *source, size_t sourceSize,
+                                                         const uint8_t *chunkName,
+                                                         size_t chunkNameSize,
+                                                         uint32_t coverageLevel,
+                                                         LuaucFrontendSnapshotV1Result *result) {
+    if (!result)
+        return LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT;
+    memset(result, 0, sizeof(*result));
+    if (!validCompileArguments(source, sourceSize, chunkName, chunkNameSize, coverageLevel, result))
+        return result->status;
+    std::string bytecode;
+    if (!compileSource(source, sourceSize, coverageLevel, bytecode, result))
+        return result->status;
+    return snapshotBytecode(bytecode, chunkName, chunkNameSize, result);
+}
+
+extern "C" uint32_t luauc_frontend_snapshot_v1_compile_inlined(
+    const uint8_t *source, size_t sourceSize, const uint8_t *chunkName, size_t chunkNameSize,
+    uint32_t coverageLevel, const LuaucFrontendInlinePlanV1 *plans, uint32_t planCount,
+    LuaucFrontendSnapshotV1Result *result) {
+    if (!result)
+        return LUAUC_SNAPSHOT_V1_INVALID_ARGUMENT;
+    memset(result, 0, sizeof(*result));
+    if (!validCompileArguments(source, sourceSize, chunkName, chunkNameSize, coverageLevel, result))
+        return result->status;
+    std::string bytecode;
+    if (!buildInlinedBytecode(source, sourceSize, coverageLevel, plans, planCount, bytecode, result))
+        return result->status;
+    return snapshotBytecode(bytecode, chunkName, chunkNameSize, result);
 }
 
 extern "C" void luauc_frontend_snapshot_v1_free(LuaucFrontendSnapshotV1Result *result) {
