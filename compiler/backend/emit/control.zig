@@ -291,7 +291,29 @@ pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Erro
         (try self.supportsGenericIterationFallback(block)) or
         (try self.supportsSpecializedIpairsFallback(block)) or
         (try self.xnextPreparationPattern(block) != null) or
-        (try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block));
+        (try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block)) or
+        (try self.supportsNamecallFallback(block));
+}
+pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
+    if (block.kind != .fallback or block.isEmpty() or block.finish != block.start + 1)
+        return false;
+    const semantic = try self.instruction(block.start);
+    const jump = try self.instruction(block.finish);
+    if (semantic.command != abi.ir_cmd_fallback_namecall or semantic.operand_count != 4 or
+        jump.command != .jump or jump.operand_count != 1)
+        return false;
+    const pc = try self.operand(semantic, 0);
+    const destination = try self.operand(semantic, 1);
+    const source = try self.operand(semantic, 2);
+    const key = try self.operand(semantic, 3);
+    const target = try self.operand(jump, 0);
+    if (pc.kind != .constant or (try self.constant(pc.value)).uintValue() == null or
+        destination.kind != .vm_reg or destination.value >= self.proto.max_stack_size or
+        source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
+        key.kind != .vm_const or key.value >= self.proto.vm_constant_count or target.kind != .block)
+        return false;
+    const target_block = try self.snapshot.irBlock(self.function, target.value);
+    return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
 pub noinline fn supportsOrdinaryCallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty() or block.finish < block.start + 3)
@@ -364,6 +386,12 @@ pub noinline fn isOwnedSemanticTableFallbackBlock(self: anytype, block_id: u32, 
 
         var instruction_id = source.start;
         while (instruction_id <= source.finish) : (instruction_id += 1) {
+            if (try self.literalFieldSetPatternAt(instruction_id)) |pattern| {
+                const match = try self.instruction(pattern.start + 1);
+                const fallback = try self.operand(match, 2);
+                if (fallback.kind == .block and fallback.value == block_id)
+                    return true;
+            }
             if (try self.inlineStringSetPatternAt(instruction_id, source)) |operation|
                 if (operation.pattern.fallback == block_id)
                     return true;
@@ -397,8 +425,7 @@ pub noinline fn isOwnedDynamicLengthFallbackBlock(self: anytype, block_id: u32, 
     return false;
 }
 pub noinline fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
-    return (try self.isBypassedPlainTableNamecallBlock(block_id)) or
-        (try self.isBypassedStringEqualityBlock(block_id)) or
+    return (try self.isBypassedStringEqualityBlock(block_id)) or
         (try self.isBypassedStringLinearizedBlock(block_id, block)) or
         (try self.isBypassedGenericTableLinearizedBlock(block_id, block)) or
         (try self.isBypassedGlobalLinearizedBlock(block_id, block)) or

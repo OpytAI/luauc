@@ -16,7 +16,9 @@ const lua_state_top_offset = abi.lua_state_top_offset;
 const lua_state_ci_offset = abi.lua_state_ci_offset;
 const callinfo_top_offset = abi.callinfo_top_offset;
 const tvalue_size = abi.tvalue_size;
+const tvalue_tag_offset = abi.tvalue_tag_offset;
 const tstring_len_offset = abi.tstring_len_offset;
+const lua_tag_number = abi.lua_tag_number;
 const lua_tag_string = abi.lua_tag_string;
 const lbf_operand_none = abi.lbf_operand_none;
 const lop_getimport = abi.lop_getimport;
@@ -644,6 +646,11 @@ pub noinline fn emitStringLen(self: anytype, instruction_id: u32, instruction_va
     try self.body.i32Load(self.allocator, 2, pattern.source * tvalue_size);
     try self.body.i32Load(self.allocator, 2, tstring_len_offset);
     try self.emitInstructionResultSet(instruction_id);
+    if (pattern.materialize_tag) {
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Const(self.allocator, lua_tag_number);
+        try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size + tvalue_tag_offset);
+    }
 }
 pub noinline fn emitTypeName(self: anytype, pattern: TypeNamePattern) Error!void {
     try self.body.localGet(self.allocator, 0);

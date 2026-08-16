@@ -21,18 +21,7 @@ const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
 const lua_tag_table = abi.lua_tag_table;
 
 pub fn blockReferenceCount(self: anytype, target: u32) Error!u32 {
-    var count: u32 = 0;
-    var instruction_id: u32 = 0;
-    while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
-        const instruction_value = try self.instruction(instruction_id);
-        var operand_id: u32 = 0;
-        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-            const operand_value = try self.operand(instruction_value, operand_id);
-            if (operand_value.kind == .block and operand_value.value == target)
-                count = std.math.add(u32, count, 1) catch return Error.ResourceLimit;
-        }
-    }
-    return count;
+    return self.plan.blockReferences(target) orelse Error.UnsupportedControlFlow;
 }
 pub noinline fn plainTableNamecallPattern(self: anytype, block: snapshot_v1.IrBlock) Error!?PlainTableNamecallPattern {
     const head_commands = [_]snapshot_v1.IrCommand{
@@ -242,6 +231,29 @@ pub noinline fn emitPlainTableNamecallBlock(
     try self.emitPlainTableNamecallOperation(pattern);
     try self.body.branch(self.allocator, 1);
     try self.body.end(self.allocator);
+}
+pub noinline fn emitFallbackNamecall(
+    self: anytype,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const pc_operand = try self.operand(instruction_value, 0);
+    if (pc_operand.kind != .constant)
+        return Error.InvalidOperandType;
+    const pc = (try self.constant(pc_operand.value)).uintValue() orelse return Error.InvalidOperandType;
+    const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
+    const key_bytes = (try self.stringKey(try self.operand(instruction_value, 3))) orelse
+        return Error.InvalidOperandType;
+    const key = try self.string_keys.intern(self.allocator, key_bytes);
+    try self.emitPcLocation(pc);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
+    try self.body.i32Const(self.allocator, @intCast(key.length));
+    try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
 }
 pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTableNamecallPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);

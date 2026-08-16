@@ -1,0 +1,580 @@
+const std = @import("std");
+const snapshot_v1 = @import("frontend_snapshot_v1");
+const model = @import("luauc_backend_model");
+const abi = @import("luauc_backend_runtime_abi");
+
+const Error = model.Error;
+
+const Edge = struct {
+    source: u32,
+    target: u32,
+};
+
+const DfsFrame = struct {
+    block: u32,
+    next_edge: u32,
+};
+
+const TreeFrame = struct {
+    block: u32,
+    next_child: u32,
+    entered: bool,
+};
+
+/// Immutable, function-scoped analysis shared by lowering, continuation admission, ownership
+/// checks, and diagnostics. Construction is linear in the serialized IR plus CFG edges; no pass
+/// rebuilds dense block matrices or searches the entire function for a local ownership query.
+pub const FunctionPlan = struct {
+    allocator: std.mem.Allocator,
+    instruction_blocks: []u32,
+    instruction_use_counts: []u32,
+    block_reference_counts: []u32,
+    successor_offsets: []u32,
+    successors: []u32,
+    predecessor_offsets: []u32,
+    predecessors: []u32,
+    node_invalidator_prefix: []u32,
+
+    pub const RegionDominators = struct {
+        allocator: std.mem.Allocator,
+        immediate: []u32,
+        enter: []u32,
+        exit: []u32,
+
+        pub fn deinit(self: *RegionDominators) void {
+            self.allocator.free(self.immediate);
+            self.allocator.free(self.enter);
+            self.allocator.free(self.exit);
+            self.* = undefined;
+        }
+
+        pub fn dominates(self: RegionDominators, dominator: u32, block: u32) bool {
+            if (dominator >= self.enter.len or block >= self.enter.len or
+                self.immediate[dominator] == snapshot_v1.no_id or
+                self.immediate[block] == snapshot_v1.no_id)
+                return false;
+            return self.enter[dominator] <= self.enter[block] and
+                self.exit[block] <= self.exit[dominator];
+        }
+    };
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        snapshot: snapshot_v1.Snapshot,
+        function: snapshot_v1.IrFunction,
+    ) Error!FunctionPlan {
+        const block_count: usize = @intCast(function.block_count);
+        const instruction_count: usize = @intCast(function.instruction_count);
+
+        const instruction_blocks = try allocator.alloc(u32, instruction_count);
+        errdefer allocator.free(instruction_blocks);
+        @memset(instruction_blocks, snapshot_v1.no_id);
+
+        const instruction_use_counts = try allocator.alloc(u32, instruction_count);
+        errdefer allocator.free(instruction_use_counts);
+        @memset(instruction_use_counts, 0);
+
+        const block_reference_counts = try allocator.alloc(u32, block_count);
+        errdefer allocator.free(block_reference_counts);
+        @memset(block_reference_counts, 0);
+
+        const node_invalidator_prefix = try allocator.alloc(u32, instruction_count + 1);
+        errdefer allocator.free(node_invalidator_prefix);
+        @memset(node_invalidator_prefix, 0);
+
+        var edges: std.ArrayList(Edge) = .empty;
+        defer edges.deinit(allocator);
+
+        var block_id: u32 = 0;
+        while (block_id < function.block_count) : (block_id += 1) {
+            const block = try snapshot.irBlock(function, block_id);
+            if (block.isEmpty())
+                continue;
+            if (block.start > block.finish or block.finish >= function.instruction_count)
+                return Error.UnsupportedControlFlow;
+
+            var instruction_id = block.start;
+            while (instruction_id <= block.finish) : (instruction_id += 1) {
+                if (instruction_blocks[instruction_id] != snapshot_v1.no_id)
+                    return Error.UnsupportedControlFlow;
+                instruction_blocks[instruction_id] = block_id;
+
+                const instruction = try snapshot.irInstruction(function, instruction_id);
+                var operand_id: u32 = 0;
+                while (operand_id < instruction.operand_count) : (operand_id += 1) {
+                    const operand = try snapshot.irOperand(instruction, operand_id);
+                    switch (operand.kind) {
+                        .instruction => {
+                            if (operand.value >= function.instruction_count)
+                                return Error.UnsupportedControlFlow;
+                            instruction_use_counts[operand.value] = std.math.add(
+                                u32,
+                                instruction_use_counts[operand.value],
+                                1,
+                            ) catch return Error.ResourceLimit;
+                        },
+                        .block => {
+                            if (operand.value >= function.block_count)
+                                return Error.UnsupportedControlFlow;
+                            block_reference_counts[operand.value] = std.math.add(
+                                u32,
+                                block_reference_counts[operand.value],
+                                1,
+                            ) catch return Error.ResourceLimit;
+                            try edges.append(allocator, .{ .source = block_id, .target = operand.value });
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }
+
+        var instruction_id: u32 = 0;
+        while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+            const instruction = try snapshot.irInstruction(function, instruction_id);
+            node_invalidator_prefix[instruction_id + 1] = node_invalidator_prefix[instruction_id] +
+                @intFromBool(invalidatesNodePointer(instruction.command));
+        }
+
+        const successor_offsets = try buildOffsets(allocator, block_count, edges.items, true);
+        errdefer allocator.free(successor_offsets);
+        const successors = try fillEdges(allocator, successor_offsets, edges.items, true);
+        errdefer allocator.free(successors);
+
+        const predecessor_offsets = try buildOffsets(allocator, block_count, edges.items, false);
+        errdefer allocator.free(predecessor_offsets);
+        const predecessors = try fillEdges(allocator, predecessor_offsets, edges.items, false);
+        errdefer allocator.free(predecessors);
+
+        return .{
+            .allocator = allocator,
+            .instruction_blocks = instruction_blocks,
+            .instruction_use_counts = instruction_use_counts,
+            .block_reference_counts = block_reference_counts,
+            .successor_offsets = successor_offsets,
+            .successors = successors,
+            .predecessor_offsets = predecessor_offsets,
+            .predecessors = predecessors,
+            .node_invalidator_prefix = node_invalidator_prefix,
+        };
+    }
+
+    pub fn deinit(self: *FunctionPlan) void {
+        self.allocator.free(self.instruction_blocks);
+        self.allocator.free(self.instruction_use_counts);
+        self.allocator.free(self.block_reference_counts);
+        self.allocator.free(self.successor_offsets);
+        self.allocator.free(self.successors);
+        self.allocator.free(self.predecessor_offsets);
+        self.allocator.free(self.predecessors);
+        self.allocator.free(self.node_invalidator_prefix);
+        self.* = undefined;
+    }
+
+    pub fn instructionBlock(self: FunctionPlan, instruction_id: u32) ?u32 {
+        if (instruction_id >= self.instruction_blocks.len)
+            return null;
+        const block = self.instruction_blocks[instruction_id];
+        return if (block == snapshot_v1.no_id) null else block;
+    }
+
+    pub fn blockReferences(self: FunctionPlan, block_id: u32) ?u32 {
+        if (block_id >= self.block_reference_counts.len)
+            return null;
+        return self.block_reference_counts[block_id];
+    }
+
+    pub fn instructionUses(self: FunctionPlan, instruction_id: u32) ?u32 {
+        if (instruction_id >= self.instruction_use_counts.len)
+            return null;
+        return self.instruction_use_counts[instruction_id];
+    }
+
+    pub fn successorSlice(self: FunctionPlan, block_id: u32) ?[]const u32 {
+        if (block_id + 1 >= self.successor_offsets.len)
+            return null;
+        return self.successors[self.successor_offsets[block_id]..self.successor_offsets[block_id + 1]];
+    }
+
+    pub fn predecessorSlice(self: FunctionPlan, block_id: u32) ?[]const u32 {
+        if (block_id + 1 >= self.predecessor_offsets.len)
+            return null;
+        return self.predecessors[self.predecessor_offsets[block_id]..self.predecessor_offsets[block_id + 1]];
+    }
+
+    /// Build exact dominance for a resumable subgraph. Generated continuations enter at their
+    /// rejoin roots, not at the Luau function entry, so ordinary function dominance is not valid
+    /// for values live after suspension. A virtual root connects every resume arm and the same
+    /// linear Lengauer-Tarjan implementation analyzes only the admitted region.
+    pub fn regionDominators(
+        self: FunctionPlan,
+        allocator: std.mem.Allocator,
+        included: []const bool,
+        roots: []const u32,
+    ) Error!RegionDominators {
+        const block_count = self.successor_offsets.len - 1;
+        if (included.len != block_count or roots.len == 0)
+            return Error.UnsupportedControlFlow;
+        const virtual_root = std.math.cast(u32, block_count) orelse return Error.ResourceLimit;
+
+        var edges: std.ArrayList(Edge) = .empty;
+        defer edges.deinit(allocator);
+        for (roots) |root| {
+            if (root >= block_count or !included[root])
+                return Error.UnsupportedControlFlow;
+            try edges.append(allocator, .{ .source = virtual_root, .target = root });
+        }
+        var source: u32 = 0;
+        while (source < block_count) : (source += 1) {
+            if (!included[source])
+                continue;
+            const outgoing = self.successorSlice(source) orelse return Error.UnsupportedControlFlow;
+            for (outgoing) |target| {
+                if (included[target])
+                    try edges.append(allocator, .{ .source = source, .target = target });
+            }
+        }
+
+        const region_block_count = std.math.add(usize, block_count, 1) catch return Error.ResourceLimit;
+        const successor_offsets = try buildOffsets(allocator, region_block_count, edges.items, true);
+        defer allocator.free(successor_offsets);
+        const successors = try fillEdges(allocator, successor_offsets, edges.items, true);
+        defer allocator.free(successors);
+        const predecessor_offsets = try buildOffsets(allocator, region_block_count, edges.items, false);
+        defer allocator.free(predecessor_offsets);
+        const predecessors = try fillEdges(allocator, predecessor_offsets, edges.items, false);
+        defer allocator.free(predecessors);
+
+        const dominators = try buildDominators(
+            allocator,
+            virtual_root,
+            successor_offsets,
+            successors,
+            predecessor_offsets,
+            predecessors,
+        );
+        return .{
+            .allocator = allocator,
+            .immediate = dominators.immediate,
+            .enter = dominators.enter,
+            .exit = dominators.exit,
+        };
+    }
+
+    pub fn validateNodeUse(
+        self: FunctionPlan,
+        snapshot: snapshot_v1.Snapshot,
+        function: snapshot_v1.IrFunction,
+        producer_id: u32,
+        consumer_id: u32,
+    ) Error!bool {
+        if (producer_id >= function.instruction_count or consumer_id >= function.instruction_count)
+            return false;
+        const producer = try snapshot.irInstruction(function, producer_id);
+        if (producer.command != abi.ir_cmd_get_hash_node_addr and
+            producer.command != abi.ir_cmd_get_slot_node_addr)
+            return false;
+
+        const producer_block = self.instructionBlock(producer_id) orelse return false;
+        const consumer_block = self.instructionBlock(consumer_id) orelse return false;
+        if (producer_block == consumer_block) {
+            return producer_id < consumer_id and !self.hasNodeInvalidator(producer_id + 1, consumer_id);
+        }
+
+        if (!self.hasDirectEdge(producer_block, consumer_block) or
+            !self.hasOnlyPredecessor(consumer_block, producer_block))
+            return false;
+
+        const source_block = try snapshot.irBlock(function, producer_block);
+        const target_block = try snapshot.irBlock(function, consumer_block);
+        return !self.hasNodeInvalidator(producer_id + 1, source_block.finish + 1) and
+            !self.hasNodeInvalidator(target_block.start, consumer_id);
+    }
+
+    fn hasNodeInvalidator(self: FunctionPlan, start: u32, finish_exclusive: u32) bool {
+        if (start > finish_exclusive or finish_exclusive >= self.node_invalidator_prefix.len)
+            return true;
+        return self.node_invalidator_prefix[finish_exclusive] != self.node_invalidator_prefix[start];
+    }
+
+    fn hasDirectEdge(self: FunctionPlan, source: u32, target: u32) bool {
+        const successors = self.successorSlice(source) orelse return false;
+        for (successors) |candidate|
+            if (candidate == target)
+                return true;
+        return false;
+    }
+
+    fn hasOnlyPredecessor(self: FunctionPlan, block: u32, expected: u32) bool {
+        const predecessors = self.predecessorSlice(block) orelse return false;
+        var saw_expected = false;
+        for (predecessors) |candidate| {
+            if (candidate == expected) {
+                saw_expected = true;
+            } else return false;
+        }
+        return saw_expected;
+    }
+};
+
+fn invalidatesNodePointer(command: snapshot_v1.IrCommand) bool {
+    return switch (command) {
+        .cmp_any,
+        .do_arith,
+        .get_cached_import,
+        .interrupt,
+        .check_gc,
+        .call,
+        .fallback_prepvarargs,
+        .fallback_getvarargs,
+        .newclosure,
+        .fallback_dupclosure,
+        => true,
+        else => switch (@intFromEnum(command)) {
+            100,
+            101,
+            102,
+            105,
+            120,
+            121,
+            124,
+            125,
+            126,
+            128,
+            153,
+            156,
+            157,
+            158,
+            160,
+            161,
+            162,
+            163,
+            164,
+            169,
+            => true,
+            else => false,
+        },
+    };
+}
+
+fn buildOffsets(
+    allocator: std.mem.Allocator,
+    block_count: usize,
+    edges: []const Edge,
+    successors: bool,
+) Error![]u32 {
+    const offsets = try allocator.alloc(u32, block_count + 1);
+    @memset(offsets, 0);
+    for (edges) |edge| {
+        const block = if (successors) edge.source else edge.target;
+        offsets[block + 1] = std.math.add(u32, offsets[block + 1], 1) catch return Error.ResourceLimit;
+    }
+    var index: usize = 1;
+    while (index < offsets.len) : (index += 1)
+        offsets[index] = std.math.add(u32, offsets[index], offsets[index - 1]) catch return Error.ResourceLimit;
+    return offsets;
+}
+
+fn fillEdges(
+    allocator: std.mem.Allocator,
+    offsets: []const u32,
+    edges: []const Edge,
+    successors: bool,
+) Error![]u32 {
+    const values = try allocator.alloc(u32, edges.len);
+    const cursors = try allocator.dupe(u32, offsets[0 .. offsets.len - 1]);
+    defer allocator.free(cursors);
+    for (edges) |edge| {
+        const source = if (successors) edge.source else edge.target;
+        const target = if (successors) edge.target else edge.source;
+        values[cursors[source]] = target;
+        cursors[source] += 1;
+    }
+    return values;
+}
+
+const Dominators = struct {
+    immediate: []u32,
+    enter: []u32,
+    exit: []u32,
+};
+
+fn buildDominators(
+    allocator: std.mem.Allocator,
+    entry_block: u32,
+    successor_offsets: []const u32,
+    successors: []const u32,
+    predecessor_offsets: []const u32,
+    predecessors: []const u32,
+) Error!Dominators {
+    const block_count = successor_offsets.len - 1;
+    if (entry_block >= block_count)
+        return Error.UnsupportedControlFlow;
+
+    const dfs_index = try allocator.alloc(u32, block_count);
+    defer allocator.free(dfs_index);
+    @memset(dfs_index, snapshot_v1.no_id);
+    const vertex = try allocator.alloc(u32, block_count + 1);
+    defer allocator.free(vertex);
+    @memset(vertex, snapshot_v1.no_id);
+    const parent = try allocator.alloc(u32, block_count + 1);
+    defer allocator.free(parent);
+    @memset(parent, 0);
+
+    var frames: std.ArrayList(DfsFrame) = .empty;
+    defer frames.deinit(allocator);
+    var dfs_count: u32 = 1;
+    dfs_index[entry_block] = dfs_count;
+    vertex[dfs_count] = entry_block;
+    try frames.append(allocator, .{ .block = entry_block, .next_edge = successor_offsets[entry_block] });
+    while (frames.items.len != 0) {
+        const frame = &frames.items[frames.items.len - 1];
+        const edge_end = successor_offsets[frame.block + 1];
+        if (frame.next_edge >= edge_end) {
+            frames.items.len -= 1;
+            continue;
+        }
+        const target = successors[frame.next_edge];
+        frame.next_edge += 1;
+        if (dfs_index[target] != snapshot_v1.no_id)
+            continue;
+        dfs_count = std.math.add(u32, dfs_count, 1) catch return Error.ResourceLimit;
+        dfs_index[target] = dfs_count;
+        vertex[dfs_count] = target;
+        parent[dfs_count] = dfs_index[frame.block];
+        try frames.append(allocator, .{ .block = target, .next_edge = successor_offsets[target] });
+    }
+
+    const count: usize = @intCast(dfs_count + 1);
+    const semi = try allocator.alloc(u32, count);
+    defer allocator.free(semi);
+    const idom = try allocator.alloc(u32, count);
+    defer allocator.free(idom);
+    const ancestor = try allocator.alloc(u32, count);
+    defer allocator.free(ancestor);
+    const label = try allocator.alloc(u32, count);
+    defer allocator.free(label);
+    @memset(idom, 0);
+    @memset(ancestor, 0);
+    var index: u32 = 0;
+    while (index <= dfs_count) : (index += 1) {
+        semi[index] = index;
+        label[index] = index;
+    }
+
+    const buckets = try allocator.alloc(std.ArrayList(u32), count);
+    defer allocator.free(buckets);
+    for (buckets) |*bucket|
+        bucket.* = .empty;
+    defer for (buckets) |*bucket| bucket.deinit(allocator);
+
+    var current = dfs_count;
+    while (current > 1) : (current -= 1) {
+        const block = vertex[current];
+        const pred_start = predecessor_offsets[block];
+        const pred_end = predecessor_offsets[block + 1];
+        var pred_index = pred_start;
+        while (pred_index < pred_end) : (pred_index += 1) {
+            const predecessor = dfs_index[predecessors[pred_index]];
+            if (predecessor == snapshot_v1.no_id)
+                continue;
+            const evaluated = evalDominator(predecessor, ancestor, label, semi);
+            if (semi[evaluated] < semi[current])
+                semi[current] = semi[evaluated];
+        }
+        try buckets[semi[current]].append(allocator, current);
+        ancestor[current] = parent[current];
+        for (buckets[parent[current]].items) |candidate| {
+            const evaluated = evalDominator(candidate, ancestor, label, semi);
+            idom[candidate] = if (semi[evaluated] < semi[candidate]) evaluated else parent[current];
+        }
+        buckets[parent[current]].items.len = 0;
+    }
+
+    index = 2;
+    while (index <= dfs_count) : (index += 1) {
+        if (idom[index] != semi[index])
+            idom[index] = idom[idom[index]];
+    }
+    idom[1] = 1;
+
+    const immediate = try allocator.alloc(u32, block_count);
+    errdefer allocator.free(immediate);
+    @memset(immediate, snapshot_v1.no_id);
+    index = 1;
+    while (index <= dfs_count) : (index += 1) {
+        immediate[vertex[index]] = vertex[idom[index]];
+    }
+
+    const child_offsets = try allocator.alloc(u32, block_count + 1);
+    defer allocator.free(child_offsets);
+    @memset(child_offsets, 0);
+    var block: u32 = 0;
+    while (block < block_count) : (block += 1) {
+        const dominator = immediate[block];
+        if (dominator != snapshot_v1.no_id and dominator != block)
+            child_offsets[dominator + 1] += 1;
+    }
+    var child_index: usize = 1;
+    while (child_index < child_offsets.len) : (child_index += 1)
+        child_offsets[child_index] += child_offsets[child_index - 1];
+    const children = try allocator.alloc(u32, dfs_count - 1);
+    defer allocator.free(children);
+    const child_cursors = try allocator.dupe(u32, child_offsets[0 .. child_offsets.len - 1]);
+    defer allocator.free(child_cursors);
+    block = 0;
+    while (block < block_count) : (block += 1) {
+        const dominator = immediate[block];
+        if (dominator == snapshot_v1.no_id or dominator == block)
+            continue;
+        children[child_cursors[dominator]] = block;
+        child_cursors[dominator] += 1;
+    }
+
+    const enter = try allocator.alloc(u32, block_count);
+    errdefer allocator.free(enter);
+    const exit = try allocator.alloc(u32, block_count);
+    errdefer allocator.free(exit);
+    @memset(enter, 0);
+    @memset(exit, 0);
+    var tree: std.ArrayList(TreeFrame) = .empty;
+    defer tree.deinit(allocator);
+    try tree.append(allocator, .{ .block = entry_block, .next_child = child_offsets[entry_block], .entered = false });
+    var clock: u32 = 1;
+    while (tree.items.len != 0) {
+        const frame = &tree.items[tree.items.len - 1];
+        if (!frame.entered) {
+            frame.entered = true;
+            enter[frame.block] = clock;
+            clock = std.math.add(u32, clock, 1) catch return Error.ResourceLimit;
+        }
+        if (frame.next_child < child_offsets[frame.block + 1]) {
+            const child = children[frame.next_child];
+            frame.next_child += 1;
+            try tree.append(allocator, .{ .block = child, .next_child = child_offsets[child], .entered = false });
+        } else {
+            exit[frame.block] = clock;
+            clock = std.math.add(u32, clock, 1) catch return Error.ResourceLimit;
+            tree.items.len -= 1;
+        }
+    }
+
+    return .{ .immediate = immediate, .enter = enter, .exit = exit };
+}
+
+fn evalDominator(v: u32, ancestor: []u32, label: []u32, semi: []const u32) u32 {
+    if (ancestor[v] == 0)
+        return label[v];
+    compressDominator(v, ancestor, label, semi);
+    return label[v];
+}
+
+fn compressDominator(v: u32, ancestor: []u32, label: []u32, semi: []const u32) void {
+    const parent = ancestor[v];
+    if (parent == 0 or ancestor[parent] == 0)
+        return;
+    compressDominator(parent, ancestor, label, semi);
+    if (semi[label[parent]] < semi[label[v]])
+        label[v] = label[parent];
+    ancestor[v] = ancestor[parent];
+}

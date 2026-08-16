@@ -35,6 +35,32 @@ const tvalue_size = abi.tvalue_size;
 const lua_tag_number = abi.lua_tag_number;
 const lua_tag_table = abi.lua_tag_table;
 
+pub noinline fn emitDirectGenericTableOperation(
+    self: anytype,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    if ((instruction_value.command != ir_cmd_set_table and instruction_value.command != ir_cmd_get_table) or
+        instruction_value.operand_count != 3)
+        return Error.UnsupportedCommand;
+    const value = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const table = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const key = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
+
+    try self.body.localGet(self.allocator, 0);
+    if (instruction_value.command == ir_cmd_set_table) {
+        try self.body.i32Const(self.allocator, @intCast(table));
+        try self.body.i32Const(self.allocator, @intCast(key));
+        try self.body.i32Const(self.allocator, @intCast(value));
+        try self.body.call(self.allocator, self.table_set orelse return Error.UnsupportedCommand);
+    } else {
+        try self.body.i32Const(self.allocator, @intCast(value));
+        try self.body.i32Const(self.allocator, @intCast(table));
+        try self.body.i32Const(self.allocator, @intCast(key));
+        try self.body.call(self.allocator, self.table_get orelse return Error.UnsupportedCommand);
+    }
+    try self.emitReloadBase();
+}
+
 pub fn globalFallback(
     self: anytype,
     fallback_id: u32,

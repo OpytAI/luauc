@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const CallContinuation = model.CallContinuation;
@@ -19,6 +20,17 @@ const ir_cmd_check_buffer_len = abi.ir_cmd_check_buffer_len;
 const ir_cmd_check_userdata_tag = abi.ir_cmd_check_userdata_tag;
 const ir_cmd_barrier_object = abi.ir_cmd_barrier_object;
 const ir_cmd_barrier_table_back = abi.ir_cmd_barrier_table_back;
+const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
+const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
+const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
+const ir_cmd_try_call_fastgettm = abi.ir_cmd_try_call_fastgettm;
+const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
+const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
+const ir_cmd_check_node_value = abi.ir_cmd_check_node_value;
+const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
+const ir_cmd_get_table = abi.ir_cmd_get_table;
+const ir_cmd_set_table = abi.ir_cmd_set_table;
+const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
 const ir_cmd_buffer_readu8 = abi.ir_cmd_buffer_readu8;
 const ir_cmd_buffer_writei8 = abi.ir_cmd_buffer_writei8;
@@ -36,6 +48,14 @@ const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
 const tvalue_extra_offset = abi.tvalue_extra_offset;
 
 pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
+    return emitInstructionInner(self, instruction_id, block_kind) catch |err| {
+        const failed = self.instruction(instruction_id) catch return err;
+        diagnostics.recordInstruction(@errorName(err), instruction_id, @intFromEnum(failed.command));
+        return err;
+    };
+}
+
+fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
     const instruction_value = try self.instruction(instruction_id);
     if (try self.constantTruthyFallbackPatternContaining(instruction_id)) |pattern| {
         if (instruction_id == pattern.finish)
@@ -253,6 +273,18 @@ pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: 
         },
         ir_cmd_barrier_object => try self.emitBarrierObject(instruction_value),
         ir_cmd_barrier_table_back => try self.emitBarrierTableBack(instruction_value),
+        ir_cmd_get_hash_node_addr => try self.emitGetHashNodeAddr(instruction_id, instruction_value),
+        ir_cmd_get_slot_node_addr => try self.emitGetSlotNodeAddr(instruction_id, instruction_value),
+        ir_cmd_try_call_fastgettm => try self.emitTryCallFastGetTm(instruction_id, instruction_value),
+        ir_cmd_check_slot_match => try self.emitCheckSlotMatch(instruction_id, instruction_value),
+        ir_cmd_check_node_no_next => try self.emitCheckNodeNoNext(instruction_id, instruction_value),
+        ir_cmd_check_node_value => try self.emitCheckNodeValue(instruction_id, instruction_value),
+        ir_cmd_check_readonly => try self.emitCheckReadonly(instruction_value),
+        ir_cmd_get_table, ir_cmd_set_table => {
+            if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+                return Error.UnsupportedControlFlow;
+            try self.emitDirectGenericTableOperation(instruction_value);
+        },
         .set_savedpc => {
             try self.emitSavedPcLocation(instruction_value);
             if (block_kind != .fallback) {
@@ -266,7 +298,9 @@ pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: 
                 {
                     _ = try self.newClosurePattern(instruction_id + 2);
                 } else if (instruction_id + 1 >= self.function.instruction_count or
-                    (try self.instruction(instruction_id + 1)).command != .call)
+                    ((try self.instruction(instruction_id + 1)).command != .call and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_get_table and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table))
                     return Error.UnsupportedControlFlow;
             }
         },
@@ -335,6 +369,10 @@ pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: 
             try self.emitJumpFornLoopCondition(instruction_value);
             return true;
         },
+        ir_cmd_jump_slot_match => {
+            try self.emitJumpSlotMatch(instruction_id, instruction_value);
+            return true;
+        },
         .return_ => {
             try self.emitReturn(instruction_value);
             return true;
@@ -350,6 +388,7 @@ pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: 
             try self.emitGenericIterationPrep(instruction_id, instruction_value);
             return true;
         },
+        ir_cmd_fallback_namecall => try self.emitFallbackNamecall(instruction_value),
         .fallback_prepvarargs => try self.emitPrepVarargs(instruction_value),
         .fallback_getvarargs => try self.emitGetVarargs(instruction_value),
         .newclosure => try self.emitNewClosure(instruction_id),
@@ -376,11 +415,21 @@ pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: 
     return false;
 }
 pub noinline fn emitInstructionRange(self: anytype, start: u32, finish: u32, block: snapshot_v1.IrBlock) Error!bool {
+    var progress = start;
+    return emitInstructionRangeInner(self, start, finish, block, &progress) catch |err| {
+        const failed = self.instruction(progress) catch return err;
+        diagnostics.recordInstruction(@errorName(err), progress, @intFromEnum(failed.command));
+        return err;
+    };
+}
+
+fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snapshot_v1.IrBlock, progress: *u32) Error!bool {
     const dynamic_length = try self.dynamicLengthPattern(block);
     const semantic_array = try self.semanticArrayOperation(block);
     var terminated = false;
     var instruction_id = start;
     while (instruction_id <= finish) : (instruction_id += 1) {
+        progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
         if (try self.integerCreatePatternAt(instruction_id)) |pattern| {
@@ -400,15 +449,6 @@ pub noinline fn emitInstructionRange(self: anytype, start: u32, finish: u32, blo
             instruction_id = block.finish;
             terminated = true;
             continue;
-        }
-        if (try self.plainTableNamecallPattern(block)) |pattern| {
-            if (instruction_id == pattern.start) {
-                try self.emitPlainTableNamecallOperation(pattern);
-                try self.body.branch(self.allocator, 1);
-                instruction_id = block.finish;
-                terminated = true;
-                continue;
-            }
         }
         if (try self.fastcallPatternAt(instruction_id, block)) |pattern| {
             try self.emitFastcallCluster(pattern);
@@ -478,8 +518,6 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         return self.emitConstantArithmeticBlock(block_id, block, pattern);
     if (try self.powPattern(block)) |pattern|
         return self.emitPowBlock(block_id, block, pattern);
-    if (try self.plainTableNamecallPattern(block)) |pattern|
-        return self.emitPlainTableNamecallBlock(block_id, block, pattern);
     if (try self.isFastcallFallback(block_id, block))
         return self.emitFastcallFallbackBlock(block_id, block);
     if (try self.specializedIpairsPattern(block)) |pattern|

@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const static_package_v1 = @import("luauc_backend_static_package_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
+const FunctionPlan = @import("luauc_backend_plan").FunctionPlan;
 const core = @import("luauc_backend_emit_core");
 const scalar = @import("luauc_backend_emit_scalar");
 const memory = @import("luauc_backend_emit_memory");
@@ -25,6 +26,7 @@ pub const Context = struct {
     snapshot: snapshot_v1.Snapshot,
     proto: snapshot_v1.Proto,
     function: snapshot_v1.IrFunction,
+    plan: *const FunctionPlan,
     slots: []const ValueSlot,
     builtin_number_sources: []u32,
     coverage_site_ids: []const u32,
@@ -64,6 +66,13 @@ pub const Context = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    hash_node_addr: ?wasm.FunctionRef,
+    slot_node_addr: ?wasm.FunctionRef,
+    node_slot_match: ?wasm.FunctionRef,
+    try_get_tm: ?wasm.FunctionRef,
+    check_node_no_next: ?wasm.FunctionRef,
+    check_node_value: ?wasm.FunctionRef,
+    check_readonly: ?wasm.FunctionRef,
     table_set_string: ?wasm.FunctionRef,
     table_get_string: ?wasm.FunctionRef,
     table_set: ?wasm.FunctionRef,
@@ -238,6 +247,15 @@ pub const Context = struct {
     pub const emitInternalErrorIf = memory.emitInternalErrorIf;
     pub const emitBarrierObject = memory.emitBarrierObject;
     pub const emitBarrierTableBack = memory.emitBarrierTableBack;
+    pub const requireLiveNode = memory.requireLiveNode;
+    pub const emitGetHashNodeAddr = memory.emitGetHashNodeAddr;
+    pub const emitGetSlotNodeAddr = memory.emitGetSlotNodeAddr;
+    pub const emitJumpSlotMatch = memory.emitJumpSlotMatch;
+    pub const emitCheckSlotMatch = memory.emitCheckSlotMatch;
+    pub const emitTryCallFastGetTm = memory.emitTryCallFastGetTm;
+    pub const emitCheckNodeNoNext = memory.emitCheckNodeNoNext;
+    pub const emitCheckNodeValue = memory.emitCheckNodeValue;
+    pub const emitCheckReadonly = memory.emitCheckReadonly;
     pub const emitBufferAdjustStack = memory.emitBufferAdjustStack;
     pub const emitGuardFailure = memory.emitGuardFailure;
     pub const emitCheckTruthy = memory.emitCheckTruthy;
@@ -261,7 +279,6 @@ pub const Context = struct {
     // allocations
     pub const tableAllocationPatternAt = allocations.tableAllocationPatternAt;
     pub const isDeferredTableInitializationCommand = allocations.isDeferredTableInitializationCommand;
-    pub const hasLaterCheckGcInBlock = allocations.hasLaterCheckGcInBlock;
     pub const checkGcClosesDeferredTableAllocation = allocations.checkGcClosesDeferredTableAllocation;
     pub const userdataWriteWidth = allocations.userdataWriteWidth;
     pub const userdataAllocationPatternAt = allocations.userdataAllocationPatternAt;
@@ -290,6 +307,7 @@ pub const Context = struct {
     pub const plainTableNamecallPattern = namecall.plainTableNamecallPattern;
     pub const isBypassedPlainTableNamecallBlock = namecall.isBypassedPlainTableNamecallBlock;
     pub const emitPlainTableNamecallBlock = namecall.emitPlainTableNamecallBlock;
+    pub const emitFallbackNamecall = namecall.emitFallbackNamecall;
     pub const emitPlainTableNamecallOperation = namecall.emitPlainTableNamecallOperation;
     pub const tableAllocationPatternContaining = namecall.tableAllocationPatternContaining;
     pub const emitTableAllocation = namecall.emitTableAllocation;
@@ -335,6 +353,7 @@ pub const Context = struct {
     pub const semanticTableReloadPatternAt = tables.semanticTableReloadPatternAt;
     pub const semanticTableReloadPatternContaining = tables.semanticTableReloadPatternContaining;
     pub const emitSemanticTableReload = tables.emitSemanticTableReload;
+    pub const emitDirectGenericTableOperation = tables.emitDirectGenericTableOperation;
     pub const genericTableSetPattern = tables.genericTableSetPattern;
     pub const genericTableGetPattern = tables.genericTableGetPattern;
     pub const constantGenericTableGetPattern = tables.constantGenericTableGetPattern;
@@ -413,6 +432,7 @@ pub const Context = struct {
     pub const supportsComparisonFallback = control.supportsComparisonFallback;
     pub const supportsMaterializedComparisonFallback = control.supportsMaterializedComparisonFallback;
     pub const supportsFallback = control.supportsFallback;
+    pub const supportsNamecallFallback = control.supportsNamecallFallback;
     pub const supportsOrdinaryCallFallback = control.supportsOrdinaryCallFallback;
     pub const isOwnedSemanticTableFallbackBlock = control.isOwnedSemanticTableFallbackBlock;
     pub const isOwnedDynamicLengthFallbackBlock = control.isOwnedDynamicLengthFallbackBlock;

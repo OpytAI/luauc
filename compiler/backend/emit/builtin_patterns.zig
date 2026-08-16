@@ -250,13 +250,17 @@ pub noinline fn stringLengthPattern(self: anytype, instruction_id: u32) Error!?S
     const converted = try self.instruction(instruction_id + 1);
     const store = try self.instruction(instruction_id + 2);
     const store_tag = try self.instruction(instruction_id + 3);
-    if (string_len.command != ir_cmd_string_len or converted.command != .int_to_num or store.command != .store_double or
-        store_tag.command != .store_tag)
+    if (string_len.command != ir_cmd_string_len or converted.command != .int_to_num or
+        store.command != .store_double or
+        (store_tag.command != .store_tag and store_tag.command != .nop))
         return null;
     try self.requireOperandCount(string_len, 1);
     try self.requireOperandCount(converted, 1);
     try self.requireOperandCount(store, 2);
-    try self.requireOperandCount(store_tag, 2);
+    if (store_tag.command == .store_tag)
+        try self.requireOperandCount(store_tag, 2)
+    else
+        try self.requireOperandCount(store_tag, 0);
     const length_pointer = try self.operand(string_len, 0);
     if (length_pointer.kind != .instruction or length_pointer.value >= self.function.instruction_count)
         return null;
@@ -271,13 +275,17 @@ pub noinline fn stringLengthPattern(self: anytype, instruction_id: u32) Error!?S
     const converted_length = try self.operand(converted, 0);
     const destination = try self.vmRegisterIndex(try self.operand(store, 0));
     const stored = try self.operand(store, 1);
-    const tag_destination = try self.vmRegisterIndex(try self.operand(store_tag, 0));
-    const result_tag = try self.operand(store_tag, 1);
     if (converted_length.kind != .instruction or
         converted_length.value != instruction_id or stored.kind != .instruction or
-        stored.value != instruction_id + 1 or tag_destination != destination or result_tag.kind != .constant or
-        (try self.constant(result_tag.value)).tagValue() != lua_tag_number)
+        stored.value != instruction_id + 1)
         return null;
+    if (store_tag.command == .store_tag) {
+        const tag_destination = try self.vmRegisterIndex(try self.operand(store_tag, 0));
+        const result_tag = try self.operand(store_tag, 1);
+        if (tag_destination != destination or result_tag.kind != .constant or
+            (try self.constant(result_tag.value)).tagValue() != lua_tag_number)
+            return null;
+    }
     if (instruction_id + 4 < self.function.instruction_count and
         (try self.instruction(instruction_id + 4)).command == .mark_dead)
     {
@@ -287,46 +295,20 @@ pub noinline fn stringLengthPattern(self: anytype, instruction_id: u32) Error!?S
             try self.intConstant(try self.operand(mark_dead, 1)) != -1)
             return null;
     }
-    return .{ .source = source, .destination = destination };
+    return .{ .source = source, .destination = destination, .materialize_tag = store_tag.command == .nop };
 }
 pub fn hasPreservedStringGuard(self: anytype, source: u32, pointer_id: u32) Error!bool {
-    var owner_id: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (!block.isEmpty() and pointer_id >= block.start and pointer_id <= block.finish) {
-            if (owner_id != null)
-                return false;
-            owner_id = block_id;
-        }
-    }
-    const owner = try self.snapshot.irBlock(self.function, owner_id orelse return false);
+    const owner_id = self.plan.instructionBlock(pointer_id) orelse return false;
+    const owner = try self.snapshot.irBlock(self.function, owner_id);
     if (try self.rangeHasPreservedStringGuard(source, owner.start, pointer_id))
         return true;
     if (owner.kind != .linearized or owner.use_count != 1)
         return false;
 
-    var predecessor_id: ?u32 = null;
-    block_id = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (!candidate.kind.isCompilable() or candidate.isEmpty())
-            continue;
-        var instruction_id = candidate.start;
-        while (instruction_id <= candidate.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind == .block and operand_value.value == owner_id.?) {
-                    if (predecessor_id != null and predecessor_id.? != block_id)
-                        return false;
-                    predecessor_id = block_id;
-                }
-            }
-        }
-    }
-    const predecessor = try self.snapshot.irBlock(self.function, predecessor_id orelse return false);
+    const predecessors = self.plan.predecessorSlice(owner_id) orelse return false;
+    if (predecessors.len != 1)
+        return false;
+    const predecessor = try self.snapshot.irBlock(self.function, predecessors[0]);
     if (!try self.rangeHasPreservedStringGuard(source, predecessor.start, predecessor.finish))
         return false;
     var instruction_id = owner.start;
@@ -338,26 +320,8 @@ pub fn hasPreservedStringGuard(self: anytype, source: u32, pointer_id: u32) Erro
 pub fn preservesRegisterToConsumer(self: anytype, source: u32, producer_id: u32, consumer_id: u32) Error!bool {
     if (producer_id >= consumer_id)
         return false;
-    var producer_block: ?u32 = null;
-    var consumer_block: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (block.isEmpty())
-            continue;
-        if (producer_id >= block.start and producer_id <= block.finish) {
-            if (producer_block != null)
-                return false;
-            producer_block = block_id;
-        }
-        if (consumer_id >= block.start and consumer_id <= block.finish) {
-            if (consumer_block != null)
-                return false;
-            consumer_block = block_id;
-        }
-    }
-    const producer_owner_id = producer_block orelse return false;
-    const consumer_owner_id = consumer_block orelse return false;
+    const producer_owner_id = self.plan.instructionBlock(producer_id) orelse return false;
+    const consumer_owner_id = self.plan.instructionBlock(consumer_id) orelse return false;
     if (producer_owner_id == consumer_owner_id) {
         var instruction_id = producer_id + 1;
         while (instruction_id < consumer_id) : (instruction_id += 1)
@@ -368,28 +332,15 @@ pub fn preservesRegisterToConsumer(self: anytype, source: u32, producer_id: u32,
 
     const producer_owner = try self.snapshot.irBlock(self.function, producer_owner_id);
     const consumer_owner = try self.snapshot.irBlock(self.function, consumer_owner_id);
-    if (!producer_owner.kind.isCompilable() or consumer_owner.kind != .linearized or consumer_owner.use_count != 1)
+    if (!producer_owner.kind.isCompilable() or consumer_owner.kind != .linearized or
+        consumer_owner.use_count != 1)
         return false;
 
-    // A linearized block with use_count == 1 has one incoming edge. Prove that edge directly
-    // from the producer block instead of inventorying the whole function again.
-    var owns_edge = false;
-    var instruction_id = producer_owner.start;
-    while (instruction_id <= producer_owner.finish and !owns_edge) : (instruction_id += 1) {
-        const instruction_value = try self.instruction(instruction_id);
-        var operand_id: u32 = 0;
-        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-            const operand_value = try self.operand(instruction_value, operand_id);
-            if (operand_value.kind == .block and operand_value.value == consumer_owner_id) {
-                owns_edge = true;
-                break;
-            }
-        }
-    }
-    if (!owns_edge)
+    const predecessors = self.plan.predecessorSlice(consumer_owner_id) orelse return false;
+    if (predecessors.len != 1 or predecessors[0] != producer_owner_id)
         return false;
 
-    instruction_id = producer_id + 1;
+    var instruction_id = producer_id + 1;
     while (instruction_id <= producer_owner.finish) : (instruction_id += 1)
         if (try self.instructionWritesRegister(instruction_id, source))
             return false;
@@ -509,6 +460,7 @@ pub fn hasPublishedTValue(
     else
         false;
 }
+
 pub fn compilableOwnerBlock(self: anytype, instruction_id: u32) Error!?snapshot_v1.IrBlock {
     var owner: ?snapshot_v1.IrBlock = null;
     var block_id: u32 = 0;

@@ -3,6 +3,7 @@ const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 
 pub const Error = model.Error;
+pub const diagnostics = @import("luauc_backend_diagnostics");
 pub const build = driver.build;
 pub const buildPackage = driver.buildPackage;
 pub const buildStaticPackage = driver.buildStaticPackage;

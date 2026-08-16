@@ -3,10 +3,12 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const static_package_v1 = @import("luauc_backend_static_package_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
+const FunctionPlan = @import("luauc_backend_plan").FunctionPlan;
 const abi = @import("luauc_backend_runtime_abi");
 const Context = @import("luauc_backend_context").Context;
 const continuations = @import("luauc_backend_continuations");
 const runtime_imports = @import("luauc_backend_imports");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const StringKeyPool = model.StringKeyPool;
 const Error = model.Error;
@@ -39,6 +41,7 @@ fn lowerFunction(
     function_id_base: u32,
     string_keys: *StringKeyPool,
 ) Error!wasm.FunctionRef {
+    diagnostics.enterFunction(function_id);
     const function = try snapshot.irFunction(function_id);
     const proto = try snapshot.proto(function.proto_id);
     if (function.variadic != proto.is_vararg)
@@ -47,6 +50,12 @@ fn lowerFunction(
     const entry_block = try snapshot.irBlock(function, function.entry_block);
     if (!entry_block.kind.isCompilable() or entry_block.isEmpty())
         return Error.UnsupportedControlFlow;
+
+    var plan = FunctionPlan.init(allocator, snapshot, function) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "function planning");
+        return err;
+    };
+    defer plan.deinit();
 
     const slots = try allocator.alloc(ValueSlot, function.instruction_count);
     defer allocator.free(slots);
@@ -132,6 +141,7 @@ fn lowerFunction(
         .snapshot = snapshot,
         .proto = proto,
         .function = function,
+        .plan = &plan,
         .slots = slots,
         .builtin_number_sources = builtin_number_sources,
         .coverage_site_ids = coverage_site_ids,
@@ -156,6 +166,13 @@ fn lowerFunction(
         .check_userdata_tag = imports.check_userdata_tag,
         .barrier_object = imports.barrier_object,
         .barrier_table_back = imports.barrier_table_back,
+        .hash_node_addr = imports.hash_node_addr,
+        .slot_node_addr = imports.slot_node_addr,
+        .node_slot_match = imports.node_slot_match,
+        .try_get_tm = imports.try_get_tm,
+        .check_node_no_next = imports.check_node_no_next,
+        .check_node_value = imports.check_node_value,
+        .check_readonly = imports.check_readonly,
         .load_constant = imports.load_constant,
         .dup_table = imports.dup_table,
         .table_insert_append = imports.table_insert_append,
@@ -200,8 +217,14 @@ fn lowerFunction(
         .call_continuations = &.{},
         .string_keys = string_keys,
     };
-    try context.classifyBuiltinNumberLoads();
-    const call_continuations = try continuations.collectCallContinuations(allocator, context);
+    context.classifyBuiltinNumberLoads() catch |err| {
+        diagnostics.recordPhase(@errorName(err), "value classification");
+        return err;
+    };
+    const call_continuations = continuations.collectCallContinuations(allocator, context) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "continuation planning");
+        return err;
+    };
     defer allocator.free(call_continuations);
     context.call_continuations = call_continuations;
     if (call_continuations.len == 0 and context.exchange_continuation != null)
@@ -246,11 +269,20 @@ fn lowerFunction(
     block_id = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        const bypassed = try context.isBypassedEmissionBlock(block_id, block);
+        const bypassed = context.isBypassedEmissionBlock(block_id, block) catch |err| {
+            diagnostics.recordBlock(@errorName(err), block_id);
+            return err;
+        };
         if (block.kind.isCompilable() and !block.isEmpty() and !bypassed)
-            try context.emitBlock(block_id, block)
+            context.emitBlock(block_id, block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            }
         else if (block.kind == .fallback and !bypassed and try context.supportsFallback(block))
-            try context.emitBlock(block_id, block);
+            context.emitBlock(block_id, block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            };
     }
     for (call_continuations) |continuation|
         try context.emitCallContinuation(continuation);
@@ -265,13 +297,18 @@ fn lowerFunction(
 }
 
 pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_id: u32) Error![]u8 {
+    diagnostics.reset();
+    diagnostics.enterFunction(function_id);
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
     try snapshot_v1.validateModel(snapshot);
     if (function_id >= snapshot.header.ir_function_count)
         return Error.FunctionOutOfBounds;
 
     var needs = runtime_imports.ImportNeeds{};
-    try runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs);
+    runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "runtime import planning");
+        return err;
+    };
     var object = wasm.Object.init(allocator);
     defer object.deinit();
     var string_keys = StringKeyPool{};
@@ -283,6 +320,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
 }
 
 pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Error![]u8 {
+    diagnostics.reset();
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
     try snapshot_v1.validateModel(snapshot);
 
@@ -685,6 +723,7 @@ fn emitStaticPackageMetadata(
 }
 
 pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u8) Error![]u8 {
+    diagnostics.reset();
     const package = try static_package_v1.parse(package_bytes);
     const function_bases = try allocator.alloc(u32, @intCast(package.module_count));
     defer allocator.free(function_bases);

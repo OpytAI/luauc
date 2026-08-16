@@ -24,6 +24,8 @@ const ir_cmd_buffer_readf64 = abi.ir_cmd_buffer_readf64;
 const ir_cmd_buffer_writef64 = abi.ir_cmd_buffer_writef64;
 const ir_cmd_buffer_readi64 = abi.ir_cmd_buffer_readi64;
 const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
+const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
+const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const tvalue_size = abi.tvalue_size;
 const tvalue_tag_offset = abi.tvalue_tag_offset;
 const buffer_len_offset = abi.buffer_len_offset;
@@ -457,6 +459,160 @@ pub noinline fn emitBarrierTableBack(self: anytype, instruction_value: snapshot_
     try self.body.localGet(self.allocator, 0);
     try self.emitPointerValue(table);
     try self.body.call(self.allocator, self.barrier_table_back orelse return Error.UnsupportedCommand);
+}
+pub fn requireLiveNode(
+    self: anytype,
+    consumer_id: u32,
+    node: snapshot_v1.IrOperand,
+) Error!void {
+    if (node.kind != .instruction or
+        !try self.plan.validateNodeUse(self.snapshot, self.function, node.value, consumer_id))
+        return Error.UnsupportedControlFlow;
+}
+pub noinline fn emitGetHashNodeAddr(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    const owner_block_id = self.plan.instructionBlock(instruction_id) orelse
+        return Error.UnsupportedControlFlow;
+    const owner_block = try self.snapshot.irBlock(self.function, owner_block_id);
+    const family = (try self.plainTableNamecallPattern(owner_block)) orelse
+        return Error.UnsupportedControlFlow;
+    if (instruction_id != family.start + 3)
+        return Error.UnsupportedControlFlow;
+    const table = try self.operand(instruction_value, 0);
+    if (table.kind != .instruction or table.value >= self.slots.len or
+        self.slots[table.value].shape != .pointer)
+        return Error.InvalidOperandType;
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(table);
+    try self.emitI32Value(try self.operand(instruction_value, 1));
+    try self.body.call(self.allocator, self.hash_node_addr orelse return Error.UnsupportedCommand);
+    try self.emitInstructionResultSet(instruction_id);
+}
+pub noinline fn emitGetSlotNodeAddr(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 3);
+    const table = try self.operand(instruction_value, 0);
+    const pc = try self.operand(instruction_value, 1);
+    const key = try self.operand(instruction_value, 2);
+    if (table.kind != .instruction or table.value >= self.slots.len or
+        self.slots[table.value].shape != .pointer or pc.kind != .constant or
+        (try self.constant(pc.value)).uintValue() == null or key.kind != .vm_const or
+        key.value >= self.proto.vm_constant_count)
+        return Error.InvalidOperandType;
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(table);
+    try self.body.i32Const(self.allocator, @intCast(key.value));
+    try self.body.call(self.allocator, self.slot_node_addr orelse return Error.UnsupportedCommand);
+    try self.emitInstructionResultSet(instruction_id);
+}
+pub noinline fn emitJumpSlotMatch(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const node = try self.operand(instruction_value, 0);
+    const key = try self.operand(instruction_value, 1);
+    if (key.kind != .vm_const or key.value >= self.proto.vm_constant_count)
+        return Error.InvalidOperandType;
+    try self.requireLiveNode(instruction_id, node);
+    const match_target = try self.requireCompiledTarget(try self.operand(instruction_value, 2));
+    const mismatch_target = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(node);
+    try self.body.i32Const(self.allocator, @intCast(key.value));
+    try self.body.call(self.allocator, self.node_slot_match orelse return Error.UnsupportedCommand);
+    try self.emitConditionalDispatch(match_target, mismatch_target);
+}
+pub noinline fn emitCheckSlotMatch(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 3);
+    const node = try self.operand(instruction_value, 0);
+    const key = try self.operand(instruction_value, 1);
+    if (key.kind != .vm_const or key.value >= self.proto.vm_constant_count)
+        return Error.InvalidOperandType;
+    try self.requireLiveNode(instruction_id, node);
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(node);
+    try self.body.i32Const(self.allocator, @intCast(key.value));
+    try self.body.call(self.allocator, self.node_slot_match orelse return Error.UnsupportedCommand);
+    try self.body.i32Eqz(self.allocator);
+    try self.emitGuardFailure(try self.operand(instruction_value, 2));
+}
+pub noinline fn emitTryCallFastGetTm(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 3);
+    const table = try self.operand(instruction_value, 0);
+    if (table.kind != .instruction or table.value >= self.slots.len or
+        self.slots[table.value].shape != .pointer)
+        return Error.InvalidOperandType;
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(table);
+    try self.emitI32Value(try self.operand(instruction_value, 1));
+    try self.body.call(self.allocator, self.try_get_tm orelse return Error.UnsupportedCommand);
+    try self.body.localTee(self.allocator, self.slots[instruction_id].first);
+    try self.body.i32Eqz(self.allocator);
+    try self.emitGuardFailure(try self.operand(instruction_value, 2));
+}
+pub noinline fn emitCheckNodeNoNext(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    const node = try self.operand(instruction_value, 0);
+    try self.requireLiveNode(instruction_id, node);
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(node);
+    try self.body.call(self.allocator, self.check_node_no_next orelse return Error.UnsupportedCommand);
+    try self.emitGuardFailure(try self.operand(instruction_value, 1));
+}
+pub noinline fn emitCheckNodeValue(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    const node = try self.operand(instruction_value, 0);
+    try self.requireLiveNode(instruction_id, node);
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(node);
+    try self.body.call(self.allocator, self.check_node_value orelse return Error.UnsupportedCommand);
+    try self.emitGuardFailure(try self.operand(instruction_value, 1));
+}
+pub noinline fn emitCheckReadonly(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    const table = try self.operand(instruction_value, 0);
+    const failure = try self.operand(instruction_value, 1);
+    if (table.kind != .instruction or table.value >= self.slots.len or
+        self.slots[table.value].shape != .pointer or try self.loadedPointerRegister(table) == null)
+        return Error.InvalidOperandType;
+
+    if (failure.kind == .vm_exit)
+        try self.emitPcLocation(failure.value)
+    else if (failure.kind != .block)
+        return Error.InvalidOperandType;
+    try self.body.localGet(self.allocator, 0);
+    try self.emitPointerValue(table);
+    try self.body.i32Const(self.allocator, @intFromBool(failure.kind == .vm_exit));
+    try self.body.call(self.allocator, self.check_readonly orelse return Error.UnsupportedCommand);
+    if (failure.kind == .vm_exit)
+        try self.body.opcode(self.allocator, 0x1a)
+    else
+        try self.emitGuardFailure(failure);
 }
 pub noinline fn emitBufferAdjustStack(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     _ = instruction_id;

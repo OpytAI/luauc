@@ -203,6 +203,14 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
         try self.tvalueByteOffset(instruction_value, 1)
     else
         0;
+    if (source.kind == .instruction) {
+        const producer = try self.instruction(source.value);
+        if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
+            if (address_offset != 0 or
+                !try self.plan.validateNodeUse(self.snapshot, self.function, source.value, instruction_id))
+                return Error.UnsupportedControlFlow;
+        }
+    }
     if (instruction_value.operand_count == 3) {
         const tag = try self.operand(instruction_value, 2);
         if (tag.kind != .constant or (try self.constant(tag.value)).tagValue() == null)
@@ -376,11 +384,10 @@ pub noinline fn emitGetUpvalue(self: anytype, instruction_id: u32, instruction_v
 pub noinline fn emitNewClosure(self: anytype, instruction_id: u32) Error!void {
     const pattern = try self.newClosurePattern(instruction_id);
     const child_id = std.math.add(u32, self.function_id_base, pattern.child_proto_id) catch return Error.ResourceLimit;
-    const terminator = try self.instruction(pattern.marker_start - 1);
     var capture_index: u32 = 0;
     while (capture_index < pattern.capture_count) : (capture_index += 1) {
         const capture = try self.initializedCapture(capture_index, pattern.capture_ir_start);
-        try self.emitCaptureCall(pattern.destination, child_id, capture_index, capture, terminator.command == .check_gc and capture_index + 1 == pattern.capture_count);
+        try self.emitCaptureCall(pattern.destination, child_id, capture_index, capture, pattern.check_gc and capture_index + 1 == pattern.capture_count);
     }
     try self.emitReloadBase();
 }

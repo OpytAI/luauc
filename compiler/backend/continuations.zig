@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const Context = @import("luauc_backend_context").Context;
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const ValueShape = model.ValueShape;
@@ -10,6 +11,9 @@ const ContinuationAction = model.ContinuationAction;
 const CallContinuation = model.CallContinuation;
 const GenericIterationPattern = model.GenericIterationPattern;
 const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
+const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
+const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
+const ir_cmd_try_call_fastgettm = abi.ir_cmd_try_call_fastgettm;
 const ir_cmd_forgloop_fallback = abi.ir_cmd_forgloop_fallback;
 const ir_cmd_string_len = abi.ir_cmd_string_len;
 const ir_cmd_invoke_libm = abi.ir_cmd_invoke_libm;
@@ -39,14 +43,6 @@ pub fn validateContinuationRegion(
     const reachable_instructions = try allocator.alloc(bool, context.function.instruction_count);
     defer allocator.free(reachable_instructions);
     @memset(reachable_instructions, false);
-    const instruction_blocks = try allocator.alloc(u32, context.function.instruction_count);
-    defer allocator.free(instruction_blocks);
-    @memset(instruction_blocks, snapshot_v1.no_id);
-    const edge_count = std.math.mul(usize, context.function.block_count, context.function.block_count) catch
-        return Error.ResourceLimit;
-    const edges = try allocator.alloc(bool, edge_count);
-    defer allocator.free(edges);
-    @memset(edges, false);
 
     var pending_blocks: std.ArrayList(u32) = .empty;
     defer pending_blocks.deinit(allocator);
@@ -55,7 +51,6 @@ pub fn validateContinuationRegion(
     var instruction_id = suffix_start;
     while (instruction_id <= block_finish) : (instruction_id += 1) {
         reachable_instructions[instruction_id] = true;
-        instruction_blocks[instruction_id] = continuation_block_id;
         const instruction_value = try context.instruction(instruction_id);
         var operand_id: u32 = 0;
         while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
@@ -69,7 +64,6 @@ pub fn validateContinuationRegion(
             // safe boundary of the resumed suffix, not a dependency on the pre-suspension locals.
             if (operand_value.value == continuation_block_id)
                 continue;
-            edges[@as(usize, continuation_block_id) * context.function.block_count + operand_value.value] = true;
             try pending_blocks.append(allocator, operand_value.value);
         }
     }
@@ -100,74 +94,20 @@ pub fn validateContinuationRegion(
             if (instruction_id >= context.function.instruction_count)
                 return Error.UnsupportedControlFlow;
             reachable_instructions[instruction_id] = true;
-            instruction_blocks[instruction_id] = block_id;
-            const instruction_value = try context.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try context.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block)
-                    continue;
-                if (operand_value.value >= context.function.block_count)
-                    return false;
-                if (operand_value.value == continuation_block_id)
-                    continue;
-                edges[@as(usize, block_id) * context.function.block_count + operand_value.value] = true;
-                try pending_blocks.append(allocator, operand_value.value);
-            }
+        }
+        const successors = context.plan.successorSlice(block_id) orelse return Error.UnsupportedControlFlow;
+        for (successors) |target| {
+            if (target != continuation_block_id)
+                try pending_blocks.append(allocator, target);
         }
     }
 
-    const dominators = try allocator.alloc(bool, edge_count);
-    defer allocator.free(dominators);
-    @memset(dominators, false);
-    var block_id: u32 = 0;
-    while (block_id < context.function.block_count) : (block_id += 1) {
-        if (!reachable_blocks[block_id])
-            continue;
-        var candidate: u32 = 0;
-        while (candidate < context.function.block_count) : (candidate += 1) {
-            if (reachable_blocks[candidate] and
-                (block_id != continuation_block_id or candidate == continuation_block_id))
-                dominators[@as(usize, block_id) * context.function.block_count + candidate] = true;
-        }
-    }
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        block_id = 0;
-        while (block_id < context.function.block_count) : (block_id += 1) {
-            if (!reachable_blocks[block_id] or block_id == continuation_block_id)
-                continue;
-            var candidate: u32 = 0;
-            while (candidate < context.function.block_count) : (candidate += 1) {
-                if (!reachable_blocks[candidate])
-                    continue;
-                var desired = candidate == block_id;
-                if (!desired) {
-                    desired = true;
-                    var has_predecessor = false;
-                    var predecessor: u32 = 0;
-                    while (predecessor < context.function.block_count) : (predecessor += 1) {
-                        if (!reachable_blocks[predecessor] or
-                            !edges[@as(usize, predecessor) * context.function.block_count + block_id])
-                            continue;
-                        has_predecessor = true;
-                        if (!dominators[@as(usize, predecessor) * context.function.block_count + candidate]) {
-                            desired = false;
-                            break;
-                        }
-                    }
-                    desired = desired and has_predecessor;
-                }
-                const index = @as(usize, block_id) * context.function.block_count + candidate;
-                if (dominators[index] != desired) {
-                    dominators[index] = desired;
-                    changed = true;
-                }
-            }
-        }
-    }
+    var region_dominators = try context.plan.regionDominators(
+        allocator,
+        reachable_blocks,
+        &.{continuation_block_id},
+    );
+    defer region_dominators.deinit();
 
     instruction_id = 0;
     while (instruction_id < context.function.instruction_count) : (instruction_id += 1) {
@@ -182,12 +122,12 @@ pub fn validateContinuationRegion(
             if (operand_value.value >= context.function.instruction_count or
                 !reachable_instructions[operand_value.value])
                 return false;
-            const producer_block = instruction_blocks[operand_value.value];
-            const consumer_block = instruction_blocks[instruction_id];
+            const producer_block = context.plan.instructionBlock(operand_value.value) orelse return false;
+            const consumer_block = context.plan.instructionBlock(instruction_id) orelse return false;
             if (producer_block == consumer_block) {
                 if (operand_value.value >= instruction_id)
                     return false;
-            } else if (!dominators[@as(usize, consumer_block) * context.function.block_count + producer_block]) {
+            } else if (!region_dominators.dominates(producer_block, consumer_block)) {
                 return false;
             }
         }
@@ -279,14 +219,6 @@ pub fn validateGenericIterationContinuationRegion(
     const reachable_instructions = try allocator.alloc(bool, context.function.instruction_count);
     defer allocator.free(reachable_instructions);
     @memset(reachable_instructions, false);
-    const instruction_blocks = try allocator.alloc(u32, context.function.instruction_count);
-    defer allocator.free(instruction_blocks);
-    @memset(instruction_blocks, snapshot_v1.no_id);
-    const edge_count = std.math.mul(usize, context.function.block_count, context.function.block_count) catch
-        return Error.ResourceLimit;
-    const edges = try allocator.alloc(bool, edge_count);
-    defer allocator.free(edges);
-    @memset(edges, false);
 
     var pending_blocks: std.ArrayList(u32) = .empty;
     defer pending_blocks.deinit(allocator);
@@ -303,84 +235,35 @@ pub fn validateGenericIterationContinuationRegion(
         reachable_blocks[block_id] = true;
 
         const block = try context.snapshot.irBlock(context.function, block_id);
-        if (block.isEmpty() or (!block.kind.isCompilable() and block.kind != .fallback))
+        if (block.isEmpty() or (!block.kind.isCompilable() and block.kind != .fallback)) {
+            diagnostics.recordBlock(@errorName(Error.UnsupportedControlFlow), block_id);
             return false;
+        }
         if (block.kind == .fallback and
             !try context.isBypassedEmissionBlock(block_id, block) and
             !try context.supportsFallback(block))
+        {
+            diagnostics.recordBlock(@errorName(Error.UnsupportedControlFlow), block_id);
             return false;
+        }
 
         var instruction_id = block.start;
         while (instruction_id <= block.finish) : (instruction_id += 1) {
             if (instruction_id >= context.function.instruction_count)
                 return Error.UnsupportedControlFlow;
             reachable_instructions[instruction_id] = true;
-            instruction_blocks[instruction_id] = block_id;
-            const instruction_value = try context.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try context.operand(instruction_value, operand_id);
-                if (operand_value.kind == .block) {
-                    if (operand_value.value >= context.function.block_count)
-                        return Error.UnsupportedControlFlow;
-                    edges[@as(usize, block_id) * context.function.block_count + operand_value.value] = true;
-                    try pending_blocks.append(allocator, operand_value.value);
-                }
-            }
         }
+        const successors = context.plan.successorSlice(block_id) orelse return Error.UnsupportedControlFlow;
+        for (successors) |target|
+            try pending_blocks.append(allocator, target);
     }
 
-    const dominators = try allocator.alloc(bool, edge_count);
-    defer allocator.free(dominators);
-    @memset(dominators, false);
-    var block_id: u32 = 0;
-    while (block_id < context.function.block_count) : (block_id += 1) {
-        if (!reachable_blocks[block_id])
-            continue;
-        const is_root = block_id == pattern.repeat_target or block_id == pattern.exit_target;
-        var candidate: u32 = 0;
-        while (candidate < context.function.block_count) : (candidate += 1) {
-            if (reachable_blocks[candidate] and (!is_root or candidate == block_id))
-                dominators[@as(usize, block_id) * context.function.block_count + candidate] = true;
-        }
-    }
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        block_id = 0;
-        while (block_id < context.function.block_count) : (block_id += 1) {
-            if (!reachable_blocks[block_id] or block_id == pattern.repeat_target or block_id == pattern.exit_target)
-                continue;
-            var candidate: u32 = 0;
-            while (candidate < context.function.block_count) : (candidate += 1) {
-                if (!reachable_blocks[candidate])
-                    continue;
-                var desired = candidate == block_id;
-                if (!desired) {
-                    desired = true;
-                    var has_predecessor = false;
-                    var predecessor: u32 = 0;
-                    while (predecessor < context.function.block_count) : (predecessor += 1) {
-                        if (!reachable_blocks[predecessor] or
-                            !edges[@as(usize, predecessor) * context.function.block_count + block_id])
-                            continue;
-                        has_predecessor = true;
-                        if (!dominators[@as(usize, predecessor) * context.function.block_count + candidate]) {
-                            desired = false;
-                            break;
-                        }
-                    }
-                    desired = desired and has_predecessor;
-                }
-                const index = @as(usize, block_id) * context.function.block_count + candidate;
-                if (dominators[index] != desired) {
-                    dominators[index] = desired;
-                    changed = true;
-                }
-            }
-        }
-    }
+    var region_dominators = try context.plan.regionDominators(
+        allocator,
+        reachable_blocks,
+        &.{ pattern.repeat_target, pattern.exit_target },
+    );
+    defer region_dominators.deinit();
 
     var instruction_id: u32 = 0;
     while (instruction_id < context.function.instruction_count) : (instruction_id += 1) {
@@ -391,15 +274,33 @@ pub fn validateGenericIterationContinuationRegion(
         while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
             const operand_value = try context.operand(instruction_value, operand_id);
             if (operand_value.kind == .instruction) {
-                if (operand_value.value >= context.function.instruction_count or !reachable_instructions[operand_value.value])
+                if (operand_value.value >= context.function.instruction_count or !reachable_instructions[operand_value.value]) {
+                    diagnostics.recordInstruction(
+                        @errorName(Error.UnsupportedControlFlow),
+                        instruction_id,
+                        @intFromEnum(instruction_value.command),
+                    );
                     return false;
-                const producer_block = instruction_blocks[operand_value.value];
-                const consumer_block = instruction_blocks[instruction_id];
+                }
+                const producer_block = context.plan.instructionBlock(operand_value.value) orelse return false;
+                const consumer_block = context.plan.instructionBlock(instruction_id) orelse return false;
                 if (producer_block == consumer_block) {
-                    if (operand_value.value >= instruction_id)
+                    if (operand_value.value >= instruction_id) {
+                        diagnostics.recordInstruction(
+                            @errorName(Error.UnsupportedControlFlow),
+                            instruction_id,
+                            @intFromEnum(instruction_value.command),
+                        );
                         return false;
-                } else if (!dominators[@as(usize, consumer_block) * context.function.block_count + producer_block])
+                    }
+                } else if (!region_dominators.dominates(producer_block, consumer_block)) {
+                    diagnostics.recordInstruction(
+                        @errorName(Error.UnsupportedControlFlow),
+                        instruction_id,
+                        @intFromEnum(instruction_value.command),
+                    );
                     return false;
+                }
             }
         }
     }
@@ -422,7 +323,7 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
                 const suffix_start = std.math.add(u32, require.end, 1) catch return Error.ResourceLimit;
                 if (suffix_start > block.finish or
                     !try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish))
-                    return Error.UnsupportedControlFlow;
+                    return continuationFailure(context, require.interrupt_id);
                 const continuation_id = std.math.cast(u32, continuations.items.len + 1) orelse return Error.ResourceLimit;
                 if (continuation_id > 4095)
                     return Error.ResourceLimit;
@@ -446,17 +347,16 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
             const action: ContinuationAction = if (instruction_value.command == .call) blk: {
                 const suffix_start = std.math.add(u32, instruction_id, 1) catch return Error.ResourceLimit;
                 if (suffix_start > block.finish)
-                    return Error.UnsupportedControlFlow;
+                    return continuationFailure(context, instruction_id);
                 const tail_valid = try validateStringTableContinuationTail(
                     allocator,
                     context,
                     block,
                     suffix_start,
                 );
-                const namecall_tail_valid = try validateNamecallContinuationTail(allocator, context, block, suffix_start);
-                if (!(tail_valid orelse namecall_tail_valid orelse
+                if (!(tail_valid orelse
                     try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish)))
-                    return Error.UnsupportedControlFlow;
+                    return continuationFailure(context, instruction_id);
                 break :blk .{ .call_suffix = .{
                     .block_id = block_id,
                     .suffix_start = suffix_start,
@@ -472,10 +372,9 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
                     block,
                     suffix_start,
                 );
-                const namecall_tail_valid = try validateNamecallContinuationTail(allocator, context, block, suffix_start);
-                if (suffix_start > block.finish or !(tail_valid orelse namecall_tail_valid orelse
+                if (suffix_start > block.finish or !(tail_valid orelse
                     try validateContinuationRegion(allocator, context, block_id, suffix_start, block.finish)))
-                    return Error.UnsupportedControlFlow;
+                    return continuationFailure(context, instruction_id);
                 break :blk .{ .interrupt_suffix = .{
                     .block_id = block_id,
                     .interrupt_id = instruction_id,
@@ -486,9 +385,10 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
                 const pattern = (try context.genericIterationFallbackPattern(block)) orelse continue;
                 const has_fast_owner = (try context.supportsGenericIterationFallback(block)) or
                     (try context.supportsSpecializedIpairsFallback(block));
-                if (!has_fast_owner or
-                    !try validateGenericIterationContinuationRegion(allocator, context, pattern))
+                if (!has_fast_owner)
                     continue;
+                if (!try validateGenericIterationContinuationRegion(allocator, context, pattern))
+                    return continuationFailure(context, instruction_id);
                 break :blk .{ .generic_iteration = pattern };
             } else continue;
             const continuation_id = std.math.cast(u32, continuations.items.len + 1) orelse return Error.ResourceLimit;
@@ -504,6 +404,16 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
         }
     }
     return continuations.toOwnedSlice(allocator);
+}
+
+fn continuationFailure(context: Context, instruction_id: u32) Error {
+    const instruction_value = context.instruction(instruction_id) catch return Error.UnsupportedControlFlow;
+    diagnostics.recordInstruction(
+        @errorName(Error.UnsupportedControlFlow),
+        instruction_id,
+        @intFromEnum(instruction_value.command),
+    );
+    return Error.UnsupportedControlFlow;
 }
 
 pub fn resultShape(command: snapshot_v1.IrCommand) ValueShape {
@@ -548,6 +458,9 @@ pub fn resultShape(command: snapshot_v1.IrCommand) ValueShape {
         .newclosure,
         .findupval,
         ir_cmd_new_userdata,
+        ir_cmd_get_hash_node_addr,
+        ir_cmd_get_slot_node_addr,
+        ir_cmd_try_call_fastgettm,
         => .pointer,
         .load_int64,
         .add_int64,

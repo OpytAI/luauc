@@ -74,20 +74,25 @@ function frontendSnapshot(sourceText, chunkText, coverageLevel = 0) {
 function backendObject(snapshot, functionId) {
   const api = backend.exports;
   const snapshotPointer = api.luauc_backend_v1_alloc(snapshot.length);
-  const resultPointer = api.luauc_backend_v1_alloc(16);
+  const resultPointer = api.luauc_backend_v1_alloc(24);
   if (!snapshotPointer || !resultPointer) throw new Error("backend allocation failed");
   new Uint8Array(api.memory.buffer, snapshotPointer, snapshot.length).set(snapshot);
-  new Uint8Array(api.memory.buffer, resultPointer, 16).fill(0);
+  new Uint8Array(api.memory.buffer, resultPointer, 24).fill(0);
   const status = api.luauc_backend_v1_compile(snapshotPointer, snapshot.length, functionId, resultPointer);
-  const result = new DataView(api.memory.buffer, resultPointer, 16);
+  const result = new DataView(api.memory.buffer, resultPointer, 24);
   const dataPointer = result.getUint32(0, true);
   const dataSize = result.getUint32(4, true);
   const resultStatus = result.getUint32(8, true);
+  const diagnosticPointer = result.getUint32(16, true);
+  const diagnosticSize = result.getUint32(20, true);
+  const diagnostic = diagnosticPointer && diagnosticSize
+    ? new TextDecoder().decode(new Uint8Array(api.memory.buffer, diagnosticPointer, diagnosticSize))
+    : "";
   if (status !== 0 || resultStatus !== 0 || !dataPointer || !dataSize)
-    throw new Error(`backend failed with ${status}/${resultStatus}`);
+    throw new Error(`backend failed with ${status}/${resultStatus}: ${diagnostic}`);
   const object = Buffer.from(new Uint8Array(api.memory.buffer, dataPointer, dataSize));
   api.luauc_backend_v1_free(resultPointer);
-  api.luauc_backend_v1_dealloc(resultPointer, 16);
+  api.luauc_backend_v1_dealloc(resultPointer, 24);
   api.luauc_backend_v1_dealloc(snapshotPointer, snapshot.length);
   return object;
 }
@@ -95,20 +100,25 @@ function backendObject(snapshot, functionId) {
 function backendPackage(snapshot) {
   const api = backend.exports;
   const snapshotPointer = api.luauc_backend_v1_alloc(snapshot.length);
-  const resultPointer = api.luauc_backend_v1_alloc(16);
+  const resultPointer = api.luauc_backend_v1_alloc(24);
   if (!snapshotPointer || !resultPointer) throw new Error("backend package allocation failed");
   new Uint8Array(api.memory.buffer, snapshotPointer, snapshot.length).set(snapshot);
-  new Uint8Array(api.memory.buffer, resultPointer, 16).fill(0);
+  new Uint8Array(api.memory.buffer, resultPointer, 24).fill(0);
   const status = api.luauc_backend_v1_compile_package(snapshotPointer, snapshot.length, resultPointer);
-  const result = new DataView(api.memory.buffer, resultPointer, 16);
+  const result = new DataView(api.memory.buffer, resultPointer, 24);
   const dataPointer = result.getUint32(0, true);
   const dataSize = result.getUint32(4, true);
   const resultStatus = result.getUint32(8, true);
+  const diagnosticPointer = result.getUint32(16, true);
+  const diagnosticSize = result.getUint32(20, true);
+  const diagnostic = diagnosticPointer && diagnosticSize
+    ? new TextDecoder().decode(new Uint8Array(api.memory.buffer, diagnosticPointer, diagnosticSize))
+    : "";
   if (status !== 0 || resultStatus !== 0 || !dataPointer || !dataSize)
-    throw new Error(`backend package failed with ${status}/${resultStatus}`);
+    throw new Error(`backend package failed with ${status}/${resultStatus}: ${diagnostic}`);
   const object = Buffer.from(new Uint8Array(api.memory.buffer, dataPointer, dataSize));
   api.luauc_backend_v1_free(resultPointer);
-  api.luauc_backend_v1_dealloc(resultPointer, 16);
+  api.luauc_backend_v1_dealloc(resultPointer, 24);
   api.luauc_backend_v1_dealloc(snapshotPointer, snapshot.length);
   return object;
 }
@@ -143,20 +153,25 @@ function staticPackageFrame(moduleName, snapshot) {
 function backendStaticPackage(frame) {
   const api = backend.exports;
   const framePointer = api.luauc_backend_v1_alloc(frame.length);
-  const resultPointer = api.luauc_backend_v1_alloc(16);
+  const resultPointer = api.luauc_backend_v1_alloc(24);
   if (!framePointer || !resultPointer) throw new Error("backend static-package allocation failed");
   new Uint8Array(api.memory.buffer, framePointer, frame.length).set(frame);
-  new Uint8Array(api.memory.buffer, resultPointer, 16).fill(0);
+  new Uint8Array(api.memory.buffer, resultPointer, 24).fill(0);
   const status = api.luauc_backend_v1_compile_static_package(framePointer, frame.length, resultPointer);
-  const result = new DataView(api.memory.buffer, resultPointer, 16);
+  const result = new DataView(api.memory.buffer, resultPointer, 24);
   const dataPointer = result.getUint32(0, true);
   const dataSize = result.getUint32(4, true);
   const resultStatus = result.getUint32(8, true);
+  const diagnosticPointer = result.getUint32(16, true);
+  const diagnosticSize = result.getUint32(20, true);
+  const diagnostic = diagnosticPointer && diagnosticSize
+    ? new TextDecoder().decode(new Uint8Array(api.memory.buffer, diagnosticPointer, diagnosticSize))
+    : "";
   if (status !== 0 || resultStatus !== 0 || !dataPointer || !dataSize)
-    throw new Error(`backend static package failed with ${status}/${resultStatus}`);
+    throw new Error(`backend static package failed with ${status}/${resultStatus}: ${diagnostic}`);
   const object = Buffer.from(new Uint8Array(api.memory.buffer, dataPointer, dataSize));
   api.luauc_backend_v1_free(resultPointer);
-  api.luauc_backend_v1_dealloc(resultPointer, 16);
+  api.luauc_backend_v1_dealloc(resultPointer, 24);
   api.luauc_backend_v1_dealloc(framePointer, frame.length);
   return object;
 }
@@ -483,6 +498,114 @@ async function executeCoveragePackageShape() {
   return { objectSize: first.length, sites: irSites };
 }
 
+function executeEmbedNamecallFamilyPackageShape() {
+  const name = "embed-namecall-family-package-shape";
+  const source = readFileSync(
+    runfile(process.env.LUAUC_EMBED_LIB_SOURCE, "LUAUC_EMBED_LIB_SOURCE"),
+    "utf8",
+  );
+  const snapshot = frontendSnapshot(source, "@lib.luau");
+  const shape = snapshotShape(snapshot);
+  const commandCounts = new Map();
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
+      const command = shape.instruction(functionId, instructionId).command;
+      commandCounts.set(command, (commandCounts.get(command) ?? 0) + 1);
+    }
+    try {
+      backendObject(snapshot, functionId);
+    } catch (error) {
+      const blockMatch = /block (\d+)/.exec(error.message);
+      const instructionMatch = /instruction (\d+)/.exec(error.message);
+      let diagnosticBlockId = blockMatch ? Number(blockMatch[1]) : null;
+      if (diagnosticBlockId === null && instructionMatch) {
+        const failedInstruction = Number(instructionMatch[1]);
+        for (let candidateBlockId = 0; candidateBlockId < shape.blockCount(functionId); candidateBlockId++) {
+          const candidate = shape.block(functionId, candidateBlockId);
+          if (candidate.start !== 0xffffffff && failedInstruction >= candidate.start && failedInstruction <= candidate.finish) {
+            diagnosticBlockId = candidateBlockId;
+            break;
+          }
+        }
+      }
+      let blockContext = "";
+      if (diagnosticBlockId !== null) {
+        const blockId = diagnosticBlockId;
+        const block = shape.block(functionId, blockId);
+        const instructions = [];
+        for (let id = block.start; id <= block.finish; id++) {
+          const instruction = shape.instruction(functionId, id);
+          const operands = Array.from(
+            { length: instruction.operandCount },
+            (_, operandId) => {
+              const operand = instruction.operand(operandId);
+              if (operand.kind === 2) {
+                const constant = instruction.constant(operandId);
+                return `${operand.kind}:${operand.value}=${constant.kind}/${constant.bits}`;
+              }
+              return `${operand.kind}:${operand.value}`;
+            },
+          );
+          instructions.push(`${id}:${instruction.command}(${operands.join(",")})`);
+        }
+        const outgoing = [];
+        for (let id = block.start; id <= block.finish; id++) {
+          const instruction = shape.instruction(functionId, id);
+          for (let operandId = 0; operandId < instruction.operandCount; operandId++) {
+            const operand = instruction.operand(operandId);
+            if (operand.kind !== 5 || outgoing.some(({ id: target }) => target === operand.value)) continue;
+            const target = shape.block(functionId, operand.value);
+            const commands = [];
+            if (target.start !== 0xffffffff)
+              for (let targetInstruction = target.start; targetInstruction <= target.finish; targetInstruction++)
+                commands.push(shape.instruction(functionId, targetInstruction).command);
+            outgoing.push({ id: operand.value, kind: target.kind, commands });
+          }
+        }
+        const owners = [];
+        for (let candidateBlockId = 0; candidateBlockId < shape.blockCount(functionId); candidateBlockId++) {
+          const candidate = shape.block(functionId, candidateBlockId);
+          if (candidate.start === 0xffffffff) continue;
+          let references = false;
+          for (let id = candidate.start; id <= candidate.finish && !references; id++) {
+            const instruction = shape.instruction(functionId, id);
+            for (let operandId = 0; operandId < instruction.operandCount; operandId++) {
+              const operand = instruction.operand(operandId);
+              if (operand.kind === 5 && operand.value === blockId) references = true;
+            }
+          }
+          if (references) {
+            const commands = [];
+            for (let id = candidate.start; id <= candidate.finish; id++) {
+              const instruction = shape.instruction(functionId, id);
+              const operands = [];
+              if (candidate.finish - candidate.start < 40)
+                for (let operandId = 0; operandId < instruction.operandCount; operandId++) {
+                  const operand = instruction.operand(operandId);
+                  if (operand.kind === 2) {
+                    const constant = instruction.constant(operandId);
+                    operands.push(`${operand.kind}:${operand.value}=${constant.kind}/${constant.bits}`);
+                  } else operands.push(`${operand.kind}:${operand.value}`);
+                }
+              commands.push(`${id}:${instruction.command}${operands.length ? `(${operands.join(",")})` : ""}`);
+            }
+            owners.push(`B${candidateBlockId}[${commands.join(",")}]`);
+          }
+        }
+        blockContext = `; block ${blockId} kind ${block.kind}: ${instructions.join(" ")}; ` +
+          `targets ${outgoing.map(({ id, kind, commands }) => `B${id}/K${kind}[${commands.join(",")}]`).join(" ")}; ` +
+          `owners ${owners.join(" ")}`;
+      }
+      throw new Error(`${name}: function ${functionId} failed: ${error.message}${blockContext}`);
+    }
+  }
+  for (const command of [10, 11, 97, 104, 137, 138, 139, 164])
+    if (!commandCounts.get(command))
+      throw new Error(`${name}: natural source did not emit command ${command}`);
+  const object = backendPackage(snapshot);
+  return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
+}
+
 async function executeTableInsertAppendPackageShape() {
   const name = "table-clone-append-package-shape";
   const snapshot = frontendSnapshot(
@@ -752,8 +875,16 @@ async function executePlainTableNamecallPackageShape() {
   const helpers = WebAssembly.Module.imports(module)
     .filter(({ module: importModule, kind }) => importModule === "env" && kind === "function")
     .map(({ name: importName }) => importName);
-  if (helpers.filter((helper) => helper === "luauc_runtime_v1_namecall_plain").length !== 1 ||
-      helpers.filter((helper) => helper === "luauc_runtime_v1_set_location").length !== 1)
+  const expectedNamecallHelpers = [
+    "luauc_runtime_v1_check_node_no_next",
+    "luauc_runtime_v1_hash_node_addr",
+    "luauc_runtime_v1_namecall_plain",
+    "luauc_runtime_v1_node_slot_match",
+    "luauc_runtime_v1_set_location",
+    "luauc_runtime_v1_slot_node_addr",
+    "luauc_runtime_v1_try_get_tm",
+  ];
+  if (expectedNamecallHelpers.some((helper) => helpers.filter((candidate) => candidate === helper).length !== 1))
     throw new Error(`${name}: NAMECALL helper/location imports changed: ${JSON.stringify(helpers)}`);
 
   const productSource = readFileSync(
@@ -769,7 +900,7 @@ async function executePlainTableNamecallPackageShape() {
   if (!productObject.equals(productSecond)) throw new Error(`${name}: exact product object is nondeterministic`);
   const productModule = await WebAssembly.compile(linkPackage(productObject, packageFunctionSymbols(4)));
   const productHelpers = WebAssembly.Module.imports(productModule).map(({ name: importName }) => importName);
-  if (!productHelpers.includes("luauc_runtime_v1_namecall_plain"))
+  if (expectedNamecallHelpers.some((helper) => !productHelpers.includes(helper)))
     throw new Error(`${name}: exact product omitted NAMECALL helper: ${JSON.stringify(productHelpers)}`);
   return { objectSize: productObject.length };
 }
@@ -2681,6 +2812,7 @@ const mixedTable = await executeMixedTablePackage();
 const globalState = await executeGlobalStatePackage();
 const fastBuiltins = await executeFastBuiltinsPackage();
 const bufferScalarMatrix = await executeBufferScalarMatrixPackage();
+const embedNamecallFamily = executeEmbedNamecallFamilyPackageShape();
 
 console.log(
   `frontend -> IR -> relocatable wasm: scalar ${scalar.objectSize} bytes, loop ${loop.objectSize} bytes; ` +
@@ -2708,6 +2840,7 @@ console.log(
     `global state ${globalState.objectSize} bytes/${globalState.functionCount} functions; ` +
     `fast builtins ${fastBuiltins.objectSize} bytes/${fastBuiltins.functionCount} functions; ` +
     `buffer scalar matrix ${bufferScalarMatrix.objectSize} bytes/${bufferScalarMatrix.functionCount} functions; ` +
+    `embed NAMECALL family ${embedNamecallFamily.objectSize} bytes/${embedNamecallFamily.functionCount} functions; ` +
     `multi-result package ${multiResultCall.objectSize} bytes/${multiResultCall.pairReturns} pair returns; ` +
     `interrupt calls ${scalar.interrupts}/${loop.interrupts}/${silent.interrupts}/${slowAdd.interrupts}; ` +
     `slow helpers ${slowAdd.helperCalls}`,

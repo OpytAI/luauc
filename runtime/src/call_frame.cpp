@@ -588,12 +588,11 @@ extern "C" void luauc_runtime_v1_dup_table(lua_State *L, uint32_t destinationReg
     if (prototype->metatable)
         luaG_runerror(L, "strict AOT table template clone rejected a metatable");
 
-    // Proto::k roots the immutable template throughout allocation. Publish the real clone into
-    // the destination register before the collector assist, exactly matching DUP_TABLE/CHECK_GC.
+    // Proto::k roots the immutable template throughout allocation. DUP_TABLE only allocates and
+    // publishes; a distinct CHECK_GC IR command owns any collector assist.
     luaC_threadbarrier(L);
     LuaTable *clone = luaH_clone(L, prototype);
     sethvalue(L, destination, clone);
-    luaC_checkGC(L);
 }
 
 extern "C" void luauc_runtime_v1_load_constant(lua_State *L, uint32_t destinationRegister,
@@ -1848,6 +1847,83 @@ extern "C" void luauc_runtime_v1_barrier_table_back(lua_State *L, void *tablePoi
     if (!table || table->tt != LUA_TTABLE)
         luaG_runerror(L, "strict AOT table backward barrier lost validated table provenance");
     luaC_barrierfast(L, table);
+}
+
+extern "C" void *luauc_runtime_v1_hash_node_addr(lua_State *L, void *tablePointer,
+                                                 uint32_t hash) {
+    activeAotFrameProto(L, "hash node address");
+    LuaTable *table = static_cast<LuaTable *>(tablePointer);
+    if (!table || table->tt != LUA_TTABLE)
+        luaG_runerror(L, "strict AOT hash node address lost table provenance");
+    return gnode(table, hash & (sizenode(table) - 1));
+}
+
+extern "C" void *luauc_runtime_v1_slot_node_addr(lua_State *L, void *tablePointer,
+                                                 uint32_t keyConstant) {
+    Proto *proto = activeAotFrameProto(L, "slot node address");
+    LuaTable *table = static_cast<LuaTable *>(tablePointer);
+    if (!table || table->tt != LUA_TTABLE)
+        luaG_runerror(L, "strict AOT slot node address lost table provenance");
+    if (proto->sizek < 0 || keyConstant >= uint32_t(proto->sizek) ||
+        !ttisstring(&proto->k[keyConstant]))
+        luaG_runerror(L, "strict AOT slot node address rejected key constant %u", keyConstant);
+
+    // The native backend reads the mutable bytecode cache. AOT Protos deliberately have no
+    // bytecode, so start at the string's deterministic main position. CHECK_SLOT_MATCH preserves
+    // the exact fast/slow decision: collisions and missing values enter the compiled semantic
+    // slow path, while a hit returns the same LuaNode value slot.
+    TString *key = tsvalue(&proto->k[keyConstant]);
+    return gnode(table, key->hash & (sizenode(table) - 1));
+}
+
+extern "C" uint32_t luauc_runtime_v1_node_slot_match(lua_State *L, void *nodePointer,
+                                                     uint32_t keyConstant) {
+    Proto *proto = activeAotFrameProto(L, "node slot match");
+    LuaNode *node = static_cast<LuaNode *>(nodePointer);
+    if (!node)
+        luaG_runerror(L, "strict AOT node slot match lost node provenance");
+    if (proto->sizek < 0 || keyConstant >= uint32_t(proto->sizek) ||
+        !ttisstring(&proto->k[keyConstant]))
+        luaG_runerror(L, "strict AOT node slot match rejected key constant %u", keyConstant);
+    TString *key = tsvalue(&proto->k[keyConstant]);
+    return ttisstring(gkey(node)) && tsvalue(gkey(node)) == key && !ttisnil(gval(node));
+}
+
+extern "C" void *luauc_runtime_v1_try_get_tm(lua_State *L, void *tablePointer, uint32_t event) {
+    activeAotFrameProto(L, "tag method probe");
+    LuaTable *table = static_cast<LuaTable *>(tablePointer);
+    if (!table || table->tt != LUA_TTABLE)
+        luaG_runerror(L, "strict AOT tag method probe lost table provenance");
+    if (event >= uint32_t(TM_N))
+        luaG_runerror(L, "strict AOT tag method probe rejected event %u", event);
+    return const_cast<TValue *>(fasttm(L, table->metatable, TMS(event)));
+}
+
+extern "C" uint32_t luauc_runtime_v1_check_node_no_next(lua_State *L, void *nodePointer) {
+    activeAotFrameProto(L, "node no-next guard");
+    LuaNode *node = static_cast<LuaNode *>(nodePointer);
+    if (!node)
+        luaG_runerror(L, "strict AOT node no-next guard lost node provenance");
+    return gnext(node) != 0;
+}
+
+extern "C" uint32_t luauc_runtime_v1_check_node_value(lua_State *L, void *nodePointer) {
+    activeAotFrameProto(L, "node value guard");
+    LuaNode *node = static_cast<LuaNode *>(nodePointer);
+    if (!node)
+        luaG_runerror(L, "strict AOT node value guard lost node provenance");
+    return ttisnil(gval(node));
+}
+
+extern "C" uint32_t luauc_runtime_v1_check_readonly(lua_State *L, void *tablePointer,
+                                                       uint32_t raise) {
+    activeAotFrameProto(L, "readonly guard");
+    LuaTable *table = static_cast<LuaTable *>(tablePointer);
+    if (!table || table->tt != LUA_TTABLE)
+        luaG_runerror(L, "strict AOT readonly guard lost table provenance");
+    if (table->readonly && raise != 0)
+        luaG_readonlyerror(L);
+    return table->readonly ? 1u : 0u;
 }
 
 extern "C" void luauc_runtime_v1_prep_varargs(lua_State *L, uint32_t fixedParameterCount) {

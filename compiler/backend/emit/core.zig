@@ -288,11 +288,13 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
         } else return Error.UnsupportedControlFlow;
     }
 
-    const terminator = try self.instruction(cursor);
-    if (terminator.command != .check_gc and terminator.command != .nop)
+    const possible_gc_marker = try self.instruction(cursor);
+    const has_gc_marker = possible_gc_marker.command == .check_gc or possible_gc_marker.command == .nop;
+    if (has_gc_marker)
+        try self.requireOperandCount(possible_gc_marker, 0)
+    else if (possible_gc_marker.command != .capture)
         return Error.UnsupportedControlFlow;
-    try self.requireOperandCount(terminator, 0);
-    const marker_start = cursor + 1;
+    const marker_start = cursor + @as(u32, @intFromBool(has_gc_marker));
     capture_index = 0;
     while (capture_index < capture_count) : (capture_index += 1) {
         const initialized = try self.initializedCapture(capture_index, capture_ir_start);
@@ -304,7 +306,16 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
     if (finish >= self.function.instruction_count)
         return Error.UnsupportedControlFlow;
     try self.requireSingleCompilableBlockRange(newclosure_id - 2, finish);
-    return .{ .start = newclosure_id - 2, .finish = finish, .destination = destination, .child_proto_id = child_proto_id, .capture_count = capture_count, .capture_ir_start = capture_ir_start, .marker_start = marker_start };
+    return .{
+        .start = newclosure_id - 2,
+        .finish = finish,
+        .destination = destination,
+        .child_proto_id = child_proto_id,
+        .capture_count = capture_count,
+        .capture_ir_start = capture_ir_start,
+        .marker_start = marker_start,
+        .check_gc = possible_gc_marker.command == .check_gc,
+    };
 }
 pub fn requireClosureCaptureAddress(self: anytype, instruction_value: snapshot_v1.IrInstruction, newclosure_id: u32, capture_index: u32) Error!void {
     const closure = try self.operand(instruction_value, 0);

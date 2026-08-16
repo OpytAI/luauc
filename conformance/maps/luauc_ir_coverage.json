@@ -207,10 +207,7 @@
       "class": "layout",
       "wasm_features": [],
       "runtime_symbols": [
-        "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_set_global",
-        "luauc_runtime_v1_table_get_string",
-        "luauc_runtime_v1_table_set_string"
+        "luauc_runtime_v1_slot_node_addr"
       ],
       "may_allocate": false,
       "may_raise": false,
@@ -219,38 +216,41 @@
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:168; CodeGen/src/IrLoweringA64.cpp:402",
       "tests": [
-        "//compiler/backend:dynamic_hash_table_package_object_build_test",
-        "conformance:luauc_dynamic_hash_table_survives_gc_and_matches_interpreter",
-        "//compiler/backend:global_state_package_object_build_test",
-        "conformance:luauc_mutable_global_state_and_standard_library_survive_gc",
-        "//compiler/backend:table_clone_append_package_object_build_test",
-        "conformance:luauc_table_template_clone_and_append_matches_interpreter",
-        "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_literal_string_table_plain_table_template_field_or_luav_environment_global_clusters_including_optimizer_linearized"
+      "status": "implemented"
     },
     {
       "command": "GET_HASH_NODE_ADDR",
       "value": 11,
       "class": "layout",
       "wasm_features": [],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_hash_node_addr"
+      ],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:177; CodeGen/src/IrLoweringA64.cpp:429",
-      "tests": [],
-      "status": "unimplemented"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "GET_CLOSURE_UPVAL_ADDR",
       "value": 12,
       "class": "layout",
       "wasm_features": [],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_node_slot_match"
+      ],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
@@ -1612,8 +1612,12 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2327; CodeGen/src/IrLoweringA64.cpp:2427",
-      "tests": [],
-      "status": "unimplemented"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "TABLE_LEN",
@@ -1753,22 +1757,20 @@
       "class": "control",
       "wasm_features": [],
       "runtime_symbols": [
-        "luauc_runtime_v1_namecall_plain"
+        "luauc_runtime_v1_try_get_tm"
       ],
-      "may_allocate": true,
-      "may_raise": true,
-      "may_call_luau": true,
-      "safepoint": true,
+      "may_allocate": false,
+      "may_raise": false,
+      "may_call_luau": false,
+      "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1882; CodeGen/src/IrLoweringA64.cpp:1864",
       "tests": [
         "//compiler/backend:frontend_to_wasm_test",
-        "//compiler/backend:table_namecall_package_object_build_test",
-        "conformance:luauc_plain_table_namecall_survives_gc_and_matches_interpreter",
-        "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_fused_exact_table_raw_nested_or_function_index_sequential_namecall_clusters"
+      "status": "implemented"
     },
     {
       "command": "NEW_USERDATA",
@@ -2440,10 +2442,7 @@
       "class": "guard_slowpath",
       "wasm_features": [],
       "runtime_symbols": [
-        "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_set_global",
-        "luauc_runtime_v1_table_get_string",
-        "luauc_runtime_v1_table_set_string"
+        "luauc_runtime_v1_node_slot_match"
       ],
       "may_allocate": false,
       "may_raise": false,
@@ -2452,46 +2451,53 @@
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2328; CodeGen/src/IrLoweringA64.cpp:2428",
       "tests": [
-        "//compiler/backend:dynamic_hash_table_package_object_build_test",
-        "conformance:luauc_dynamic_hash_table_survives_gc_and_matches_interpreter",
-        "//compiler/backend:global_state_package_object_build_test",
-        "conformance:luauc_mutable_global_state_and_standard_library_survive_gc",
-        "//compiler/backend:table_clone_append_package_object_build_test",
-        "conformance:luauc_table_template_clone_and_append_matches_interpreter",
-        "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_literal_string_table_plain_table_template_field_or_luav_environment_global_clusters_including_optimizer_linearized"
+      "status": "implemented"
     },
     {
       "command": "CHECK_NODE_NO_NEXT",
       "value": 138,
       "class": "guard_slowpath",
       "wasm_features": [],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_check_node_no_next"
+      ],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2365; CodeGen/src/IrLoweringA64.cpp:2461",
-      "tests": [],
-      "status": "unimplemented"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "CHECK_NODE_VALUE",
       "value": 139,
       "class": "guard_slowpath",
       "wasm_features": [],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_check_node_value"
+      ],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2374; CodeGen/src/IrLoweringA64.cpp:2472",
-      "tests": [],
-      "status": "unimplemented"
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
+      "status": "implemented"
     },
     {
       "command": "CHECK_BUFFER_LEN",
@@ -3079,12 +3085,11 @@
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2836; CodeGen/src/IrLoweringA64.cpp:3031",
       "tests": [
-        "//compiler/backend:table_namecall_package_object_build_test",
-        "conformance:luauc_plain_table_namecall_survives_gc_and_matches_interpreter",
-        "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_rewritten_literal_string_table_raw_nested_or_function_index_sequential_namecall_clusters"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_PREPVARARGS",

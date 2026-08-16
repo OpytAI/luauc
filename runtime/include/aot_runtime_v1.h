@@ -245,6 +245,13 @@ uint32_t luauc_runtime_v1_check_userdata_tag(lua_State *state, const void *userd
                                            uint32_t expected_tag);
 void luauc_runtime_v1_barrier_object(lua_State *state, void *owner, uint32_t source_register);
 void luauc_runtime_v1_barrier_table_back(lua_State *state, void *table);
+void *luauc_runtime_v1_hash_node_addr(lua_State *state, void *table, uint32_t hash);
+void *luauc_runtime_v1_slot_node_addr(lua_State *state, void *table, uint32_t key_constant);
+uint32_t luauc_runtime_v1_node_slot_match(lua_State *state, void *node, uint32_t key_constant);
+void *luauc_runtime_v1_try_get_tm(lua_State *state, void *table, uint32_t event);
+uint32_t luauc_runtime_v1_check_node_no_next(lua_State *state, void *node);
+uint32_t luauc_runtime_v1_check_node_value(lua_State *state, void *node);
+uint32_t luauc_runtime_v1_check_readonly(lua_State *state, void *table, uint32_t raise);
 void luauc_runtime_v1_return(lua_State *state, uint32_t source_register, int32_t result_count);
 uint32_t luauc_runtime_v1_interrupt(lua_State *state, uint32_t line);
 void luauc_runtime_v1_do_arith(lua_State *state, uint32_t destination_register, uint32_t lhs_register,

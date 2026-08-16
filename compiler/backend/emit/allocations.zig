@@ -75,7 +75,6 @@ pub noinline fn tableAllocationPatternAt(self: anytype, start: u32) Error!?Table
         return null;
     const node_count = try self.uintConstant(try self.operand(allocation, 1));
     const deferred_to_later_gc = finish == start + 2;
-    if (deferred_to_later_gc and !try self.hasLaterCheckGcInBlock(start, finish)) return null;
     return .{
         .start = start,
         .finish = finish,
@@ -112,24 +111,6 @@ pub fn isDeferredTableInitializationCommand(_: anytype, command: snapshot_v1.IrC
         => true,
         else => false,
     };
-}
-pub fn hasLaterCheckGcInBlock(self: anytype, start: u32, finish: u32) Error!bool {
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (!block.kind.isCompilable() or block.isEmpty() or start < block.start or finish > block.finish)
-            continue;
-        var cursor = finish + 1;
-        while (cursor <= block.finish) : (cursor += 1) {
-            const candidate = try self.instruction(cursor);
-            if (candidate.command == .check_gc and candidate.operand_count == 0)
-                return true;
-            if (!self.isDeferredTableInitializationCommand(candidate.command))
-                return false;
-        }
-        return false;
-    }
-    return false;
 }
 pub fn checkGcClosesDeferredTableAllocation(self: anytype, instruction_id: u32) Error!bool {
     var block_id: u32 = 0;
@@ -359,22 +340,27 @@ pub noinline fn dupTablePatternAt(self: anytype, start: u32) Error!?DupTablePatt
         .load_pointer, ir_cmd_dup_table, .store_pointer, .store_tag,
     };
     const prefix_len: u32 = @intCast(prefix.len);
-    if (!try self.commandRangeMatches(start, &prefix) or start + prefix_len >= self.function.instruction_count)
+    if (!try self.commandRangeMatches(start, &prefix))
         return null;
-    const finish = start + prefix_len;
-    self.requireSingleCompilableBlockRange(start, finish) catch return null;
+    var finish = start + prefix_len - 1;
+    var assist = false;
 
     const load = try self.instruction(start);
     const duplicate = try self.instruction(start + 1);
     const store_pointer = try self.instruction(start + 2);
     const store_tag = try self.instruction(start + 3);
-    const check_gc = try self.instruction(finish);
-    // The pinned DSE pass can replace CHECK_GC with NOP in the linearized duplicate. The
-    // combined helper still publishes the clone before performing the collector assist, so
-    // accepting that exact optimized suffix is conservative rather than a weaker GC path.
-    if ((check_gc.command != .check_gc and check_gc.command != .nop) or
-        load.operand_count != 1 or duplicate.operand_count != 1 or
-        store_pointer.operand_count != 2 or store_tag.operand_count != 2 or check_gc.operand_count != 0)
+    if (start + prefix_len < self.function.instruction_count) {
+        const possible_gc = try self.instruction(start + prefix_len);
+        if (possible_gc.command == .check_gc or possible_gc.command == .nop) {
+            if (possible_gc.operand_count != 0)
+                return null;
+            finish += 1;
+            assist = possible_gc.command == .check_gc;
+        }
+    }
+    self.requireSingleCompilableBlockRange(start, finish) catch return null;
+    if (load.operand_count != 1 or duplicate.operand_count != 1 or
+        store_pointer.operand_count != 2 or store_tag.operand_count != 2)
         return null;
 
     const constant_operand = try self.operand(load, 0);
@@ -394,6 +380,7 @@ pub noinline fn dupTablePatternAt(self: anytype, start: u32) Error!?DupTablePatt
     return .{
         .start = start,
         .finish = finish,
+        .assist = assist,
         .destination = try self.vmRegisterIndex(destination),
         .constant_id = constant_operand.value,
     };
@@ -411,6 +398,10 @@ pub noinline fn emitDupTable(self: anytype, pattern: DupTablePattern) Error!void
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
     try self.body.i32Const(self.allocator, @intCast(pattern.constant_id));
     try self.body.call(self.allocator, self.dup_table orelse return Error.UnsupportedCommand);
+    if (pattern.assist) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
+    }
     try self.emitReloadBase();
 }
 pub fn tableRegisterForPointer(self: anytype, pointer_id: u32) Error!?u32 {
@@ -463,6 +454,42 @@ pub fn dupTableRegisterForPointer(self: anytype, pointer_id: u32) Error!?u32 {
     }
     return null;
 }
+fn rootedCollectablePointerRegister(
+    self: anytype,
+    pointer: snapshot_v1.IrOperand,
+    expected_tag: u8,
+    consumer_id: u32,
+) Error!?u32 {
+    if (expected_tag < lua_tag_string or expected_tag > 12 or
+        pointer.kind != .instruction or pointer.value >= consumer_id)
+        return null;
+
+    if (try self.loadedPointerRegister(pointer)) |register| {
+        if (try self.preservesRegisterToConsumer(register, pointer.value, consumer_id))
+            return register;
+        return null;
+    }
+
+    if (pointer.value + 2 >= consumer_id)
+        return null;
+    const publication = try self.instruction(pointer.value + 1);
+    const tag_publication = try self.instruction(pointer.value + 2);
+    if (publication.command != .store_pointer or publication.operand_count != 2 or
+        tag_publication.command != .store_tag or tag_publication.operand_count != 2)
+        return null;
+    const destination = try self.operand(publication, 0);
+    const published_pointer = try self.operand(publication, 1);
+    const tag_destination = try self.operand(tag_publication, 0);
+    const published_tag = try self.operand(tag_publication, 1);
+    if (destination.kind != .vm_reg or destination.value >= self.proto.max_stack_size or
+        published_pointer.kind != .instruction or published_pointer.value != pointer.value or
+        tag_destination.kind != .vm_reg or tag_destination.value != destination.value or
+        published_tag.kind != .constant or
+        (try self.constant(published_tag.value)).tagValue() != expected_tag or
+        !try self.preservesRegisterToConsumer(destination.value, pointer.value + 2, consumer_id))
+        return null;
+    return destination.value;
+}
 pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?LiteralFieldSetPattern {
     if (start + 4 >= self.function.instruction_count)
         return null;
@@ -503,24 +530,46 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
             return null;
         store_id += 1;
     }
+    if (store_id < self.function.instruction_count and
+        (try self.instruction(store_id)).command == .load_tvalue)
+        store_id += 1;
     if (store_id >= self.function.instruction_count)
         return null;
     const store = try self.instruction(store_id);
     if (store.command == .store_tvalue) {
         if (store_id + 1 >= self.function.instruction_count or store.operand_count != 3)
             return null;
-        const barrier = try self.instruction(store_id + 1);
-        if (barrier.command != ir_cmd_barrier_table_forward or barrier.operand_count != 3)
-            return null;
+        const suffix = try self.instruction(store_id + 1);
         const destination = try self.operand(store, 0);
         const stored = try self.operand(store, 1);
         const offset = try self.operand(store, 2);
-        const barrier_pointer = try self.operand(barrier, 0);
-        const value = try self.operand(barrier, 1);
-        const barrier_tag = try self.operand(barrier, 2);
         if (destination.kind != .instruction or destination.value != start or
-            stored.kind != .instruction or !try self.intOperandEquals(offset, 0) or
-            barrier_pointer.kind != .instruction or barrier_pointer.value != pointer.value or
+            stored.kind != .instruction or !try self.intOperandEquals(offset, 0))
+            return null;
+
+        if (suffix.command == .nop and suffix.operand_count == 0) {
+            const load = try self.instruction(stored.value);
+            if (load.command != .load_tvalue or load.operand_count != 3)
+                return null;
+            const source = try self.operand(load, 0);
+            const load_offset = try self.operand(load, 1);
+            const known_tag = try self.operand(load, 2);
+            if (source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
+                !try self.intOperandEquals(load_offset, 0) or known_tag.kind != .constant or
+                ((try self.constant(known_tag.value)).tagValue() orelse return null) >= lua_tag_string)
+                return null;
+            self.requireSingleCompilableBlockRange(start, store_id + 1) catch return null;
+            if ((try self.stringFallbackRejoin(fallback.value, .set, pc_value, source.value, table, key_operand.value)) == null)
+                return null;
+            return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = source.value, .key = key };
+        }
+
+        if (suffix.command != ir_cmd_barrier_table_forward or suffix.operand_count != 3)
+            return null;
+        const barrier_pointer = try self.operand(suffix, 0);
+        const value = try self.operand(suffix, 1);
+        const barrier_tag = try self.operand(suffix, 2);
+        if (barrier_pointer.kind != .instruction or barrier_pointer.value != pointer.value or
             value.kind != .vm_reg or value.value >= self.proto.max_stack_size or
             barrier_tag.kind != .constant or (try self.constant(barrier_tag.value)).tagValue() != lua_tag_string or
             stored.value + 1 >= start)
@@ -550,11 +599,11 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         tag.kind != .constant or !try self.intOperandEquals(offset, 0))
         return null;
     const tag_value = (try self.constant(tag.value)).tagValue() orelse return null;
-    if (tag_value == lua_tag_table) {
-        if (readonly_elided or suffix.command != ir_cmd_barrier_table_forward or suffix.operand_count != 3 or
+    if (tag_value >= lua_tag_string and tag_value <= 12) {
+        if (suffix.command != ir_cmd_barrier_table_forward or suffix.operand_count != 3 or
             value.kind != .instruction)
             return null;
-        const value_register = (try self.rootedTablePointerRegister(value)) orelse return null;
+        const value_register = (try rootedCollectablePointerRegister(self, value, tag_value, store_id)) orelse return null;
         if ((try self.operand(suffix, 0)).kind != .instruction or
             (try self.operand(suffix, 0)).value != pointer.value or
             (try self.operand(suffix, 1)).kind != .vm_reg or
@@ -568,7 +617,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_register, .key = key };
     }
     if (tag_value == lua_tag_number and value.kind == .instruction) {
-        if (readonly_elided or suffix.command != .nop or suffix.operand_count != 0)
+        if (suffix.command != .nop or suffix.operand_count != 0)
             return null;
         const owner = (try self.compilableOwnerBlock(start)) orelse return null;
         const source = (try self.publishedNumberPayloadRegister(owner, value, store_id)) orelse return null;
@@ -587,8 +636,6 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
     if (suffix.command != .nop or suffix.operand_count != 0 or value.kind != .constant)
         return null;
     if (tag_value != lua_tag_number and tag_value != lua_tag_boolean)
-        return null;
-    if (readonly_elided and tag_value != lua_tag_boolean)
         return null;
 
     const value_command: snapshot_v1.IrCommand = if (tag_value == lua_tag_number) .store_double else .store_int;

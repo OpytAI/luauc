@@ -1,7 +1,4 @@
-/bazel-bin
-/bazel-out
-/bazel-testlogs
-/bazel-luauc
+/bazel-*
 /node_modules
 /.zig-cache
 user.bazelrc

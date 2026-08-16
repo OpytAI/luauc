@@ -129,6 +129,7 @@ pub const NewClosurePattern = struct {
     capture_count: u32,
     capture_ir_start: u32,
     marker_start: u32,
+    check_gc: bool,
 };
 
 pub const SetUpvaluePattern = struct {
@@ -187,6 +188,7 @@ pub const TableAllocationPattern = struct {
 pub const DupTablePattern = struct {
     start: u32,
     finish: u32,
+    assist: bool,
     destination: u32,
     constant_id: u32,
 };
@@ -428,6 +430,7 @@ pub const TypeNamePattern = struct {
 pub const StringLengthPattern = struct {
     source: u32,
     destination: u32,
+    materialize_tag: bool,
 };
 
 pub const BuiltinFallback = struct {

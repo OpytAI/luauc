@@ -7,7 +7,8 @@ const allocator = std.heap.wasm_allocator;
 fn publishObject(result: *api.Result, object_result: lower.Error![]u8) u32 {
     result.* = .{};
     const object = object_result catch |err| {
-        const diagnostic = @errorName(err);
+        const recorded = lower.diagnostics.message();
+        const diagnostic = if (recorded.len != 0) recorded else @errorName(err);
         result.status = switch (err) {
             error.OutOfMemory, error.ResourceLimit => api.status_resource_limit,
             else => api.status_compile_failure,

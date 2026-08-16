@@ -8,7 +8,10 @@ backend_emit_library(
 )
 backend_emit_library(name = "control")
 backend_emit_library(name = "core")
-backend_emit_library(name = "dispatch")
+backend_emit_library(
+    name = "dispatch",
+    deps = ["//compiler/backend:diagnostics"],
+)
 backend_emit_library(name = "iteration")
 backend_emit_library(name = "memory")
 backend_emit_library(name = "namecall")

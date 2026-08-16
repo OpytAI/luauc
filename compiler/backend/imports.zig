@@ -41,6 +41,13 @@ const new_userdata_symbol = abi.new_userdata_symbol;
 const check_userdata_tag_symbol = abi.check_userdata_tag_symbol;
 const barrier_object_symbol = abi.barrier_object_symbol;
 const barrier_table_back_symbol = abi.barrier_table_back_symbol;
+const hash_node_addr_symbol = abi.hash_node_addr_symbol;
+const slot_node_addr_symbol = abi.slot_node_addr_symbol;
+const node_slot_match_symbol = abi.node_slot_match_symbol;
+const try_get_tm_symbol = abi.try_get_tm_symbol;
+const check_node_no_next_symbol = abi.check_node_no_next_symbol;
+const check_node_value_symbol = abi.check_node_value_symbol;
+const check_readonly_symbol = abi.check_readonly_symbol;
 const table_set_string_symbol = abi.table_set_string_symbol;
 const table_get_string_symbol = abi.table_get_string_symbol;
 const table_set_symbol = abi.table_set_symbol;
@@ -89,6 +96,14 @@ const ir_cmd_check_buffer_len = abi.ir_cmd_check_buffer_len;
 const ir_cmd_check_userdata_tag = abi.ir_cmd_check_userdata_tag;
 const ir_cmd_barrier_object = abi.ir_cmd_barrier_object;
 const ir_cmd_barrier_table_back = abi.ir_cmd_barrier_table_back;
+const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
+const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
+const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
+const ir_cmd_try_call_fastgettm = abi.ir_cmd_try_call_fastgettm;
+const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
+const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
+const ir_cmd_check_node_value = abi.ir_cmd_check_node_value;
+const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
 const ir_cmd_buffer_readu8 = abi.ir_cmd_buffer_readu8;
 const ir_cmd_buffer_writei8 = abi.ir_cmd_buffer_writei8;
@@ -123,6 +138,13 @@ pub const ImportNeeds = struct {
     check_userdata_tag: bool = false,
     barrier_object: bool = false,
     barrier_table_back: bool = false,
+    hash_node_addr: bool = false,
+    slot_node_addr: bool = false,
+    node_slot_match: bool = false,
+    try_get_tm: bool = false,
+    check_node_no_next: bool = false,
+    check_node_value: bool = false,
+    check_readonly: bool = false,
     load_constant: bool = false,
     dup_table: bool = false,
     table_insert_append: bool = false,
@@ -180,6 +202,13 @@ pub const RuntimeImports = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    hash_node_addr: ?wasm.FunctionRef,
+    slot_node_addr: ?wasm.FunctionRef,
+    node_slot_match: ?wasm.FunctionRef,
+    try_get_tm: ?wasm.FunctionRef,
+    check_node_no_next: ?wasm.FunctionRef,
+    check_node_value: ?wasm.FunctionRef,
+    check_readonly: ?wasm.FunctionRef,
     load_constant: ?wasm.FunctionRef,
     dup_table: ?wasm.FunctionRef,
     table_insert_append: ?wasm.FunctionRef,
@@ -295,13 +324,23 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
                     needs.new_table = true;
                 } else {
                     needs.new_table_deferred = true;
-                    needs.check_gc = true;
                 }
             },
+            .check_gc => needs.check_gc = true,
             ir_cmd_new_userdata => needs.new_userdata = true,
             ir_cmd_check_userdata_tag => needs.check_userdata_tag = true,
             ir_cmd_barrier_object => needs.barrier_object = true,
             ir_cmd_barrier_table_back => needs.barrier_table_back = true,
+            ir_cmd_get_hash_node_addr => needs.hash_node_addr = true,
+            ir_cmd_get_slot_node_addr => needs.slot_node_addr = true,
+            ir_cmd_jump_slot_match, ir_cmd_check_slot_match => needs.node_slot_match = true,
+            ir_cmd_try_call_fastgettm => needs.try_get_tm = true,
+            ir_cmd_check_node_no_next => needs.check_node_no_next = true,
+            ir_cmd_check_node_value => needs.check_node_value = true,
+            ir_cmd_check_readonly => {
+                needs.check_readonly = true;
+                needs.set_location = true;
+            },
             .load_tvalue => {
                 if (instruction_value.operand_count >= 1) {
                     const source = try snapshot.irOperand(instruction_value, 0);
@@ -575,6 +614,34 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &barrier_table_back_params, .results = &no_results });
         break :blk try object.importFunction("env", barrier_table_back_symbol, helper_type);
     } else null;
+    const hash_node_addr = if (needs.hash_node_addr) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &status_result });
+        break :blk try object.importFunction("env", hash_node_addr_symbol, helper_type);
+    } else null;
+    const slot_node_addr = if (needs.slot_node_addr) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &status_result });
+        break :blk try object.importFunction("env", slot_node_addr_symbol, helper_type);
+    } else null;
+    const node_slot_match = if (needs.node_slot_match) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &status_result });
+        break :blk try object.importFunction("env", node_slot_match_symbol, helper_type);
+    } else null;
+    const try_get_tm = if (needs.try_get_tm) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &status_result });
+        break :blk try object.importFunction("env", try_get_tm_symbol, helper_type);
+    } else null;
+    const check_node_no_next = if (needs.check_node_no_next) blk: {
+        const helper_type = try object.addType(.{ .params = &generated_params, .results = &status_result });
+        break :blk try object.importFunction("env", check_node_no_next_symbol, helper_type);
+    } else null;
+    const check_node_value = if (needs.check_node_value) blk: {
+        const helper_type = try object.addType(.{ .params = &generated_params, .results = &status_result });
+        break :blk try object.importFunction("env", check_node_value_symbol, helper_type);
+    } else null;
+    const check_readonly = if (needs.check_readonly) blk: {
+        const helper_type = try object.addType(.{ .params = &forg_loop_params, .results = &status_result });
+        break :blk try object.importFunction("env", check_readonly_symbol, helper_type);
+    } else null;
     const load_constant = if (needs.load_constant) blk: {
         const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &no_results });
         break :blk try object.importFunction("env", load_constant_symbol, helper_type);
@@ -732,6 +799,13 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .check_userdata_tag = check_userdata_tag,
         .barrier_object = barrier_object,
         .barrier_table_back = barrier_table_back,
+        .hash_node_addr = hash_node_addr,
+        .slot_node_addr = slot_node_addr,
+        .node_slot_match = node_slot_match,
+        .try_get_tm = try_get_tm,
+        .check_node_no_next = check_node_no_next,
+        .check_node_value = check_node_value,
+        .check_readonly = check_readonly,
         .load_constant = load_constant,
         .dup_table = dup_table,
         .table_insert_append = table_insert_append,

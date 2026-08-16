@@ -8,6 +8,8 @@ const CompileResult = extern struct {
     size: u32,
     status: u32,
     reserved: u32,
+    diagnostic: u32,
+    diagnostic_size: u32,
 };
 
 extern fn luauc_backend_component_v1_compile(snapshot_pointer: u32, snapshot_size: u32, function_id: u32, result_pointer: u32) u32;
@@ -29,7 +31,14 @@ export fn luauc_backend_v1_dealloc(pointer: u32, size: u32) void {
 }
 
 fn publishComponent(result: *CompileResult, component_result: component.Result, status: u32) u32 {
-    result.* = .{ .data = 0, .size = 0, .status = status, .reserved = 0 };
+    result.* = .{
+        .data = 0,
+        .size = 0,
+        .status = status,
+        .reserved = 0,
+        .diagnostic = component_result.diagnostic,
+        .diagnostic_size = component_result.diagnostic_size,
+    };
     if (status != component.status_ok)
         return status;
     result.data = component_result.data;
@@ -76,5 +85,12 @@ export fn luauc_backend_v1_free(result_pointer: u32) void {
         const bytes: [*]u8 = @ptrFromInt(result.data);
         allocator.free(bytes[0..result.size]);
     }
-    result.* = .{ .data = 0, .size = 0, .status = component.status_ok, .reserved = 0 };
+    result.* = .{
+        .data = 0,
+        .size = 0,
+        .status = component.status_ok,
+        .reserved = 0,
+        .diagnostic = 0,
+        .diagnostic_size = 0,
+    };
 }

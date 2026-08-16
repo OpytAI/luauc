@@ -32,6 +32,25 @@ zig_library(
 )
 
 zig_library(
+    name = "plan",
+    main = "plan.zig",
+    import_name = "luauc_backend_plan",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":model",
+        ":runtime_abi",
+        "//compiler/ir:frontend_snapshot_v1",
+    ],
+)
+
+zig_library(
+    name = "diagnostics",
+    main = "diagnostics.zig",
+    import_name = "luauc_backend_diagnostics",
+    visibility = ["//compiler/backend:__subpackages__"],
+)
+
+zig_library(
     name = "context",
     main = "context.zig",
     import_name = "luauc_backend_context",
@@ -49,6 +68,8 @@ zig_library(
         "//compiler/backend/emit:scalar",
         "//compiler/backend/emit:tables",
         ":model",
+        ":diagnostics",
+        ":plan",
         ":static_package_v1",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/wasm:object",
@@ -61,7 +82,9 @@ zig_library(
     import_name = "luauc_backend_continuations",
     deps = [
         ":context",
+        ":diagnostics",
         ":model",
+        ":plan",
         ":runtime_abi",
         "//compiler/ir:frontend_snapshot_v1",
     ],
@@ -87,8 +110,10 @@ zig_library(
     deps = [
         ":context",
         ":continuations",
+        ":diagnostics",
         ":imports",
         ":model",
+        ":plan",
         ":runtime_abi",
         ":static_package_v1",
         "//compiler/ir:frontend_snapshot_v1",
@@ -103,6 +128,7 @@ zig_library(
     visibility = ["//visibility:public"],
     deps = [
         ":driver",
+        ":diagnostics",
         ":model",
         ":runtime_abi",
     ],
@@ -186,6 +212,7 @@ js_test(
         "table_clone_append.luau",
         "table_namecall.luau",
         "yield_call.luau",
+        "//conformance/sources:embed_lib",
         "//frontend:frontend_wasm",
         "@@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld",
     ],
@@ -198,6 +225,7 @@ js_test(
         "LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE": "$(rlocationpath dynamic_array_table.luau)",
         "LUAUC_DYNAMIC_HASH_TABLE_SOURCE": "$(rlocationpath dynamic_hash_table.luau)",
         "LUAUC_DYNAMIC_STRING_SOURCE": "$(rlocationpath dynamic_string.luau)",
+        "LUAUC_EMBED_LIB_SOURCE": "$(rlocationpath //conformance/sources:embed_lib)",
         "LUAUC_FAST_BUILTINS_SOURCE": "$(rlocationpath fast_builtins.luau)",
         "LUAUC_FORWARDED_CAPTURE_SOURCE": "$(rlocationpath forwarded_capture.luau)",
         "LUAUC_FRONTEND_WASM": "$(rlocationpath //frontend:frontend_wasm)",

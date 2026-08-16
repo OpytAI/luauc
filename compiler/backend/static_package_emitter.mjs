@@ -117,20 +117,25 @@ function compileBackend(frame) {
   if (typeof api.luauc_backend_v1_compile_static_package !== "function")
     throw new Error("backend does not export static-package compilation");
   const framePointer = api.luauc_backend_v1_alloc(frame.length);
-  const resultPointer = api.luauc_backend_v1_alloc(16);
+  const resultPointer = api.luauc_backend_v1_alloc(24);
   if (!framePointer || !resultPointer) throw new Error("backend allocation failed");
   new Uint8Array(api.memory.buffer, framePointer, frame.length).set(frame);
-  new Uint8Array(api.memory.buffer, resultPointer, 16).fill(0);
+  new Uint8Array(api.memory.buffer, resultPointer, 24).fill(0);
   const status = api.luauc_backend_v1_compile_static_package(framePointer, frame.length, resultPointer);
-  const result = new DataView(api.memory.buffer, resultPointer, 16);
+  const result = new DataView(api.memory.buffer, resultPointer, 24);
   const dataPointer = result.getUint32(0, true);
   const dataSize = result.getUint32(4, true);
   const resultStatus = result.getUint32(8, true);
+  const diagnosticPointer = result.getUint32(16, true);
+  const diagnosticSize = result.getUint32(20, true);
+  const diagnostic = diagnosticPointer && diagnosticSize
+    ? new TextDecoder().decode(new Uint8Array(api.memory.buffer, diagnosticPointer, diagnosticSize))
+    : "";
   if (status !== 0 || resultStatus !== 0 || !dataPointer || !dataSize)
-    throw new Error(`backend failed with ${status}/${resultStatus}`);
+    throw new Error(`backend failed with ${status}/${resultStatus}: ${diagnostic}`);
   const object = Buffer.from(new Uint8Array(api.memory.buffer, dataPointer, dataSize));
   api.luauc_backend_v1_free(resultPointer);
-  api.luauc_backend_v1_dealloc(resultPointer, 16);
+  api.luauc_backend_v1_dealloc(resultPointer, 24);
   api.luauc_backend_v1_dealloc(framePointer, frame.length);
   return object;
 }
