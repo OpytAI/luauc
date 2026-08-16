@@ -11,6 +11,7 @@ const allocations = @import("luauc_backend_emit_allocations");
 const namecall = @import("luauc_backend_emit_namecall");
 const builtin_patterns = @import("luauc_backend_emit_builtin_patterns");
 const tables = @import("luauc_backend_emit_tables");
+const table_values = @import("luauc_backend_emit_table_values");
 const operators = @import("luauc_backend_emit_operators");
 const iteration = @import("luauc_backend_emit_iteration");
 const control = @import("luauc_backend_emit_control");
@@ -66,6 +67,7 @@ pub const Context = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    barrier_table_forward: ?wasm.FunctionRef,
     hash_node_addr: ?wasm.FunctionRef,
     slot_node_addr: ?wasm.FunctionRef,
     node_slot_match: ?wasm.FunctionRef,
@@ -78,6 +80,8 @@ pub const Context = struct {
     table_get_string: ?wasm.FunctionRef,
     table_set: ?wasm.FunctionRef,
     table_get: ?wasm.FunctionRef,
+    table_set_number: ?wasm.FunctionRef,
+    table_get_number: ?wasm.FunctionRef,
     table_array_set: ?wasm.FunctionRef,
     table_array_get: ?wasm.FunctionRef,
     get_global: ?wasm.FunctionRef,
@@ -130,6 +134,7 @@ pub const Context = struct {
     pub const emitStoreTValueOperand = core.emitStoreTValueOperand;
     pub const emitCopyTValueRegisterToAddress = core.emitCopyTValueRegisterToAddress;
     pub const emitStoreSplitTValue = core.emitStoreSplitTValue;
+    pub const emitVmConstantAddress = core.emitVmConstantAddress;
     pub const emitI32Value = core.emitI32Value;
     pub const emitPointerValue = core.emitPointerValue;
     pub const vmConstantTag = core.vmConstantTag;
@@ -278,6 +283,14 @@ pub const Context = struct {
     pub const bufferOperationOwnedByRange = memory.bufferOperationOwnedByRange;
     pub const integerCreatePatternAt = memory.integerCreatePatternAt;
     pub const emitIntegerCreate = memory.emitIntegerCreate;
+
+    // general table/value IR
+    pub const emitTryNumberToIndex = table_values.emitTryNumberToIndex;
+    pub const emitGetArrayAddress = table_values.emitGetArrayAddress;
+    pub const emitTableLayoutGuard = table_values.emitTableLayoutGuard;
+    pub const emitForwardTableBarrier = table_values.emitForwardTableBarrier;
+    pub const emitGeneralTableOperation = table_values.emitGeneralTableOperation;
+    pub const supportsGeneralTableFallback = table_values.supportsGeneralTableFallback;
 
     // allocations
     pub const tableAllocationPatternAt = allocations.tableAllocationPatternAt;

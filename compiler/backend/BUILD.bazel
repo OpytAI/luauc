@@ -67,6 +67,7 @@ zig_library(
         "//compiler/backend/emit:operators",
         "//compiler/backend/emit:scalar",
         "//compiler/backend/emit:tables",
+        "//compiler/backend/emit:table_values",
         ":model",
         ":diagnostics",
         ":plan",

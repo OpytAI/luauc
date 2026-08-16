@@ -29,8 +29,12 @@ const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
 const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
 const ir_cmd_check_node_value = abi.ir_cmd_check_node_value;
 const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
+const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
+const ir_cmd_check_array_size = abi.ir_cmd_check_array_size;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
+const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
+const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
 const ir_cmd_buffer_readu8 = abi.ir_cmd_buffer_readu8;
@@ -142,7 +146,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .store_tag => try self.emitStoreTag(instruction_id, instruction_value),
         .store_extra => try self.emitStoreI32(instruction_value, tvalue_extra_offset),
         .store_split_tvalue => if (try self.newClosurePatternContaining(instruction_id) == null)
-            try self.emitStoreSplitTValue(instruction_value),
+            try self.emitStoreSplitTValue(instruction_id, instruction_value),
         .store_double => try self.emitStoreDouble(instruction_value),
         .store_int => try self.emitStoreI32(instruction_value, 0),
         .store_int64 => try self.emitStoreI64(instruction_value),
@@ -274,6 +278,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         ir_cmd_barrier_object => try self.emitBarrierObject(instruction_value),
         ir_cmd_barrier_table_back => try self.emitBarrierTableBack(instruction_value),
+        ir_cmd_barrier_table_forward => try self.emitForwardTableBarrier(instruction_value),
         ir_cmd_get_hash_node_addr => try self.emitGetHashNodeAddr(instruction_id, instruction_value),
         ir_cmd_get_slot_node_addr => try self.emitGetSlotNodeAddr(instruction_id, instruction_value),
         ir_cmd_try_call_fastgettm => try self.emitTryCallFastGetTm(instruction_id, instruction_value),
@@ -281,10 +286,12 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         ir_cmd_check_node_no_next => try self.emitCheckNodeNoNext(instruction_id, instruction_value),
         ir_cmd_check_node_value => try self.emitCheckNodeValue(instruction_id, instruction_value),
         ir_cmd_check_readonly => try self.emitCheckReadonly(instruction_value),
+        ir_cmd_check_no_metatable, ir_cmd_check_array_size => try self.emitTableLayoutGuard(instruction_value),
+        ir_cmd_try_num_to_index => try self.emitTryNumberToIndex(instruction_id, instruction_value),
         ir_cmd_get_table, ir_cmd_set_table => {
             if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
                 return Error.UnsupportedControlFlow;
-            try self.emitDirectGenericTableOperation(instruction_value);
+            try self.emitGeneralTableOperation(instruction_value);
         },
         .set_savedpc => {
             try self.emitSavedPcLocation(instruction_value);
@@ -386,8 +393,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .get_cached_import => try self.emitSingleGlobalImport(instruction_value),
         ir_cmd_setlist => try self.emitSetList(instruction_value),
         ir_cmd_get_arr_addr => {
-            if (!try self.trustedArrayAddress(instruction_id))
-                return Error.UnsupportedControlFlow;
+            try self.emitGetArrayAddress(instruction_id, instruction_value);
         },
         ir_cmd_fallback_forgprep => {
             try self.emitGenericIterationPrep(instruction_id, instruction_value);

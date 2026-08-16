@@ -38,9 +38,11 @@
         "//compiler/backend:scalar_breadth_object_build_test",
         "conformance:luauc_scalar_arithmetic_and_branch_breadth_matches_interpreter",
         "//compiler/backend:structural_core_object_build_test",
-        "conformance:luauc_structural_truthiness_and_loop_paths_match_interpreter"
+        "conformance:luauc_structural_truthiness_and_loop_paths_match_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_dynamic_import_vmconst_tag"
+      "status": "implemented"
     },
     {
       "command": "LOAD_POINTER",
@@ -58,9 +60,12 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:72; CodeGen/src/IrLoweringA64.cpp:323",
       "tests": [
         "//compiler/backend:table_clone_append_package_object_build_test",
-        "conformance:luauc_table_template_clone_and_append_matches_interpreter"
+        "conformance:luauc_table_template_clone_and_append_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_gc_backed_vmconst_payload_or_exact_plain_table_template_clone_operand"
+      "status": "implemented"
     },
     {
       "command": "LOAD_DOUBLE",
@@ -149,9 +154,11 @@
         "//compiler/backend:forwarded_capture_package_object_build_test",
         "conformance:luauc_forwarded_shared_capture_survives_close_and_gc",
         "//compiler/backend:table_clone_append_package_object_build_test",
-        "conformance:luauc_table_template_clone_and_append_matches_interpreter"
+        "conformance:luauc_table_template_clone_and_append_matches_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_gc_backed_vmconst_payload_or_materialized_constant_register_load"
+      "status": "implemented"
     },
     {
       "command": "LOAD_ENV",
@@ -197,9 +204,12 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:143; CodeGen/src/IrLoweringA64.cpp:372",
       "tests": [
         "//compiler/backend:dynamic_array_table_package_object_build_test",
-        "conformance:luauc_dynamic_array_table_survives_gc_and_matches_interpreter"
+        "conformance:luauc_dynamic_array_table_survives_gc_and_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_validated_literal_array_fast_paths"
+      "status": "implemented"
     },
     {
       "command": "GET_SLOT_NODE_ADDR",
@@ -423,9 +433,11 @@
         "//runtime:captured_call_runtime_reference_test",
         "conformance:luauc_captured_proto_graph_calls_rejoin",
         "//compiler/backend:forwarded_capture_package_object_build_test",
-        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc"
+        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_register_boolean_number_integer_gc_pointer_and_newclosure_copy"
+      "status": "implemented"
     },
     {
       "command": "ADD_INT",
@@ -1747,9 +1759,11 @@
         "//compiler/backend:mixed_table_package_object_build_test",
         "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
         "//compiler/backend:dynamic_metamethods_package_object_build_test",
-        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter"
+        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_loaded_or_published_reused_value_generic_table_number_to_array_index_clusters"
+      "status": "implemented"
     },
     {
       "command": "TRY_CALL_FASTGETTM",
@@ -2139,7 +2153,8 @@
       "class": "runtime_helper",
       "wasm_features": [],
       "runtime_symbols": [
-        "luauc_runtime_v1_table_get"
+        "luauc_runtime_v1_table_get",
+        "luauc_runtime_v1_table_get_number"
       ],
       "may_allocate": true,
       "may_raise": true,
@@ -2154,9 +2169,11 @@
         "//compiler/backend:mixed_table_package_object_build_test",
         "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
         "//compiler/backend:dynamic_metamethods_package_object_build_test",
-        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter"
+        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_dynamic_table_graph_luav_supported_tvalue_keys_and_index_chains"
+      "status": "implemented"
     },
     {
       "command": "SET_TABLE",
@@ -2164,7 +2181,8 @@
       "class": "runtime_helper",
       "wasm_features": [],
       "runtime_symbols": [
-        "luauc_runtime_v1_table_set"
+        "luauc_runtime_v1_table_set",
+        "luauc_runtime_v1_table_set_number"
       ],
       "may_allocate": true,
       "may_raise": true,
@@ -2179,9 +2197,11 @@
         "//compiler/backend:mixed_table_package_object_build_test",
         "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
         "//compiler/backend:dynamic_metamethods_package_object_build_test",
-        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter"
+        "conformance:luauc_dynamic_metamethods_survive_errors_gc_and_match_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_dynamic_table_graph_luav_supported_tvalue_keys_and_newindex_chains"
+      "status": "implemented"
     },
     {
       "command": "GET_CACHED_IMPORT",
@@ -2354,9 +2374,12 @@
         "//compiler/backend:table_clone_append_package_object_build_test",
         "conformance:luauc_table_template_clone_and_append_matches_interpreter",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_validated_literal_array_literal_string_runtime_key_plain_table_template_field_or_luav_environment_global_set"
+      "status": "implemented"
     },
     {
       "command": "CHECK_NO_METATABLE",
@@ -2382,9 +2405,12 @@
         "//compiler/backend:generic_table_package_object_build_test",
         "conformance:luauc_generic_table_survives_gc_and_matches_interpreter",
         "//compiler/backend:mixed_table_package_object_build_test",
-        "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter"
+        "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_validated_array_or_runtime_number_or_string_key_plain_table_operations"
+      "status": "implemented"
     },
     {
       "command": "CHECK_SAFE_ENV",
@@ -2432,9 +2458,12 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2317; CodeGen/src/IrLoweringA64.cpp:2389",
       "tests": [
         "//compiler/backend:dynamic_array_table_package_object_build_test",
-        "conformance:luauc_dynamic_array_table_survives_gc_and_matches_interpreter"
+        "conformance:luauc_dynamic_array_table_survives_gc_and_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_validated_literal_array_get_set"
+      "status": "implemented"
     },
     {
       "command": "CHECK_SLOT_MATCH",
@@ -2683,7 +2712,8 @@
         "luauc_runtime_v1_set_global",
         "luauc_runtime_v1_table_set_string",
         "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_insert_append"
+        "luauc_runtime_v1_table_insert_append",
+        "luauc_runtime_v1_barrier_table_forward"
       ],
       "may_allocate": false,
       "may_raise": false,
@@ -2705,9 +2735,12 @@
         "//compiler/backend:table_clone_append_package_object_build_test",
         "conformance:luauc_table_template_clone_and_append_matches_interpreter",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_validated_literal_array_literal_string_runtime_key_luav_environment_global_or_plain_append_set"
+      "status": "implemented"
     },
     {
       "command": "SET_SAVEDPC",

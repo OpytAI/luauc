@@ -33,6 +33,17 @@ pub noinline fn emitInstructionResultSet(self: anytype, instruction_id: u32) Err
 pub noinline fn emitLoadTag(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 1);
     const source = try self.operand(instruction_value, 0);
+    if (source.kind == .instruction) {
+        const producer = try self.instruction(source.value);
+        if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
+            if (!try self.plan.validateNodeUse(self.snapshot, self.function, source.value, instruction_id))
+                return Error.UnsupportedControlFlow;
+        } else if (producer.command == abi.ir_cmd_get_arr_addr and
+            !try self.plan.validateArrayAddressUse(self.snapshot, self.function, source.value, instruction_id))
+        {
+            return Error.UnsupportedControlFlow;
+        }
+    }
     if (source.kind == .vm_const) {
         try self.body.i32Const(self.allocator, try self.vmConstantTag(source));
     } else {
@@ -49,8 +60,23 @@ pub noinline fn emitLoadI32(self: anytype, instruction_id: u32, instruction_valu
     try self.requireOperandCount(instruction_value, 1);
     const source = try self.operand(instruction_value, 0);
     if (instruction_value.command == .load_pointer) {
+        if (source.kind == .instruction) {
+            const producer = try self.instruction(source.value);
+            if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
+                if (!try self.plan.validateNodeUse(self.snapshot, self.function, source.value, instruction_id))
+                    return Error.UnsupportedControlFlow;
+            } else if (producer.command == abi.ir_cmd_get_arr_addr and
+                !try self.plan.validateArrayAddressUse(self.snapshot, self.function, source.value, instruction_id))
+            {
+                return Error.UnsupportedControlFlow;
+            }
+        }
         if (source.kind == .vm_const) {
-            try self.body.i32Const(self.allocator, @bitCast(@as(u32, @truncate((try self.vmConstantParts(source)).low))));
+            const value = try self.snapshot.vmConstant(self.proto, source.value);
+            if (value.kind != .string and value.kind != .table)
+                return Error.UnsupportedOperand;
+            try self.emitTValueAddress(source);
+            try self.body.i32Load(self.allocator, 2, 0);
         } else {
             try self.emitTValueAddress(source);
             const offset = if (source.kind == .vm_reg) try self.vmRegisterOffset(source, 0) else 0;
@@ -209,6 +235,10 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
             if (address_offset != 0 or
                 !try self.plan.validateNodeUse(self.snapshot, self.function, source.value, instruction_id))
                 return Error.UnsupportedControlFlow;
+        } else if (producer.command == abi.ir_cmd_get_arr_addr and
+            !try self.plan.validateArrayAddressUse(self.snapshot, self.function, source.value, instruction_id))
+        {
+            return Error.UnsupportedControlFlow;
         }
     }
     if (instruction_value.operand_count == 3) {
@@ -219,10 +249,11 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
     if (source.kind != .instruction and address_offset != 0)
         return Error.InvalidOperandType;
     if (source.kind == .vm_const) {
-        const parts = try self.vmConstantParts(source);
-        try self.body.i64Const(self.allocator, @bitCast(parts.low));
+        try self.emitTValueAddress(source);
+        try self.body.i64Load(self.allocator, 3, 0);
         try self.body.localSet(self.allocator, self.slots[instruction_id].first);
-        try self.body.i64Const(self.allocator, @bitCast(parts.high));
+        try self.emitTValueAddress(source);
+        try self.body.i64Load(self.allocator, 3, 8);
         try self.body.localSet(self.allocator, self.slots[instruction_id].second);
         return;
     }
@@ -355,6 +386,18 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
         try self.tvalueByteOffset(instruction_value, 2)
     else
         0;
+    if (destination.kind == .instruction) {
+        const producer = try self.instruction(destination.value);
+        if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
+            if (address_offset != 0 or
+                !try self.plan.validateNodeUse(self.snapshot, self.function, destination.value, instruction_id))
+                return Error.UnsupportedControlFlow;
+        } else if (producer.command == abi.ir_cmd_get_arr_addr and
+            !try self.plan.validateArrayAddressUse(self.snapshot, self.function, destination.value, instruction_id))
+        {
+            return Error.UnsupportedControlFlow;
+        }
+    }
     if (destination.kind != .instruction and address_offset != 0)
         return Error.InvalidOperandType;
     try self.emitTValueAddress(destination);

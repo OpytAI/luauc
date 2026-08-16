@@ -1,4 +1,10 @@
 return function(value, text)
+    local function dynamicRoundtrip(object, key)
+        local current = object[key]
+        object[key] = current
+        return object[key]
+    end
+
     local records = {
         { amount = value },
         { amount = value + 1 },
@@ -7,6 +13,15 @@ return function(value, text)
     local sum = 0
     for index, record in ipairs(records) do
         sum += index * record.amount
+    end
+    local secondRecord = records[2]
+    records[2] = records[3]
+    if records[2].amount ~= value + 2 then
+        error("numeric table replacement failed")
+    end
+    records[2] = secondRecord
+    if dynamicRoundtrip(records, 2) ~= secondRecord then
+        error("dynamic numeric table roundtrip failed")
     end
 
     local ok, message = pcall(function()

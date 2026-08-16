@@ -790,6 +790,30 @@ extern "C" void luauc_runtime_v1_table_get(lua_State *L, uint32_t destinationReg
     luaV_gettable(L, tableValue, keyValue, destination);
 }
 
+extern "C" void luauc_runtime_v1_table_set_number(lua_State *L, uint32_t tableRegister,
+                                                   double key, uint32_t sourceRegister) {
+    Proto *proto = activeAotFrameProto(L, "numeric-key table set");
+    TValue *tableValue = activeAotRegister(L, proto, tableRegister, "numeric-key table set");
+    TValue *sourceValue = activeAotRegister(L, proto, sourceRegister, "numeric-key table set");
+    if (tableValue >= L->top || sourceValue >= L->top)
+        luaG_runerror(L, "strict AOT numeric-key table set requires published live registers");
+    TValue keyValue;
+    setnvalue(&keyValue, key);
+    luaV_settable(L, tableValue, &keyValue, sourceValue);
+}
+
+extern "C" void luauc_runtime_v1_table_get_number(lua_State *L, uint32_t destinationRegister,
+                                                   uint32_t tableRegister, double key) {
+    Proto *proto = activeAotFrameProto(L, "numeric-key table get");
+    TValue *destination = activeAotRegister(L, proto, destinationRegister, "numeric-key table get");
+    TValue *tableValue = activeAotRegister(L, proto, tableRegister, "numeric-key table get");
+    if (destination >= L->top || tableValue >= L->top)
+        luaG_runerror(L, "strict AOT numeric-key table get requires published live registers");
+    TValue keyValue;
+    setnvalue(&keyValue, key);
+    luaV_gettable(L, tableValue, &keyValue, destination);
+}
+
 extern "C" uint32_t luauc_runtime_v1_table_array_set(lua_State *L, uint32_t tableRegister,
                                                    uint32_t oneBasedIndex,
                                                    uint32_t sourceRegister) {
@@ -1847,6 +1871,18 @@ extern "C" void luauc_runtime_v1_barrier_table_back(lua_State *L, void *tablePoi
     if (!table || table->tt != LUA_TTABLE)
         luaG_runerror(L, "strict AOT table backward barrier lost validated table provenance");
     luaC_barrierfast(L, table);
+}
+
+extern "C" void luauc_runtime_v1_barrier_table_forward(lua_State *L, void *tablePointer,
+                                                        uint32_t sourceRegister) {
+    Proto *proto = activeAotFrameProto(L, "table forward barrier");
+    TValue *source = activeAotRegister(L, proto, sourceRegister, "table forward barrier");
+    if (source >= L->top)
+        luaG_runerror(L, "strict AOT table forward barrier requires a published source register");
+    LuaTable *table = static_cast<LuaTable *>(tablePointer);
+    if (!table || table->tt != LUA_TTABLE)
+        luaG_runerror(L, "strict AOT table forward barrier lost validated table provenance");
+    luaC_barriert(L, table, source);
 }
 
 extern "C" void *luauc_runtime_v1_hash_node_addr(lua_State *L, void *tablePointer,

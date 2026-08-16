@@ -141,3 +141,23 @@ pub extern fn luauc_runtime_v1_namecall_plain(
     key_pointer: [*]const u8,
     key_length: usize,
 ) void;
+
+pub extern fn luauc_runtime_v1_table_set_number(
+    state: ?*State,
+    table_register: u32,
+    key: f64,
+    source_register: u32,
+) void;
+
+pub extern fn luauc_runtime_v1_table_get_number(
+    state: ?*State,
+    destination_register: u32,
+    table_register: u32,
+    key: f64,
+) void;
+
+pub extern fn luauc_runtime_v1_barrier_table_forward(
+    state: ?*State,
+    table: ?*anyopaque,
+    source_register: u32,
+) void;

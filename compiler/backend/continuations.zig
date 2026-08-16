@@ -14,6 +14,8 @@ const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
 const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const ir_cmd_try_call_fastgettm = abi.ir_cmd_try_call_fastgettm;
+const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
+const ir_cmd_get_arr_addr = abi.ir_cmd_get_arr_addr;
 const ir_cmd_forgloop_fallback = abi.ir_cmd_forgloop_fallback;
 const ir_cmd_string_len = abi.ir_cmd_string_len;
 const ir_cmd_invoke_libm = abi.ir_cmd_invoke_libm;
@@ -451,6 +453,7 @@ pub fn resultShape(command: snapshot_v1.IrCommand) ValueShape {
         ir_cmd_buffer_readi16,
         ir_cmd_buffer_readu16,
         ir_cmd_buffer_readi32,
+        ir_cmd_try_num_to_index,
         => .i32,
         .load_pointer,
         .load_env,
@@ -461,6 +464,7 @@ pub fn resultShape(command: snapshot_v1.IrCommand) ValueShape {
         ir_cmd_get_hash_node_addr,
         ir_cmd_get_slot_node_addr,
         ir_cmd_try_call_fastgettm,
+        ir_cmd_get_arr_addr,
         => .pointer,
         .load_int64,
         .add_int64,

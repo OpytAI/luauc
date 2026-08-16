@@ -41,6 +41,7 @@ const new_userdata_symbol = abi.new_userdata_symbol;
 const check_userdata_tag_symbol = abi.check_userdata_tag_symbol;
 const barrier_object_symbol = abi.barrier_object_symbol;
 const barrier_table_back_symbol = abi.barrier_table_back_symbol;
+const barrier_table_forward_symbol = abi.barrier_table_forward_symbol;
 const hash_node_addr_symbol = abi.hash_node_addr_symbol;
 const slot_node_addr_symbol = abi.slot_node_addr_symbol;
 const node_slot_match_symbol = abi.node_slot_match_symbol;
@@ -53,6 +54,8 @@ const table_set_string_symbol = abi.table_set_string_symbol;
 const table_get_string_symbol = abi.table_get_string_symbol;
 const table_set_symbol = abi.table_set_symbol;
 const table_get_symbol = abi.table_get_symbol;
+const table_set_number_symbol = abi.table_set_number_symbol;
+const table_get_number_symbol = abi.table_get_number_symbol;
 const table_array_set_symbol = abi.table_array_set_symbol;
 const table_array_get_symbol = abi.table_array_get_symbol;
 const get_global_symbol = abi.get_global_symbol;
@@ -97,6 +100,7 @@ const ir_cmd_check_buffer_len = abi.ir_cmd_check_buffer_len;
 const ir_cmd_check_userdata_tag = abi.ir_cmd_check_userdata_tag;
 const ir_cmd_barrier_object = abi.ir_cmd_barrier_object;
 const ir_cmd_barrier_table_back = abi.ir_cmd_barrier_table_back;
+const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
@@ -140,6 +144,7 @@ pub const ImportNeeds = struct {
     check_userdata_tag: bool = false,
     barrier_object: bool = false,
     barrier_table_back: bool = false,
+    barrier_table_forward: bool = false,
     hash_node_addr: bool = false,
     slot_node_addr: bool = false,
     node_slot_match: bool = false,
@@ -167,6 +172,8 @@ pub const ImportNeeds = struct {
     table_get_string: bool = false,
     table_set: bool = false,
     table_get: bool = false,
+    table_set_number: bool = false,
+    table_get_number: bool = false,
     table_array_set: bool = false,
     table_array_get: bool = false,
     get_global: bool = false,
@@ -205,6 +212,7 @@ pub const RuntimeImports = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    barrier_table_forward: ?wasm.FunctionRef,
     hash_node_addr: ?wasm.FunctionRef,
     slot_node_addr: ?wasm.FunctionRef,
     node_slot_match: ?wasm.FunctionRef,
@@ -232,6 +240,8 @@ pub const RuntimeImports = struct {
     table_get_string: ?wasm.FunctionRef,
     table_set: ?wasm.FunctionRef,
     table_get: ?wasm.FunctionRef,
+    table_set_number: ?wasm.FunctionRef,
+    table_get_number: ?wasm.FunctionRef,
     table_array_set: ?wasm.FunctionRef,
     table_array_get: ?wasm.FunctionRef,
     get_global: ?wasm.FunctionRef,
@@ -335,6 +345,7 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
             ir_cmd_check_userdata_tag => needs.check_userdata_tag = true,
             ir_cmd_barrier_object => needs.barrier_object = true,
             ir_cmd_barrier_table_back => needs.barrier_table_back = true,
+            ir_cmd_barrier_table_forward => needs.barrier_table_forward = true,
             ir_cmd_get_hash_node_addr => needs.hash_node_addr = true,
             ir_cmd_get_slot_node_addr => needs.slot_node_addr = true,
             ir_cmd_jump_slot_match, ir_cmd_check_slot_match => needs.node_slot_match = true,
@@ -393,11 +404,13 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
                 needs.array_set = true;
                 needs.table_set = true;
                 needs.table_array_set = true;
+                needs.table_set_number = true;
             },
             ir_cmd_get_table => {
                 needs.array_get = true;
                 needs.table_get = true;
                 needs.table_array_get = true;
+                needs.table_get_number = true;
             },
             ir_cmd_get_arr_addr => needs.array_get = true,
             ir_cmd_table_len => needs.table_len = true,
@@ -517,6 +530,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const check_userdata_tag_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const barrier_object_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const barrier_table_back_params = [_]wasm.ValueType{ .i32, .i32 };
+    const barrier_table_forward_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const register_pair_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const set_list_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32 };
     const array_operation_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
@@ -527,6 +541,8 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const forg_loop_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const string_table_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32 };
     const generic_table_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
+    const number_table_set_params = [_]wasm.ValueType{ .i32, .i32, .f64, .i32 };
+    const number_table_get_params = [_]wasm.ValueType{ .i32, .i32, .i32, .f64 };
     const prep_varargs_params = [_]wasm.ValueType{ .i32, .i32 };
     const get_varargs_fixed_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const get_varargs_multret_params = [_]wasm.ValueType{ .i32, .i32 };
@@ -618,6 +634,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const barrier_table_back = if (needs.barrier_table_back) blk: {
         const helper_type = try object.addType(.{ .params = &barrier_table_back_params, .results = &no_results });
         break :blk try object.importFunction("env", barrier_table_back_symbol, helper_type);
+    } else null;
+    const barrier_table_forward = if (needs.barrier_table_forward) blk: {
+        const helper_type = try object.addType(.{ .params = &barrier_table_forward_params, .results = &no_results });
+        break :blk try object.importFunction("env", barrier_table_forward_symbol, helper_type);
     } else null;
     const hash_node_addr = if (needs.hash_node_addr) blk: {
         const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &status_result });
@@ -727,6 +747,14 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &generic_table_params, .results = &no_results });
         break :blk try object.importFunction("env", table_get_symbol, helper_type);
     } else null;
+    const table_set_number = if (needs.table_set_number) blk: {
+        const helper_type = try object.addType(.{ .params = &number_table_set_params, .results = &no_results });
+        break :blk try object.importFunction("env", table_set_number_symbol, helper_type);
+    } else null;
+    const table_get_number = if (needs.table_get_number) blk: {
+        const helper_type = try object.addType(.{ .params = &number_table_get_params, .results = &no_results });
+        break :blk try object.importFunction("env", table_get_number_symbol, helper_type);
+    } else null;
     const table_array_set = if (needs.table_array_set) blk: {
         const helper_type = try object.addType(.{ .params = &generic_table_params, .results = &status_result });
         break :blk try object.importFunction("env", table_array_set_symbol, helper_type);
@@ -808,6 +836,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .check_userdata_tag = check_userdata_tag,
         .barrier_object = barrier_object,
         .barrier_table_back = barrier_table_back,
+        .barrier_table_forward = barrier_table_forward,
         .hash_node_addr = hash_node_addr,
         .slot_node_addr = slot_node_addr,
         .node_slot_match = node_slot_match,
@@ -835,6 +864,8 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .table_get_string = table_get_string,
         .table_set = table_set,
         .table_get = table_get,
+        .table_set_number = table_set_number,
+        .table_get_number = table_get_number,
         .table_array_set = table_array_set,
         .table_array_get = table_array_get,
         .get_global = get_global,

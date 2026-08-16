@@ -292,7 +292,7 @@ pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Erro
         (try self.supportsSpecializedIpairsFallback(block)) or
         (try self.xnextPreparationPattern(block) != null) or
         (try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block)) or
-        (try self.supportsNamecallFallback(block));
+        (try self.supportsNamecallFallback(block)) or (try self.supportsGeneralTableFallback(block));
 }
 pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty() or block.finish != block.start + 1)

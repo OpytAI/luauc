@@ -21,6 +21,13 @@ const TreeFrame = struct {
     entered: bool,
 };
 
+const ArrayGuard = struct {
+    table_kind: snapshot_v1.IrOperandKind,
+    table_value: u32,
+    index_kind: snapshot_v1.IrOperandKind,
+    index_value: u32,
+};
+
 /// Immutable, function-scoped analysis shared by lowering, continuation admission, ownership
 /// checks, and diagnostics. Construction is linear in the serialized IR plus CFG edges; no pass
 /// rebuilds dense block matrices or searches the entire function for a local ownership query.
@@ -33,7 +40,10 @@ pub const FunctionPlan = struct {
     successors: []u32,
     predecessor_offsets: []u32,
     predecessors: []u32,
-    node_invalidator_prefix: []u32,
+    transient_address_invalidator_prefix: []u32,
+    table_pointer_provenance: []bool,
+    guarded_array_addresses: []bool,
+    array_address_guards: []?ArrayGuard,
 
     pub const RegionDominators = struct {
         allocator: std.mem.Allocator,
@@ -78,9 +88,21 @@ pub const FunctionPlan = struct {
         errdefer allocator.free(block_reference_counts);
         @memset(block_reference_counts, 0);
 
-        const node_invalidator_prefix = try allocator.alloc(u32, instruction_count + 1);
-        errdefer allocator.free(node_invalidator_prefix);
-        @memset(node_invalidator_prefix, 0);
+        const transient_address_invalidator_prefix = try allocator.alloc(u32, instruction_count + 1);
+        errdefer allocator.free(transient_address_invalidator_prefix);
+        @memset(transient_address_invalidator_prefix, 0);
+
+        const table_pointer_provenance = try allocator.alloc(bool, instruction_count);
+        errdefer allocator.free(table_pointer_provenance);
+        @memset(table_pointer_provenance, false);
+
+        const guarded_array_addresses = try allocator.alloc(bool, instruction_count);
+        errdefer allocator.free(guarded_array_addresses);
+        @memset(guarded_array_addresses, false);
+
+        const array_address_guards = try allocator.alloc(?ArrayGuard, instruction_count);
+        errdefer allocator.free(array_address_guards);
+        @memset(array_address_guards, null);
 
         var edges: std.ArrayList(Edge) = .empty;
         defer edges.deinit(allocator);
@@ -132,8 +154,127 @@ pub const FunctionPlan = struct {
         var instruction_id: u32 = 0;
         while (instruction_id < function.instruction_count) : (instruction_id += 1) {
             const instruction = try snapshot.irInstruction(function, instruction_id);
-            node_invalidator_prefix[instruction_id + 1] = node_invalidator_prefix[instruction_id] +
-                @intFromBool(invalidatesNodePointer(instruction.command));
+            transient_address_invalidator_prefix[instruction_id + 1] =
+                transient_address_invalidator_prefix[instruction_id] +
+                @intFromBool(invalidatesTransientAddress(instruction.command));
+        }
+
+        const proto = try snapshot.proto(function.proto_id);
+        const guarded_table_registers = try allocator.alloc(bool, proto.max_stack_size);
+        defer allocator.free(guarded_table_registers);
+        const pending_table_registers = try allocator.alloc(bool, proto.max_stack_size);
+        defer allocator.free(pending_table_registers);
+        var array_guards = std.AutoHashMap(ArrayGuard, void).init(allocator);
+        defer array_guards.deinit();
+
+        block_id = 0;
+        while (block_id < function.block_count) : (block_id += 1) {
+            const block = try snapshot.irBlock(function, block_id);
+            if (block.isEmpty())
+                continue;
+            @memset(guarded_table_registers, false);
+            @memset(pending_table_registers, false);
+            array_guards.clearRetainingCapacity();
+            var last_array_guard: ?ArrayGuard = null;
+
+            instruction_id = block.start;
+            while (instruction_id <= block.finish) : (instruction_id += 1) {
+                const instruction = try snapshot.irInstruction(function, instruction_id);
+                if (invalidatesTransientAddress(instruction.command)) {
+                    array_guards.clearRetainingCapacity();
+                    last_array_guard = null;
+                    @memset(guarded_table_registers, false);
+                    @memset(pending_table_registers, false);
+                }
+
+                if (try writtenVmRegister(snapshot, instruction)) |destination| {
+                    if (destination < guarded_table_registers.len) {
+                        guarded_table_registers[destination] = false;
+                        if (instruction.command != .store_tag)
+                            pending_table_registers[destination] = false;
+                    }
+                }
+
+                switch (instruction.command) {
+                    .check_tag => if (instruction.operand_count == 3) {
+                        const checked = try snapshot.irOperand(instruction, 0);
+                        const expected = try snapshot.irOperand(instruction, 1);
+                        if (checked.kind == .instruction and checked.value < instruction_count and
+                            expected.kind == .constant and
+                            (try snapshot.irConstant(function, expected.value)).tagValue() == 7)
+                        {
+                            const load = try snapshot.irInstruction(function, checked.value);
+                            if (load.command == .load_tag and load.operand_count == 1) {
+                                const source = try snapshot.irOperand(load, 0);
+                                if (source.kind == .vm_reg and source.value < guarded_table_registers.len)
+                                    guarded_table_registers[source.value] = true;
+                            }
+                        }
+                    },
+                    .store_pointer => if (instruction.operand_count == 2) {
+                        const destination = try snapshot.irOperand(instruction, 0);
+                        const source = try snapshot.irOperand(instruction, 1);
+                        if (destination.kind == .vm_reg and destination.value < pending_table_registers.len and
+                            source.kind == .instruction and source.value < instruction_count)
+                        {
+                            const producer = try snapshot.irInstruction(function, source.value);
+                            pending_table_registers[destination.value] =
+                                producer.command == abi.ir_cmd_new_table or producer.command == abi.ir_cmd_dup_table;
+                        }
+                    },
+                    .store_tag => if (instruction.operand_count == 2) {
+                        const destination = try snapshot.irOperand(instruction, 0);
+                        const tag = try snapshot.irOperand(instruction, 1);
+                        if (destination.kind == .vm_reg and destination.value < guarded_table_registers.len and
+                            pending_table_registers[destination.value] and tag.kind == .constant and
+                            (try snapshot.irConstant(function, tag.value)).tagValue() == 7)
+                            guarded_table_registers[destination.value] = true;
+                        if (destination.kind == .vm_reg and destination.value < pending_table_registers.len)
+                            pending_table_registers[destination.value] = false;
+                    },
+                    .load_pointer => if (instruction.operand_count == 1) {
+                        const source = try snapshot.irOperand(instruction, 0);
+                        if (source.kind == .vm_reg and source.value < guarded_table_registers.len)
+                            table_pointer_provenance[instruction_id] = guarded_table_registers[source.value]
+                        else if (source.kind == .vm_const and source.value < proto.vm_constant_count)
+                            table_pointer_provenance[instruction_id] =
+                                (try snapshot.vmConstant(proto, source.value)).kind == .table;
+                    },
+                    else => switch (@intFromEnum(instruction.command)) {
+                        100, 101 => table_pointer_provenance[instruction_id] = true,
+                        136 => if (instruction.operand_count == 3) {
+                            const table = try snapshot.irOperand(instruction, 0);
+                            const index = try snapshot.irOperand(instruction, 1);
+                            if (hasTablePointerProvenance(table_pointer_provenance, table) and
+                                (index.kind == .instruction or index.kind == .constant))
+                            {
+                                const guard = arrayGuard(table, index);
+                                try array_guards.put(guard, {});
+                                last_array_guard = guard;
+                            }
+                        },
+                        9 => if (instruction.operand_count == 2) {
+                            const table = try snapshot.irOperand(instruction, 0);
+                            const index = try snapshot.irOperand(instruction, 1);
+                            if (hasTablePointerProvenance(table_pointer_provenance, table)) {
+                                const address = arrayGuard(table, index);
+                                if (array_guards.contains(address)) {
+                                    guarded_array_addresses[instruction_id] = true;
+                                    array_address_guards[instruction_id] = address;
+                                } else if (last_array_guard) |guard| {
+                                    if (sameOperandKey(guard.table_kind, guard.table_value, table) and
+                                        try constantIndexAtMost(snapshot, function, index, guard))
+                                    {
+                                        guarded_array_addresses[instruction_id] = true;
+                                        array_address_guards[instruction_id] = guard;
+                                    }
+                                }
+                            }
+                        },
+                        else => {},
+                    },
+                }
+            }
         }
 
         const successor_offsets = try buildOffsets(allocator, block_count, edges.items, true);
@@ -155,7 +296,10 @@ pub const FunctionPlan = struct {
             .successors = successors,
             .predecessor_offsets = predecessor_offsets,
             .predecessors = predecessors,
-            .node_invalidator_prefix = node_invalidator_prefix,
+            .transient_address_invalidator_prefix = transient_address_invalidator_prefix,
+            .table_pointer_provenance = table_pointer_provenance,
+            .guarded_array_addresses = guarded_array_addresses,
+            .array_address_guards = array_address_guards,
         };
     }
 
@@ -167,7 +311,10 @@ pub const FunctionPlan = struct {
         self.allocator.free(self.successors);
         self.allocator.free(self.predecessor_offsets);
         self.allocator.free(self.predecessors);
-        self.allocator.free(self.node_invalidator_prefix);
+        self.allocator.free(self.transient_address_invalidator_prefix);
+        self.allocator.free(self.table_pointer_provenance);
+        self.allocator.free(self.guarded_array_addresses);
+        self.allocator.free(self.array_address_guards);
         self.* = undefined;
     }
 
@@ -188,6 +335,16 @@ pub const FunctionPlan = struct {
         if (instruction_id >= self.instruction_use_counts.len)
             return null;
         return self.instruction_use_counts[instruction_id];
+    }
+
+    pub fn isProvenTablePointer(self: FunctionPlan, instruction_id: u32) bool {
+        return instruction_id < self.table_pointer_provenance.len and
+            self.table_pointer_provenance[instruction_id];
+    }
+
+    pub fn isGuardedArrayAddress(self: FunctionPlan, instruction_id: u32) bool {
+        return instruction_id < self.guarded_array_addresses.len and
+            self.guarded_array_addresses[instruction_id];
     }
 
     pub fn successorSlice(self: FunctionPlan, block_id: u32) ?[]const u32 {
@@ -278,7 +435,7 @@ pub const FunctionPlan = struct {
         const producer_block = self.instructionBlock(producer_id) orelse return false;
         const consumer_block = self.instructionBlock(consumer_id) orelse return false;
         if (producer_block == consumer_block) {
-            return producer_id < consumer_id and !self.hasNodeInvalidator(producer_id + 1, consumer_id);
+            return producer_id < consumer_id and !self.hasTransientAddressInvalidator(producer_id + 1, consumer_id);
         }
 
         if (!self.hasDirectEdge(producer_block, consumer_block) or
@@ -287,14 +444,62 @@ pub const FunctionPlan = struct {
 
         const source_block = try snapshot.irBlock(function, producer_block);
         const target_block = try snapshot.irBlock(function, consumer_block);
-        return !self.hasNodeInvalidator(producer_id + 1, source_block.finish + 1) and
-            !self.hasNodeInvalidator(target_block.start, consumer_id);
+        return !self.hasTransientAddressInvalidator(producer_id + 1, source_block.finish + 1) and
+            !self.hasTransientAddressInvalidator(target_block.start, consumer_id);
     }
 
-    fn hasNodeInvalidator(self: FunctionPlan, start: u32, finish_exclusive: u32) bool {
-        if (start > finish_exclusive or finish_exclusive >= self.node_invalidator_prefix.len)
+    pub fn validateArrayAddressUse(
+        self: FunctionPlan,
+        snapshot: snapshot_v1.Snapshot,
+        function: snapshot_v1.IrFunction,
+        producer_id: u32,
+        consumer_id: u32,
+    ) Error!bool {
+        if (!self.isGuardedArrayAddress(producer_id))
+            return false;
+        const producer = try snapshot.irInstruction(function, producer_id);
+        if (producer.command != abi.ir_cmd_get_arr_addr)
+            return false;
+        const producer_block = self.instructionBlock(producer_id) orelse return false;
+        const consumer_block = self.instructionBlock(consumer_id) orelse return false;
+        if (producer_block != consumer_block or producer_id >= consumer_id or
+            self.hasTransientAddressInvalidator(producer_id + 1, consumer_id))
+            return false;
+
+        const guard = self.array_address_guards[producer_id] orelse return false;
+        const address_index = try snapshot.irOperand(producer, 1);
+        const consumer = try snapshot.irInstruction(function, consumer_id);
+        const byte_offset: u32 = switch (consumer.command) {
+            .load_tvalue => if (consumer.operand_count >= 2)
+                try nonnegativeByteOffset(snapshot, function, try snapshot.irOperand(consumer, 1))
+            else
+                0,
+            .store_split_tvalue => if (consumer.operand_count == 4)
+                try nonnegativeByteOffset(snapshot, function, try snapshot.irOperand(consumer, 3))
+            else
+                0,
+            .store_tvalue => if (consumer.operand_count == 3)
+                try nonnegativeByteOffset(snapshot, function, try snapshot.irOperand(consumer, 2))
+            else
+                0,
+            .load_tag, .load_pointer => 0,
+            else => return false,
+        };
+        if (byte_offset % abi.tvalue_size != 0)
+            return false;
+        if (sameOperandKey(guard.index_kind, guard.index_value, address_index))
+            return byte_offset == 0;
+        const base = try constantIndex(snapshot, function, address_index) orelse return false;
+        const limit = try constantIndexFromGuard(snapshot, function, guard) orelse return false;
+        const effective = std.math.add(u32, base, byte_offset / abi.tvalue_size) catch return false;
+        return effective <= limit;
+    }
+
+    fn hasTransientAddressInvalidator(self: FunctionPlan, start: u32, finish_exclusive: u32) bool {
+        if (start > finish_exclusive or finish_exclusive >= self.transient_address_invalidator_prefix.len)
             return true;
-        return self.node_invalidator_prefix[finish_exclusive] != self.node_invalidator_prefix[start];
+        return self.transient_address_invalidator_prefix[finish_exclusive] !=
+            self.transient_address_invalidator_prefix[start];
     }
 
     fn hasDirectEdge(self: FunctionPlan, source: u32, target: u32) bool {
@@ -317,7 +522,7 @@ pub const FunctionPlan = struct {
     }
 };
 
-fn invalidatesNodePointer(command: snapshot_v1.IrCommand) bool {
+fn invalidatesTransientAddress(command: snapshot_v1.IrCommand) bool {
     return switch (command) {
         .cmp_any,
         .do_arith,
@@ -355,6 +560,87 @@ fn invalidatesNodePointer(command: snapshot_v1.IrCommand) bool {
             else => false,
         },
     };
+}
+
+fn arrayGuard(table: snapshot_v1.IrOperand, index: snapshot_v1.IrOperand) ArrayGuard {
+    return .{
+        .table_kind = table.kind,
+        .table_value = table.value,
+        .index_kind = index.kind,
+        .index_value = index.value,
+    };
+}
+
+fn hasTablePointerProvenance(provenance: []const bool, operand: snapshot_v1.IrOperand) bool {
+    return operand.kind == .instruction and operand.value < provenance.len and provenance[operand.value];
+}
+
+fn sameOperandKey(kind: snapshot_v1.IrOperandKind, value: u32, operand: snapshot_v1.IrOperand) bool {
+    return kind == operand.kind and value == operand.value;
+}
+
+fn constantIndexAtMost(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    index: snapshot_v1.IrOperand,
+    guard: ArrayGuard,
+) Error!bool {
+    const value = try constantIndex(snapshot, function, index) orelse return false;
+    const limit = try constantIndexFromGuard(snapshot, function, guard) orelse return false;
+    return value <= limit;
+}
+
+fn constantIndexFromGuard(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    guard: ArrayGuard,
+) Error!?u32 {
+    return constantIndex(snapshot, function, .{ .kind = guard.index_kind, .value = guard.index_value });
+}
+
+fn constantIndex(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    operand: snapshot_v1.IrOperand,
+) Error!?u32 {
+    if (operand.kind != .constant)
+        return null;
+    const value = try snapshot.irConstant(function, operand.value);
+    const integer = value.intValue() orelse return null;
+    if (integer < 0)
+        return null;
+    return std.math.cast(u32, integer);
+}
+
+fn nonnegativeByteOffset(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    operand: snapshot_v1.IrOperand,
+) Error!u32 {
+    return (try constantIndex(snapshot, function, operand)) orelse return Error.InvalidOperandType;
+}
+
+fn writtenVmRegister(
+    snapshot: snapshot_v1.Snapshot,
+    instruction: snapshot_v1.IrInstruction,
+) Error!?u32 {
+    switch (instruction.command) {
+        .store_tag,
+        .store_extra,
+        .store_pointer,
+        .store_double,
+        .store_int,
+        .store_int64,
+        .store_vector,
+        .store_tvalue,
+        .store_split_tvalue,
+        => {},
+        else => return null,
+    }
+    if (instruction.operand_count == 0)
+        return null;
+    const destination = try snapshot.irOperand(instruction, 0);
+    return if (destination.kind == .vm_reg) destination.value else null;
 }
 
 fn buildOffsets(

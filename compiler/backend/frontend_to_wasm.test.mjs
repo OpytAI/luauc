@@ -275,7 +275,7 @@ function snapshotShape(snapshot) {
           if (operandId >= operandCount)
             throw new Error(`operand ${functionId}/${instructionId}/${operandId} is out of bounds`);
           const operandOffset = operands.offset + (operandStart + operandId) * operands.recordSize;
-          return { kind: snapshot[operandOffset], value: snapshot.readUInt32LE(operandOffset + 4) };
+          return { kind: snapshot[operandOffset], value: snapshot.readUInt32LE(operandOffset + 4), offset: operandOffset };
         },
         constant(operandId) {
           const operand = this.operand(operandId);
@@ -530,10 +530,19 @@ function executeEmbedNamecallFamilyPackageShape() {
   const snapshot = frontendSnapshot(source, "@lib.luau");
   const shape = snapshotShape(snapshot);
   const commandCounts = new Map();
+  const operandKinds = new Map();
+  let arrayAddressOperand = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
-      const command = shape.instruction(functionId, instructionId).command;
+      const instruction = shape.instruction(functionId, instructionId);
+      const command = instruction.command;
       commandCounts.set(command, (commandCounts.get(command) ?? 0) + 1);
+      if (!operandKinds.has(command)) operandKinds.set(command, []);
+      operandKinds.get(command).push(
+        Array.from({ length: instruction.operandCount }, (_, operandId) => instruction.operand(operandId).kind),
+      );
+      if (command === 9 && arrayAddressOperand === null)
+        arrayAddressOperand = instruction.operand(0);
     }
     try {
       backendObject(snapshot, functionId);
@@ -622,9 +631,31 @@ function executeEmbedNamecallFamilyPackageShape() {
       throw new Error(`${name}: function ${functionId} failed: ${error.message}${blockContext}`);
     }
   }
-  for (const command of [10, 11, 97, 104, 137, 138, 139, 164])
+  for (const command of [1, 2, 7, 9, 10, 11, 21, 97, 103, 104, 125, 126, 133, 134, 136, 137, 138, 139, 149, 164])
     if (!commandCounts.get(command))
       throw new Error(`${name}: natural source did not emit command ${command}`);
+  const requireOperandKind = (command, operand, kind) => {
+    if (!operandKinds.get(command)?.some((kinds) => kinds[operand] === kind))
+      throw new Error(`${name}: command ${command} did not emit operand ${operand} kind ${kind}`);
+  };
+  requireOperandKind(1, 0, 6); // LOAD_TAG Rn
+  requireOperandKind(1, 0, 4); // LOAD_TAG TValue address
+  requireOperandKind(2, 0, 6); // LOAD_POINTER Rn
+  requireOperandKind(2, 0, 7); // LOAD_POINTER Kn
+  requireOperandKind(7, 0, 7); // LOAD_TVALUE Kn
+  requireOperandKind(7, 0, 4); // LOAD_TVALUE TValue address
+  requireOperandKind(21, 0, 6); // STORE_SPLIT_TVALUE Rn
+  requireOperandKind(21, 0, 4); // STORE_SPLIT_TVALUE TValue address
+  requireOperandKind(103, 0, 4); // TRY_NUM_TO_INDEX numeric SSA
+  requireOperandKind(125, 2, 6); // GET_TABLE dynamic TValue key
+  requireOperandKind(125, 2, 2); // GET_TABLE immediate numeric key
+  requireOperandKind(126, 2, 6); // SET_TABLE dynamic TValue key
+  requireOperandKind(126, 2, 2); // SET_TABLE immediate numeric key
+  if (arrayAddressOperand?.kind !== 4)
+    throw new Error(`${name}: missing instruction-proven array address`);
+  const malformedAddress = Buffer.from(snapshot);
+  malformedAddress.writeUInt32LE(0, arrayAddressOperand.offset + 4);
+  expectPackageRejection(malformedAddress, "array address without proven table/bounds ownership");
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }

@@ -480,11 +480,16 @@ pub noinline fn emitCopyTValueRegisterToAddress(
 }
 pub noinline fn emitStoreSplitTValue(
     self: anytype,
+    instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
     if (instruction_value.operand_count != 3 and instruction_value.operand_count != 4)
         return Error.InvalidOperandCount;
-    const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const destination_operand = try self.operand(instruction_value, 0);
+    const destination = if (destination_operand.kind == .vm_reg)
+        try self.vmRegisterIndex(destination_operand)
+    else
+        null;
     const tag = try self.operand(instruction_value, 1);
     const source = try self.operand(instruction_value, 2);
     if (tag.kind != .constant)
@@ -494,10 +499,10 @@ pub noinline fn emitStoreSplitTValue(
     if (source.kind == .instruction and source.value < self.function.instruction_count and
         (try self.instruction(source.value)).command == .newclosure)
     {
-        if (instruction_value.operand_count != 3 or tag_value != 8)
+        if (destination == null or instruction_value.operand_count != 3 or tag_value != 8)
             return Error.UnsupportedControlFlow;
         const pattern = try self.newClosurePattern(source.value);
-        try self.emitCopyTValueRegisters(destination, pattern.destination);
+        try self.emitCopyTValueRegisters(destination.?, pattern.destination);
         return;
     }
 
@@ -508,41 +513,76 @@ pub noinline fn emitStoreSplitTValue(
 
     // A numeric-string builtin argument enters the optimized numeric arm through an
     // AOT-owned coercion.  Numeric consumers use the converted instruction result,
-    // while TValue materialization must preserve the untouched source value just as
-    // the bytecode fallback would.
+    // while TValue materialization must preserve the untouched source value.
     if (tag_value == lua_tag_number and source.kind == .instruction and
-        source.value < self.builtin_number_sources.len)
+        source.value < self.builtin_number_sources.len and destination != null)
     {
         const source_register = self.builtin_number_sources[source.value];
         if (source_register != std.math.maxInt(u32)) {
-            try self.emitCopyTValueRegisterToAddress(destination, address_offset, source_register);
+            try self.emitCopyTValueRegisterToAddress(destination.?, address_offset, source_register);
             return;
         }
     }
 
-    const destination_operand = try self.operand(instruction_value, 0);
-    const value_offset = try self.vmRegisterOffset(destination_operand, address_offset);
-    const tag_offset = try self.vmRegisterOffset(destination_operand, address_offset + tvalue_tag_offset);
+    if (destination_operand.kind == .instruction) {
+        if (destination_operand.value >= self.function.instruction_count)
+            return Error.UnsupportedControlFlow;
+        const producer = try self.instruction(destination_operand.value);
+        if (producer.command == abi.ir_cmd_get_arr_addr) {
+            if (!try self.plan.validateArrayAddressUse(
+                self.snapshot,
+                self.function,
+                destination_operand.value,
+                instruction_id,
+            ))
+                return Error.UnsupportedControlFlow;
+        } else if (producer.command == abi.ir_cmd_get_hash_node_addr or
+            producer.command == abi.ir_cmd_get_slot_node_addr)
+        {
+            if (address_offset != 0 or
+                !try self.plan.validateNodeUse(
+                    self.snapshot,
+                    self.function,
+                    destination_operand.value,
+                    instruction_id,
+                ))
+                return Error.UnsupportedControlFlow;
+        } else {
+            return Error.UnsupportedControlFlow;
+        }
+    } else if (destination_operand.kind != .vm_reg) return Error.InvalidOperandType;
+    const value_offset = if (destination != null)
+        try self.vmRegisterOffset(destination_operand, address_offset)
+    else
+        address_offset;
+    const tag_offset = if (destination != null)
+        try self.vmRegisterOffset(destination_operand, address_offset + tvalue_tag_offset)
+    else
+        address_offset + tvalue_tag_offset;
 
-    try self.body.localGet(self.allocator, self.base_local);
+    try self.emitTValueAddress(destination_operand);
     try self.emitI32Value(tag);
     try self.body.i32Store(self.allocator, 2, tag_offset);
 
-    try self.body.localGet(self.allocator, self.base_local);
     switch (tag_value) {
+        lua_tag_nil => {},
         lua_tag_boolean => {
+            try self.emitTValueAddress(destination_operand);
             try self.emitI32Value(source);
             try self.body.i32Store(self.allocator, 2, value_offset);
         },
         lua_tag_number => {
+            try self.emitTValueAddress(destination_operand);
             try self.emitF64Value(source);
             try self.body.f64Store(self.allocator, 3, value_offset);
         },
         lua_tag_integer => {
+            try self.emitTValueAddress(destination_operand);
             try self.emitI64Value(source);
             try self.body.i64Store(self.allocator, 3, value_offset);
         },
         lua_tag_string, 7, 8, 9, 10, 11, 12 => {
+            try self.emitTValueAddress(destination_operand);
             try self.emitPointerValue(source);
             try self.body.i32Store(self.allocator, 2, value_offset);
         },
@@ -604,10 +644,7 @@ pub fn vmConstantTag(self: anytype, operand_value: snapshot_v1.IrOperand) Error!
         .vector => @intCast(lua_tag_vector),
         .string => lua_tag_string,
         .table => 7,
-        .closure => 8,
-        .class_shape => 12,
-        // Imports are resolved while loading bytecode and have no statically known tag.
-        .import => return Error.UnsupportedOperand,
+        .import, .closure, .class_shape => return Error.UnsupportedOperand,
     };
 }
 
@@ -640,9 +677,31 @@ pub noinline fn emitTValueAddress(self: anytype, operand_value: snapshot_v1.IrOp
             _ = try self.vmRegisterIndex(operand_value);
             try self.body.localGet(self.allocator, self.base_local);
         },
+        .vm_const => try self.emitVmConstantAddress(operand_value),
         .instruction => try self.emitPointerValue(operand_value),
         else => return Error.UnsupportedOperand,
     }
+}
+pub noinline fn emitVmConstantAddress(self: anytype, operand_value: snapshot_v1.IrOperand) Error!void {
+    if (operand_value.kind != .vm_const or operand_value.value >= self.proto.vm_constant_count)
+        return Error.InvalidOperandType;
+    const value = try self.snapshot.vmConstant(self.proto, operand_value.value);
+    switch (value.kind) {
+        .nil, .boolean, .number, .vector, .string, .integer, .table => {},
+        .import, .closure, .class_shape => return Error.UnsupportedOperand,
+    }
+
+    // The pinned layout digest makes the active Proto constant array part of the AOT ABI.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Load(self.allocator, 2, abi.closure_l_proto_offset);
+    try self.body.i32Load(self.allocator, 2, abi.proto_constants_offset);
+    const byte_offset = std.math.mul(u32, operand_value.value, tvalue_size) catch
+        return Error.ResourceLimit;
+    try self.body.i32Const(self.allocator, @intCast(byte_offset));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
 }
 pub fn tvalueByteOffset(self: anytype, instruction_value: snapshot_v1.IrInstruction, operand_index: u32) Error!u32 {
     const offset_operand = try self.operand(instruction_value, operand_index);
