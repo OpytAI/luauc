@@ -132,8 +132,7 @@ static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member,
     if (!isHookedUserdataType(type) || !compareMemberName(member, memberLength, "Mark"))
         return false;
 
-    // seed:Mark(bag) writes the live receiver into an already-published table. That GC store
-    // requires BARRIER_TABLE_BACK. Do not overwrite sourceReg; later uses of seed stay userdata.
+    // sourceReg stays the live receiver.
     if (params >= 0 && params < 2)
         return false;
 
