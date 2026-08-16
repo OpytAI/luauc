@@ -11,7 +11,6 @@ const NewClosurePattern = model.NewClosurePattern;
 const SetUpvaluePattern = model.SetUpvaluePattern;
 const markerCapture = model.markerCapture;
 const requireSingleBytecodeBlockRangeFor = model.requireSingleBytecodeBlockRangeFor;
-const dupClosurePattern = model.dupClosurePattern;
 const lua_state_base_offset = abi.lua_state_base_offset;
 const tvalue_size = abi.tvalue_size;
 const tvalue_tag_offset = abi.tvalue_tag_offset;
@@ -129,6 +128,17 @@ pub fn initializedClosureValueCapture(self: anytype, address_id: u32, store_id: 
         }
         if (try self.loadedTValueRegister(source.value)) |source_register|
             return .{ .kind = .value, .source = source_register };
+        const source_instruction = try self.instruction(source.value);
+        if (source_instruction.command == .get_upvalue and source.value + 1 < store_id) {
+            const published = try self.instruction(source.value + 1);
+            if (published.command == .store_tvalue and published.operand_count == 2) {
+                const published_dest = try self.operand(published, 0);
+                const published_source = try self.operand(published, 1);
+                if (published_dest.kind == .vm_reg and published_dest.value < self.proto.max_stack_size and
+                    published_source.kind == .instruction and published_source.value == source.value)
+                    return .{ .kind = .value, .source = published_dest.value };
+            }
+        }
         return null;
     }
     if (store.command != .store_split_tvalue)
@@ -138,16 +148,24 @@ pub fn initializedClosureValueCapture(self: anytype, address_id: u32, store_id: 
     const tag = try self.operand(store, 1);
     const source = try self.operand(store, 2);
     if (destination.kind != .instruction or destination.value != address_id or
-        tag.kind != .constant or (try self.constant(tag.value)).tagValue() != 8 or
-        source.kind != .instruction or source.value >= newclosure_id)
+        tag.kind != .constant or source.kind != .instruction or source.value >= newclosure_id)
         return Error.InvalidOperandType;
-    const source_instruction = try self.instruction(source.value);
-    if (source_instruction.command != .newclosure)
-        return Error.UnsupportedControlFlow;
-    const source_pattern = try self.newClosurePattern(source.value);
-    if (source_pattern.finish >= newclosure_id - 2)
-        return Error.UnsupportedControlFlow;
-    return .{ .kind = .value, .source = source_pattern.destination };
+    const tag_value = (try self.constant(tag.value)).tagValue() orelse return Error.InvalidOperandType;
+    if (tag_value == 8) {
+        const source_instruction = try self.instruction(source.value);
+        if (source_instruction.command != .newclosure)
+            return Error.UnsupportedControlFlow;
+        const source_pattern = try self.newClosurePattern(source.value);
+        if (source_pattern.finish >= newclosure_id - 2)
+            return Error.UnsupportedControlFlow;
+        return .{ .kind = .value, .source = source_pattern.destination };
+    }
+    if (tag_value == lua_tag_number) {
+        const owner = (try self.compilableOwnerBlock(store_id)) orelse return null;
+        const register = (try self.publishedNumberPayloadRegister(owner, source, store_id)) orelse return null;
+        return .{ .kind = .value, .source = register };
+    }
+    return Error.UnsupportedControlFlow;
 }
 pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewClosurePattern {
     if (newclosure_id < 2)
@@ -393,49 +411,19 @@ pub fn initializedCapture(self: anytype, wanted: u32, capture_ir_start: u32) Err
     unreachable;
 }
 pub noinline fn newClosurePatternContaining(self: anytype, instruction_id: u32) Error!?NewClosurePattern {
-    var candidate: u32 = 0;
-    while (candidate < self.function.instruction_count) : (candidate += 1) {
-        if ((try self.instruction(candidate)).command != .newclosure)
-            continue;
-        const pattern = self.newClosurePattern(candidate) catch |err| switch (err) {
-            Error.UnsupportedControlFlow,
-            Error.InvalidOperandCount,
-            Error.InvalidOperandType,
-            Error.InvalidInstructionResult,
-            Error.InvalidBlockTermination,
-            => continue,
-            else => return err,
-        };
-        if (instruction_id >= pattern.start and instruction_id <= pattern.finish)
-            return pattern;
-    }
-    return null;
+    const fact = self.plan.closureContaining(instruction_id) orelse return null;
+    return self.newClosurePattern(fact.newclosure_id) catch |err| switch (err) {
+        Error.UnsupportedControlFlow,
+        Error.InvalidOperandCount,
+        Error.InvalidOperandType,
+        Error.InvalidInstructionResult,
+        Error.InvalidBlockTermination,
+        => null,
+        else => err,
+    };
 }
 pub fn isDupClosureCapture(self: anytype, instruction_id: u32) Error!bool {
-    var candidate: u32 = 0;
-    while (candidate < instruction_id) : (candidate += 1) {
-        if ((try self.instruction(candidate)).command != .fallback_dupclosure)
-            continue;
-        const pattern = dupClosurePattern(self.snapshot, self.function, self.proto, candidate) catch |err| switch (err) {
-            Error.UnsupportedControlFlow,
-            Error.InvalidOperandCount,
-            Error.InvalidOperandType,
-            Error.InvalidInstructionResult,
-            Error.InvalidBlockTermination,
-            => continue,
-            else => return err,
-        };
-        switch (pattern) {
-            .closed => {},
-            .captured => |captured| {
-                const finish = std.math.add(u32, captured.marker_start, captured.capture_count) catch
-                    return Error.ResourceLimit;
-                if (instruction_id >= captured.marker_start and instruction_id < finish)
-                    return true;
-            },
-        }
-    }
-    return false;
+    return self.plan.dupClosureCaptureContaining(instruction_id);
 }
 pub noinline fn setUpvaluePattern(self: anytype, instruction_id: u32) Error!SetUpvaluePattern {
     if (instruction_id == 0)

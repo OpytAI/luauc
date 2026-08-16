@@ -135,7 +135,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
             _ = try self.newClosurePattern(instruction_id + 1);
         },
         .get_closure_upval_addr => {
-            if (try self.newClosurePatternContaining(instruction_id) == null)
+            if (self.plan.closureContaining(instruction_id) == null)
                 return Error.UnsupportedControlFlow;
         },
         .load_tag => try self.emitLoadTag(instruction_id, instruction_value),
@@ -145,12 +145,12 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .load_double => try self.emitLoadDouble(instruction_id, instruction_value),
         .load_tvalue => try self.emitLoadTValue(instruction_id, instruction_value),
         .store_pointer => {
-            if (try self.newClosurePatternContaining(instruction_id) == null)
+            if (self.plan.closureContaining(instruction_id) == null)
                 try self.emitStoreI32(instruction_value, 0);
         },
         .store_tag => try self.emitStoreTag(instruction_id, instruction_value),
         .store_extra => try self.emitStoreI32(instruction_value, tvalue_extra_offset),
-        .store_split_tvalue => if (try self.newClosurePatternContaining(instruction_id) == null)
+        .store_split_tvalue => if (self.plan.closureContaining(instruction_id) == null)
             try self.emitStoreSplitTValue(instruction_id, instruction_value),
         .store_double => try self.emitStoreDouble(instruction_value),
         .store_int => try self.emitStoreI32(instruction_value, 0),
@@ -220,8 +220,10 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .tag_vector => try self.emitTagVector(instruction_id, instruction_value),
         .not_any => try self.emitNotAny(instruction_id, instruction_value),
         .cmp_any => {
-            if (block_kind != .fallback)
-                return Error.UnsupportedControlFlow;
+            if (block_kind != .fallback) {
+                if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+                    return Error.UnsupportedControlFlow;
+            }
             try self.emitCompareAny(instruction_id, instruction_value);
         },
         .cmp_int => try self.emitComparisonI32(instruction_id, instruction_value),
@@ -273,7 +275,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .check_cmp_int => try self.emitCheckCompareInteger(instruction_value),
         .check_cmp_int64 => try self.emitCheckCompareInt64(instruction_value),
         .check_gc => {
-            if (try self.newClosurePatternContaining(instruction_id) == null) {
+            if (self.plan.closureContaining(instruction_id) == null) {
                 try self.body.localGet(self.allocator, 0);
                 try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
                 try self.emitReloadBase();
@@ -310,18 +312,19 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                     _ = try self.newClosurePattern(instruction_id + 2);
                 } else if (instruction_id + 1 >= self.function.instruction_count or
                     ((try self.instruction(instruction_id + 1)).command != .call and
+                        (try self.instruction(instruction_id + 1)).command != .cmp_any and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_get_table and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table))
                     return Error.UnsupportedControlFlow;
             }
         },
         .capture => {
-            if (try self.newClosurePatternContaining(instruction_id) == null and
-                !try self.isDupClosureCapture(instruction_id))
+            if (self.plan.closureContaining(instruction_id) == null and
+                !self.plan.dupClosureCaptureContaining(instruction_id))
                 return Error.UnsupportedControlFlow;
         },
         .findupval => {
-            if (try self.newClosurePatternContaining(instruction_id) == null)
+            if (self.plan.closureContaining(instruction_id) == null)
                 return Error.UnsupportedControlFlow;
         },
         .close_upvals => try self.emitCloseUpvalues(instruction_id),

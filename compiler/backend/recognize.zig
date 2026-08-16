@@ -53,6 +53,18 @@ pub const PlainLen = struct {
     pointer_id: u32,
 };
 
+pub const Closure = struct {
+    newclosure_id: u32,
+    start: u32,
+    finish: u32,
+};
+
+pub const DupClosure = struct {
+    id: u32,
+    marker_start: u32,
+    finish: u32,
+};
+
 pub const Facts = struct {
     allocator: std.mem.Allocator,
     table_allocs: []TableAlloc,
@@ -61,6 +73,10 @@ pub const Facts = struct {
     plain_lens: []PlainLen,
     plain_len_index: []u32,
     deferred_gc_owns: []bool,
+    closures: []Closure,
+    dupclosures: []DupClosure,
+    closure_index: []u32,
+    dup_capture_index: []u32,
 
     pub fn deinit(self: *Facts) void {
         self.allocator.free(self.table_allocs);
@@ -69,6 +85,10 @@ pub const Facts = struct {
         self.allocator.free(self.plain_lens);
         self.allocator.free(self.plain_len_index);
         self.allocator.free(self.deferred_gc_owns);
+        self.allocator.free(self.closures);
+        self.allocator.free(self.dupclosures);
+        self.allocator.free(self.closure_index);
+        self.allocator.free(self.dup_capture_index);
         self.* = undefined;
     }
 
@@ -89,6 +109,20 @@ pub const Facts = struct {
     pub fn deferredGcOwns(self: Facts, check_gc_id: u32) bool {
         return check_gc_id < self.deferred_gc_owns.len and self.deferred_gc_owns[check_gc_id];
     }
+
+    pub fn closureContaining(self: Facts, instruction_id: u32) ?Closure {
+        if (instruction_id >= self.closure_index.len)
+            return null;
+        const index = self.closure_index[instruction_id];
+        if (index == snapshot_v1.no_id)
+            return null;
+        return self.closures[index];
+    }
+
+    pub fn dupClosureCaptureContaining(self: Facts, instruction_id: u32) bool {
+        return instruction_id < self.dup_capture_index.len and
+            self.dup_capture_index[instruction_id] != snapshot_v1.no_id;
+    }
 };
 
 pub fn recognize(
@@ -106,6 +140,10 @@ pub fn recognize(
     defer setlists.deinit(allocator);
     var plain_lens: std.ArrayList(PlainLen) = .empty;
     defer plain_lens.deinit(allocator);
+    var closures: std.ArrayList(Closure) = .empty;
+    defer closures.deinit(allocator);
+    var dupclosures: std.ArrayList(DupClosure) = .empty;
+    defer dupclosures.deinit(allocator);
 
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
@@ -163,6 +201,31 @@ pub fn recognize(
         if (instruction.command == ir_cmd_table_len)
             if (try plainLenAt(snapshot, function, proto, slices, instruction_id, instruction)) |decoded|
                 try plain_lens.append(allocator, decoded);
+
+        if (instruction.command == .newclosure)
+            if (try newClosureRangeAt(snapshot, function, proto, instruction_id)) |decoded|
+                try closures.append(allocator, decoded);
+
+        if (instruction.command == .fallback_dupclosure) {
+            const pattern = model.dupClosurePattern(snapshot, function, proto, instruction_id) catch |err| switch (err) {
+                Error.UnsupportedControlFlow, Error.InvalidOperandCount, Error.InvalidOperandType => null,
+                else => return err,
+            };
+            if (pattern) |decoded| {
+                switch (decoded) {
+                    .closed => try dupclosures.append(allocator, .{
+                        .id = instruction_id,
+                        .marker_start = instruction_id,
+                        .finish = instruction_id,
+                    }),
+                    .captured => |captured| try dupclosures.append(allocator, .{
+                        .id = instruction_id,
+                        .marker_start = captured.marker_start,
+                        .finish = captured.marker_start + captured.capture_count - 1,
+                    }),
+                }
+            }
+        }
     }
 
     const table_alloc_slice = try table_allocs.toOwnedSlice(allocator);
@@ -173,6 +236,10 @@ pub fn recognize(
     errdefer allocator.free(setlist_slice);
     const plain_len_slice = try plain_lens.toOwnedSlice(allocator);
     errdefer allocator.free(plain_len_slice);
+    const closure_slice = try closures.toOwnedSlice(allocator);
+    errdefer allocator.free(closure_slice);
+    const dupclosure_slice = try dupclosures.toOwnedSlice(allocator);
+    errdefer allocator.free(dupclosure_slice);
 
     const plain_len_index = try allocator.alloc(u32, function.instruction_count);
     errdefer allocator.free(plain_len_index);
@@ -191,6 +258,24 @@ pub fn recognize(
             deferred_gc_owns[check_gc_id] = true;
     }
 
+    const closure_index = try allocator.alloc(u32, function.instruction_count);
+    errdefer allocator.free(closure_index);
+    @memset(closure_index, snapshot_v1.no_id);
+    for (closure_slice, 0..) |fact, index| {
+        var cursor = fact.start;
+        while (cursor <= fact.finish) : (cursor += 1)
+            closure_index[cursor] = @intCast(index);
+    }
+
+    const dup_capture_index = try allocator.alloc(u32, function.instruction_count);
+    errdefer allocator.free(dup_capture_index);
+    @memset(dup_capture_index, snapshot_v1.no_id);
+    for (dupclosure_slice, 0..) |fact, index| {
+        var cursor = fact.marker_start;
+        while (cursor <= fact.finish) : (cursor += 1)
+            dup_capture_index[cursor] = @intCast(index);
+    }
+
     return .{
         .allocator = allocator,
         .table_allocs = table_alloc_slice,
@@ -199,7 +284,87 @@ pub fn recognize(
         .plain_lens = plain_len_slice,
         .plain_len_index = plain_len_index,
         .deferred_gc_owns = deferred_gc_owns,
+        .closures = closure_slice,
+        .dupclosures = dupclosure_slice,
+        .closure_index = closure_index,
+        .dup_capture_index = dup_capture_index,
     };
+}
+
+fn newClosureRangeAt(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    newclosure_id: u32,
+) Error!?Closure {
+    if (newclosure_id < 2 or newclosure_id + 2 >= function.instruction_count)
+        return null;
+    const marker = try snapshot.irInstruction(function, newclosure_id - 2);
+    const load_env = try snapshot.irInstruction(function, newclosure_id - 1);
+    const newclosure = try snapshot.irInstruction(function, newclosure_id);
+    const store_pointer = try snapshot.irInstruction(function, newclosure_id + 1);
+    const store_tag = try snapshot.irInstruction(function, newclosure_id + 2);
+    if (marker.command != .set_savedpc or load_env.command != .load_env or
+        newclosure.command != .newclosure or store_pointer.command != .store_pointer or
+        store_tag.command != .store_tag)
+        return null;
+    if (newclosure.operand_count != 3)
+        return null;
+    const nups_operand = try snapshot.irOperand(newclosure, 0);
+    if (nups_operand.kind != .constant)
+        return null;
+    const capture_count = (try snapshot.irConstant(function, nups_operand.value)).uintValue() orelse
+        return null;
+    _ = proto;
+    var finish = newclosure_id + 2;
+    var cursor = newclosure_id + 3;
+    if (capture_count == 0) {
+        if (cursor < function.instruction_count) {
+            const gc_marker = try snapshot.irInstruction(function, cursor);
+            if ((gc_marker.command == .check_gc or gc_marker.command == .nop) and gc_marker.operand_count == 0)
+                finish = cursor;
+        }
+        requireSingleCompilableBlockRange(snapshot, function, newclosure_id - 2, finish) catch return null;
+        return .{ .newclosure_id = newclosure_id, .start = newclosure_id - 2, .finish = finish };
+    }
+    var remaining = capture_count;
+    while (remaining != 0 and cursor < function.instruction_count) {
+        var first = try snapshot.irInstruction(function, cursor);
+        while (first.command == .nop and cursor + 1 < function.instruction_count) {
+            cursor += 1;
+            first = try snapshot.irInstruction(function, cursor);
+        }
+        if (first.command == .load_tvalue) {
+            cursor += 3;
+        } else if (first.command == .findupval) {
+            cursor += 4;
+        } else if (first.command == .get_closure_upval_addr) {
+            const closure = try snapshot.irOperand(first, 0);
+            cursor += if (closure.kind == .instruction) @as(u32, 2) else 4;
+        } else return null;
+        remaining -= 1;
+    }
+    if (remaining != 0)
+        return null;
+    if (cursor < function.instruction_count) {
+        const gc_marker = try snapshot.irInstruction(function, cursor);
+        if ((gc_marker.command == .check_gc or gc_marker.command == .nop) and gc_marker.operand_count == 0)
+            cursor += 1;
+    }
+    var marker_index: u32 = 0;
+    while (marker_index < capture_count) : (marker_index += 1) {
+        if (cursor >= function.instruction_count)
+            return null;
+        const marker_insn = try snapshot.irInstruction(function, cursor);
+        if (marker_insn.command != .capture)
+            return null;
+        cursor += 1;
+    }
+    if (cursor == 0)
+        return null;
+    finish = cursor - 1;
+    requireSingleCompilableBlockRange(snapshot, function, newclosure_id - 2, finish) catch return null;
+    return .{ .newclosure_id = newclosure_id, .start = newclosure_id - 2, .finish = finish };
 }
 
 pub fn tableAllocationAt(

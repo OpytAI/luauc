@@ -9,6 +9,7 @@ backend_emit_library(
     name = "calls",
     deps = ["//compiler/backend:imports"],
 )
+backend_emit_library(name = "closures")
 backend_emit_library(name = "control")
 backend_emit_library(name = "core")
 backend_emit_library(

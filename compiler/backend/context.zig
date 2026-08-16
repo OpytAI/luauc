@@ -14,6 +14,7 @@ const tables = @import("luauc_backend_emit_tables");
 const table_values = @import("luauc_backend_emit_table_values");
 const operators = @import("luauc_backend_emit_operators");
 const iteration = @import("luauc_backend_emit_iteration");
+const closures = @import("luauc_backend_emit_closures");
 const control = @import("luauc_backend_emit_control");
 const calls = @import("luauc_backend_emit_calls");
 const dispatch = @import("luauc_backend_emit_dispatch");
@@ -38,6 +39,7 @@ pub const Context = struct {
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
+    dupclosure_capture: ?wasm.FunctionRef,
     newclosure_empty: ?wasm.FunctionRef,
     newclosure_capture: ?wasm.FunctionRef,
     get_upvalue: ?wasm.FunctionRef,
@@ -173,11 +175,12 @@ pub const Context = struct {
     pub const emitStoreI64 = scalar.emitStoreI64;
     pub const emitStoreVector = scalar.emitStoreVector;
     pub const emitStoreTValue = scalar.emitStoreTValue;
-    pub const emitGetUpvalue = scalar.emitGetUpvalue;
-    pub const emitNewClosure = scalar.emitNewClosure;
-    pub const emitCaptureCall = scalar.emitCaptureCall;
-    pub const emitSetUpvalue = scalar.emitSetUpvalue;
-    pub const emitCloseUpvalues = scalar.emitCloseUpvalues;
+    pub const emitGetUpvalue = closures.emitGetUpvalue;
+    pub const emitNewClosure = closures.emitNewClosure;
+    pub const emitCaptureCall = closures.emitCaptureCall;
+    pub const emitDupClosureCapture = closures.emitDupClosureCapture;
+    pub const emitSetUpvalue = closures.emitSetUpvalue;
+    pub const emitCloseUpvalues = closures.emitCloseUpvalues;
     pub const emitAddNumber = scalar.emitAddNumber;
     pub const emitUnaryI32 = scalar.emitUnaryI32;
     pub const emitUnaryI64 = scalar.emitUnaryI64;
@@ -473,7 +476,7 @@ pub const Context = struct {
     pub const emitJumpCompareNumber = control.emitJumpCompareNumber;
     pub const emitJumpFornLoopCondition = control.emitJumpFornLoopCondition;
     pub const emitReturn = control.emitReturn;
-    pub const emitDupClosure = control.emitDupClosure;
+    pub const emitDupClosure = closures.emitDupClosure;
     pub const callContinuation = control.callContinuation;
     pub const emitExchangeContinuation = control.emitExchangeContinuation;
     pub const emitUnexpectedContinuationReturn = control.emitUnexpectedContinuationReturn;

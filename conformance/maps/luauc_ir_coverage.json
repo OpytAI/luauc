@@ -258,9 +258,7 @@
       "value": 12,
       "class": "layout",
       "wasm_features": [],
-      "runtime_symbols": [
-        "luauc_runtime_v1_node_slot_match"
-      ],
+      "runtime_symbols": [],
       "may_allocate": false,
       "may_raise": false,
       "may_call_luau": false,
@@ -272,9 +270,11 @@
         "//runtime:captured_call_runtime_reference_test",
         "//runtime:reference_capture_runtime_reference_test",
         "conformance:luauc_captured_proto_graph_calls_rejoin",
-        "conformance:luauc_reference_capture_survives_close_gc_and_mutation"
+        "conformance:luauc_reference_capture_survives_close_gc_and_mutation",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_one_value_or_reference_capture_newclosure_cluster"
+      "status": "implemented"
     },
     {
       "command": "STORE_TAG",
@@ -2295,9 +2295,11 @@
         "//compiler/backend:dynamic_string_package_object_build_test",
         "conformance:luauc_dynamic_string_survives_gc_and_matches_interpreter",
         "//compiler/backend:generic_iteration_package_object_build_test",
-        "conformance:luauc_generic_iteration_survives_gc_and_matches_interpreter"
+        "conformance:luauc_generic_iteration_survives_gc_and_matches_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_arbitrary_index_direct_value_or_reference_cell"
+      "status": "implemented"
     },
     {
       "command": "SET_UPVALUE",
@@ -2318,9 +2320,11 @@
         "//runtime:reference_capture_runtime_reference_test",
         "conformance:luauc_reference_capture_survives_close_gc_and_mutation",
         "//compiler/backend:forwarded_capture_package_object_build_test",
-        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc"
+        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_reference_arbitrary_index_from_register_exact_load_shapes"
+      "status": "implemented"
     },
     {
       "command": "CHECK_TAG",
@@ -2833,9 +2837,11 @@
         "//runtime:reference_capture_runtime_reference_test",
         "conformance:luauc_reference_capture_survives_close_gc_and_mutation",
         "//compiler/backend:forwarded_capture_package_object_build_test",
-        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc"
+        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_explicit_frame_register_close_without_yield_unwind"
+      "status": "implemented"
     },
     {
       "command": "CAPTURE",
@@ -2864,9 +2870,11 @@
         "//compiler/backend:fast_builtins_package_object_build_test",
         "conformance:luauc_fast_builtins_survive_gc_and_match_interpreter",
         "//compiler/backend:protected_execution_package_object_build_test",
-        "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt"
+        "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_ordered_lct_val_lct_ref_lct_upval_and_direct_child_closure_capture_clusters"
+      "status": "implemented"
     },
     {
       "command": "SETLIST",
@@ -3219,6 +3227,7 @@
       "class": "gc_protocol",
       "wasm_features": [],
       "runtime_symbols": [
+        "luauc_runtime_v1_newclosure_empty",
         "luauc_runtime_v1_newclosure_capture"
       ],
       "may_allocate": true,
@@ -3240,9 +3249,11 @@
         "//compiler/backend:generic_iteration_package_object_build_test",
         "conformance:luauc_generic_iteration_survives_gc_and_matches_interpreter",
         "//compiler/backend:protected_execution_package_object_build_test",
-        "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt"
+        "conformance:luauc_protected_execution_recovers_across_call_iteration_and_interrupt",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_ordered_direct_tagged_hoisted_value_reference_forwarded_upvalue_or_direct_child_closure_captures"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_DUPCLOSURE",
@@ -3251,7 +3262,7 @@
       "wasm_features": [],
       "runtime_symbols": [
         "luauc_runtime_v1_dupclosure",
-        "luauc_runtime_v1_newclosure_capture"
+        "luauc_runtime_v1_dupclosure_capture"
       ],
       "may_allocate": true,
       "may_raise": true,
@@ -3268,9 +3279,11 @@
         "conformance:luauc_transitive_static_graph_shares_state_across_gc",
         "conformance:luauc_failed_static_initializer_retries_after_gc",
         "//compiler/backend:fast_builtins_package_object_build_test",
-        "conformance:luauc_fast_builtins_survive_gc_and_match_interpreter"
+        "conformance:luauc_fast_builtins_survive_gc_and_match_interpreter",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_zero_upvalue_or_adjacent_ordered_lct_val_lct_upval_child"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_FORGPREP",
@@ -3791,9 +3804,11 @@
         "//runtime:reference_capture_runtime_reference_test",
         "conformance:luauc_reference_capture_survives_close_gc_and_mutation",
         "//compiler/backend:forwarded_capture_package_object_build_test",
-        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc"
+        "conformance:luauc_forwarded_shared_capture_survives_close_and_gc",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_ordered_register_reference_capture_clusters"
+      "status": "implemented"
     },
     {
       "command": "BUFFER_READI8",

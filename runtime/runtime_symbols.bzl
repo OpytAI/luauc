@@ -28,6 +28,7 @@ AOT_GENERATED_RUNTIME_SYMBOLS = [
     "luauc_runtime_v1_do_len",
     "luauc_runtime_v1_dup_table",
     "luauc_runtime_v1_dupclosure",
+    "luauc_runtime_v1_dupclosure_capture",
     "luauc_runtime_v1_exchange_continuation",
     "luauc_runtime_v1_fastcall",
     "luauc_runtime_v1_forg_loop",

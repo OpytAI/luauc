@@ -8,7 +8,6 @@ const abi = @import("luauc_backend_runtime_abi");
 
 const Error = model.Error;
 const ValueSlot = model.ValueSlot;
-const Capture = model.Capture;
 const status_internal_error = abi.status_internal_error;
 const tvalue_tag_offset = abi.tvalue_tag_offset;
 const lua_tag_nil = abi.lua_tag_nil;
@@ -214,8 +213,14 @@ pub noinline fn emitLoadDouble(self: anytype, instruction_id: u32, instruction_v
     try self.emitInstructionResultSet(instruction_id);
 }
 pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    if (try self.newClosurePatternContaining(instruction_id) != null)
-        return;
+    if (self.plan.closureContaining(instruction_id) != null) {
+        if (instruction_value.operand_count == 0)
+            return;
+        const capture_source = try self.operand(instruction_value, 0);
+        // Address/upvalue loads stay capture-owned; a later store may reuse this register TValue.
+        if (capture_source.kind != .vm_reg and capture_source.kind != .vm_const)
+            return;
+    }
     if (instruction_id + 1 < self.function.instruction_count and
         (try self.instruction(instruction_id + 1)).command == .set_upvalue)
         _ = try self.setUpvaluePattern(instruction_id + 1);
@@ -269,7 +274,7 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
     try self.body.localSet(self.allocator, self.slots[instruction_id].second);
 }
 pub noinline fn emitStoreTag(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    if (try self.newClosurePatternContaining(instruction_id) != null)
+    if (self.plan.closureContaining(instruction_id) != null)
         return;
     try self.requireOperandCount(instruction_value, 2);
     const destination = try self.operand(instruction_value, 0);
@@ -343,7 +348,7 @@ pub noinline fn emitStoreVector(self: anytype, instruction_value: snapshot_v1.Ir
     }
 }
 pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    if (try self.newClosurePatternContaining(instruction_id) != null)
+    if (self.plan.closureContaining(instruction_id) != null)
         return;
     if (instruction_value.operand_count != 2 and instruction_value.operand_count != 3)
         return Error.InvalidOperandCount;
@@ -411,63 +416,7 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
     try self.body.localGet(self.allocator, self.slots[source.value].second);
     try self.body.i64Store(self.allocator, 3, destination_offset + 8);
 }
-pub noinline fn emitGetUpvalue(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    try self.requireOperandCount(instruction_value, 1);
-    const upvalue = try self.operand(instruction_value, 0);
-    if (upvalue.kind != .vm_upvalue or upvalue.value >= self.proto.nups or
-        instruction_id + 1 >= self.function.instruction_count)
-        return Error.InvalidOperandType;
-    const store = try self.instruction(instruction_id + 1);
-    if (store.command != .store_tvalue or store.operand_count != 2)
-        return Error.UnsupportedControlFlow;
-    const store_source = try self.operand(store, 1);
-    if (store_source.kind != .instruction or store_source.value != instruction_id)
-        return Error.UnsupportedControlFlow;
-}
-pub noinline fn emitNewClosure(self: anytype, instruction_id: u32) Error!void {
-    const pattern = try self.newClosurePattern(instruction_id);
-    const child_id = std.math.add(u32, self.function_id_base, pattern.child_proto_id) catch return Error.ResourceLimit;
-    if (pattern.capture_count == 0) {
-        try self.body.localGet(self.allocator, 0);
-        try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-        try self.body.i32Const(self.allocator, @intCast(child_id));
-        try self.body.i32Const(self.allocator, @intFromBool(pattern.check_gc));
-        try self.body.call(self.allocator, self.newclosure_empty orelse return Error.UnsupportedCommand);
-        try self.emitReloadBase();
-        return;
-    }
-    var capture_index: u32 = 0;
-    while (capture_index < pattern.capture_count) : (capture_index += 1) {
-        const capture = try self.initializedCapture(capture_index, pattern.capture_ir_start);
-        try self.emitCaptureCall(pattern.destination, child_id, capture_index, capture, pattern.check_gc and capture_index + 1 == pattern.capture_count);
-    }
-    try self.emitReloadBase();
-}
-pub noinline fn emitCaptureCall(self: anytype, destination: u32, child_id: u32, capture_index: u32, capture: Capture, check_gc: bool) Error!void {
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(destination));
-    try self.body.i32Const(self.allocator, @intCast(child_id));
-    try self.body.i32Const(self.allocator, @intCast(capture_index));
-    try self.body.i32Const(self.allocator, @intCast(@intFromEnum(capture.kind)));
-    try self.body.i32Const(self.allocator, @intCast(capture.source));
-    try self.body.i32Const(self.allocator, @intFromBool(check_gc));
-    try self.body.call(self.allocator, self.newclosure_capture orelse return Error.UnsupportedCommand);
-}
-pub noinline fn emitSetUpvalue(self: anytype, instruction_id: u32) Error!void {
-    const pattern = try self.setUpvaluePattern(instruction_id);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.upvalue_index));
-    try self.body.i32Const(self.allocator, @intCast(pattern.source_register));
-    try self.body.call(self.allocator, self.set_upvalue orelse return Error.UnsupportedCommand);
-}
-pub noinline fn emitCloseUpvalues(self: anytype, instruction_id: u32) Error!void {
-    const instruction_value = try self.instruction(instruction_id);
-    try self.requireOperandCount(instruction_value, 1);
-    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(source));
-    try self.body.call(self.allocator, self.close_upvalues orelse return Error.UnsupportedCommand);
-}
+
 pub noinline fn emitAddNumber(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 2);
     try self.emitF64Value(try self.operand(instruction_value, 0));

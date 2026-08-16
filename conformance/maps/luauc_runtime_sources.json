@@ -72,6 +72,7 @@
       "luauc_runtime_v1_do_arith",
       "luauc_runtime_v1_dup_table",
       "luauc_runtime_v1_dupclosure",
+      "luauc_runtime_v1_dupclosure_capture",
       "luauc_runtime_v1_enter",
       "luauc_runtime_v1_exchange_continuation",
       "luauc_runtime_v1_finish_yielded_op",
@@ -159,5 +160,5 @@
     "lvmutils.cpp remains because it owns reusable value, table, comparison, arithmetic, concatenation, length, loop, and metamethod helpers.",
     "luaV_getimport remains trapped in forbidden VM/src/lvmload.cpp and general imports remain unsupported; exact safe-environment-proven literal require clusters are instead resolved to closed-package module IDs and call luauc_runtime_v1_require_static."
   ],
-  "canonical_hash": "250734ca83b26802b3c0d5a4c5d356a7e50eab731c56044730b6b7fd7062c35d"
+  "canonical_hash": "32de5d1e87dde9273c9ef0eaa571797ed324c17b4b0f60b9fe6606e45d37e99c"
 }

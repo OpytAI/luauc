@@ -274,6 +274,10 @@ uint32_t luauc_runtime_v1_compare_any(lua_State *state, uint32_t lhs_register, u
                                     uint32_t operation);
 void luauc_runtime_v1_dupclosure(lua_State *state, uint32_t destination_register,
                                uint32_t child_proto_id);
+void luauc_runtime_v1_dupclosure_capture(lua_State *state, uint32_t destination_register,
+                                        uint32_t child_proto_id, uint32_t capture_index,
+                                        uint32_t capture_kind, uint32_t source_index,
+                                        uint32_t check_gc);
 void luauc_runtime_v1_newclosure_empty(lua_State *state, uint32_t destination_register,
                                      uint32_t child_proto_id, uint32_t check_gc);
 void luauc_runtime_v1_newclosure_capture(lua_State *state, uint32_t destination_register,

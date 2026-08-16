@@ -32,20 +32,71 @@ return function(value, text)
     end
 
     local function unsafeAssert(input)
-        return assert(input, "unsafe assertion")
+        return input and 41 or 43
     end
-    local originalEnvironment = getfenv(unsafeAssert)
-    setfenv(unsafeAssert, setmetatable({
-        assert = function(input)
-            coroutine.yield("gc-boundary")
-            return input and 41 or 43
-        end,
-    }, { __index = originalEnvironment }))
 
     local function dynamicRoundtrip(object, key)
         local current = object[key]
         object[key] = current
         return object[key]
+    end
+
+    local function addDup(x, y)
+        return x + y
+    end
+    local addedDup = addDup(value, 1)
+
+    local function closureBreadth(input, text)
+        local function factory()
+            local function blank()
+                return 1
+            end
+            return blank
+        end
+        local first = factory()
+        local second = factory()
+        local hoisted = input
+        local function valReader()
+            return hoisted
+        end
+
+        local cell0 = input
+        local cell1 = string.len(text)
+        local function writer(delta, more)
+            cell0 = cell0 + delta
+            cell1 = more
+            return cell0, cell1
+        end
+        local written0, written1 = writer(1, input + 3)
+
+        local closed
+        do
+            local scoped = input + 2
+            closed = function()
+                return scoped, cell0, cell1, valReader()
+            end
+        end
+        local c0, c1, c2, c3 = closed()
+
+        local function outer()
+            local function inner()
+                return hoisted, cell0
+            end
+            return inner
+        end
+        local forwarded = outer()
+
+        local function makePair()
+            local v = input
+            return function()
+                return v + hoisted
+            end
+        end
+        local pairA, pairB = makePair(), makePair()
+
+        coroutine.yield("gc-boundary")
+        return first() + valReader() + written0 + written1 + c0 + c1 + c2 + c3
+            + forwarded() + pairA() + pairB() + (first == second and 1 or 0)
     end
 
     local function tableBreadth(input, text)
@@ -164,6 +215,7 @@ return function(value, text)
     })
     local functionResult = callStep(functionReceiver, value + 2)
     local tableBreadthResult = tableBreadth(value, text)
+    local closureBreadthResult = closureBreadth(value, text)
     local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
@@ -186,7 +238,7 @@ return function(value, text)
 
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
-            + guardResult + tableBreadthResult
+            + guardResult + tableBreadthResult + closureBreadthResult + addedDup
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

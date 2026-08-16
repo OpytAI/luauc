@@ -21,7 +21,7 @@
   "output_sha256": "49ef062c9ae3f8fe14a731e68a5545b3aaa2bf410fbc8db6d20b2f3083e12fd3",
   "import_module": "env",
   "import_count": 61,
-  "export_count": 432,
+  "export_count": 433,
   "runtime_contract_imports": [
     "luauc_runtime_v1_protected_call",
     "luauc_runtime_v1_raise"
@@ -103,6 +103,7 @@
     "luauc_runtime_v1_do_len",
     "luauc_runtime_v1_dup_table",
     "luauc_runtime_v1_dupclosure",
+    "luauc_runtime_v1_dupclosure_capture",
     "luauc_runtime_v1_enter",
     "luauc_runtime_v1_exchange_continuation",
     "luauc_runtime_v1_fastcall",

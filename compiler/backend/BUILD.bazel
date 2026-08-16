@@ -71,6 +71,7 @@ zig_library(
         "//compiler/backend/emit:allocations",
         "//compiler/backend/emit:builtin_patterns",
         "//compiler/backend/emit:calls",
+        "//compiler/backend/emit:closures",
         "//compiler/backend/emit:control",
         "//compiler/backend/emit:core",
         "//compiler/backend/emit:dispatch",

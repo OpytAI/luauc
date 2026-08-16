@@ -8,6 +8,7 @@ pub const coverage_hit_symbol = "luauc_runtime_v1_coverage_hit";
 pub const do_arith_symbol = "luauc_runtime_v1_do_arith";
 pub const compare_any_symbol = "luauc_runtime_v1_compare_any";
 pub const dupclosure_symbol = "luauc_runtime_v1_dupclosure";
+pub const dupclosure_capture_symbol = "luauc_runtime_v1_dupclosure_capture";
 pub const newclosure_empty_symbol = "luauc_runtime_v1_newclosure_empty";
 pub const newclosure_capture_symbol = "luauc_runtime_v1_newclosure_capture";
 pub const get_upvalue_symbol = "luauc_runtime_v1_get_upvalue";

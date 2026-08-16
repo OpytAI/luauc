@@ -8,8 +8,6 @@ const aotArithmeticOperation = model.aotArithmeticOperation;
 const Error = model.Error;
 const CallContinuation = model.CallContinuation;
 const StringEqualityPattern = model.StringEqualityPattern;
-const markerCapture = model.markerCapture;
-const dupClosurePattern = model.dupClosurePattern;
 const status_ok = abi.status_ok;
 const status_internal_error = abi.status_internal_error;
 const lua_tag_boolean = abi.lua_tag_boolean;
@@ -693,30 +691,7 @@ pub noinline fn emitReturn(self: anytype, instruction_value: snapshot_v1.IrInstr
     try self.body.call(self.allocator, self.return_);
     try self.emitStatusReturn(status_ok);
 }
-pub noinline fn emitDupClosure(self: anytype, instruction_id: u32) Error!void {
-    const pattern = try dupClosurePattern(self.snapshot, self.function, self.proto, instruction_id);
-    switch (pattern) {
-        .closed => |closed| {
-            const global_child_id = std.math.add(u32, self.function_id_base, closed.child_proto_id) catch
-                return Error.ResourceLimit;
-            try self.body.localGet(self.allocator, 0);
-            try self.body.i32Const(self.allocator, @intCast(closed.destination));
-            try self.body.i32Const(self.allocator, @intCast(global_child_id));
-            try self.body.call(self.allocator, self.dupclosure orelse return Error.UnsupportedCommand);
-        },
-        .captured => |captured| {
-            const global_child_id = std.math.add(u32, self.function_id_base, captured.child_proto_id) catch
-                return Error.ResourceLimit;
-            var capture_index: u32 = 0;
-            while (capture_index < captured.capture_count) : (capture_index += 1) {
-                const capture = try markerCapture(self.snapshot, self.function, self.proto, captured.marker_start + capture_index, false);
-                try self.emitCaptureCall(captured.destination, global_child_id, capture_index, capture, capture_index + 1 == captured.capture_count);
-            }
-        },
-    }
-    // Closure allocation runs GC and can relocate the active stack.
-    try self.emitReloadBase();
-}
+
 pub fn callContinuation(self: anytype, instruction_id: u32) ?CallContinuation {
     if (instruction_id >= self.continuation_indices.len)
         return null;

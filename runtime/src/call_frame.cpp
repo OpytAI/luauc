@@ -12,6 +12,7 @@
 #include "lfunc.h"
 #include "lgc.h"
 #include "lmem.h"
+#include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
@@ -1524,6 +1525,16 @@ static Proto *findDirectAotChild(Proto *parent, uint32_t childProtoId) {
     return nullptr;
 }
 
+static void bindAotClosureTemplateEnvs(lua_State *L, Proto *proto, LuaTable *env);
+
+static Closure *findAotClosureTemplate(Proto *parent, Proto *child) {
+    for (int index = 0; index < parent->sizek; ++index) {
+        if (ttisfunction(&parent->k[index]) && clvalue(&parent->k[index])->l.p == child)
+            return clvalue(&parent->k[index]);
+    }
+    return nullptr;
+}
+
 extern "C" void luauc_runtime_v1_dupclosure(lua_State *L, uint32_t destinationRegister,
                                           uint32_t childProtoId) {
     if (!L || !L->ci || !isLua(L->ci))
@@ -1540,14 +1551,99 @@ extern "C" void luauc_runtime_v1_dupclosure(lua_State *L, uint32_t destinationRe
     if (child->nups != 0)
         luaG_runerror(L, "strict AOT DUPCLOSURE does not support captured upvalues");
 
-    // The active parent closure roots the published Proto graph. Run incremental GC before the
-    // allocation, gray a black thread, then make the new white Closure visible in its VM register.
-    luaC_checkGC(L);
-    luaC_threadbarrier(L);
-    Closure *closure = luaF_newLclosure(L, 0, parentClosure->env, child);
-    setclvalue(L, L->base + destinationRegister, closure);
+    Closure *kcl = findAotClosureTemplate(parent, child);
+    if (!kcl)
+        luaG_runerror(L, "strict AOT DUPCLOSURE is missing a proto-k template");
+
+    // Pinned LOP_DUPCLOSURE: reuse the template iff it still shares the parent env.
+    Closure *ncl = (kcl->env == parentClosure->env) ? kcl : luaF_newLclosure(L, 0, parentClosure->env, child);
+    setclvalue(L, L->base + destinationRegister, ncl);
     if (L->top <= L->base + destinationRegister)
         L->top = L->base + destinationRegister + 1;
+    ncl->preload = 0;
+    if (kcl != ncl)
+        luaC_checkGC(L);
+}
+
+extern "C" void luauc_runtime_v1_dupclosure_capture(lua_State *L, uint32_t destinationRegister,
+                                                  uint32_t childProtoId, uint32_t captureIndex,
+                                                  uint32_t captureKind, uint32_t sourceIndex,
+                                                  uint32_t checkGc) {
+    if (!L || !L->ci || !isLua(L->ci))
+        luaG_runerror(L, "strict AOT DUPCLOSURE entered without an active Luau frame");
+
+    Closure *parentClosure = clvalue(L->ci->func);
+    Proto *parent = parentClosure->l.p;
+    if (destinationRegister >= parent->maxstacksize)
+        luaG_runerror(L, "strict AOT DUPCLOSURE destination is outside the compiled frame");
+    if (checkGc > 1)
+        luaG_runerror(L, "strict AOT DUPCLOSURE rejected invalid GC marker %u", checkGc);
+
+    Proto *child = findDirectAotChild(parent, childProtoId);
+    if (!child)
+        luaG_runerror(L, "strict AOT DUPCLOSURE rejected non-child Proto %u", childProtoId);
+    if (child->nups == 0 || captureIndex >= child->nups)
+        luaG_runerror(L, "strict AOT DUPCLOSURE capture is outside the child closure");
+    if (checkGc != 0 && captureIndex + 1 != child->nups)
+        luaG_runerror(L, "strict AOT DUPCLOSURE GC marker precedes the final capture");
+
+    switch (captureKind) {
+    case LUAUC_AOT_CAPTURE_V1_VAL:
+        if (sourceIndex >= parent->maxstacksize)
+            luaG_runerror(L, "strict AOT DUPCLOSURE capture register is outside the parent frame");
+        break;
+    case LUAUC_AOT_CAPTURE_V1_UPVAL:
+        if (sourceIndex >= parent->nups || sourceIndex >= parentClosure->nupvalues)
+            luaG_runerror(L, "strict AOT DUPCLOSURE source upvalue is outside the parent closure");
+        break;
+    default:
+        luaG_runerror(L, "strict AOT DUPCLOSURE rejected capture kind %u", captureKind);
+    }
+
+    Closure *kcl = findAotClosureTemplate(parent, child);
+    if (!kcl)
+        luaG_runerror(L, "strict AOT DUPCLOSURE is missing a proto-k template");
+
+    Closure *ncl;
+    if (captureIndex == 0) {
+        ncl = (kcl->env == parentClosure->env) ? kcl : luaF_newLclosure(L, child->nups, parentClosure->env, child);
+        setclvalue(L, L->base + destinationRegister, ncl);
+        if (L->top <= L->base + destinationRegister)
+            L->top = L->base + destinationRegister + 1;
+    } else {
+        TValue *destination = L->base + destinationRegister;
+        if (L->top <= destination || !isLfunction(destination))
+            luaG_runerror(L, "strict AOT DUPCLOSURE lost its published closure");
+        ncl = clvalue(destination);
+        if (ncl->l.p != child || ncl->nupvalues != child->nups)
+            luaG_runerror(L, "strict AOT DUPCLOSURE resumed with a different child closure");
+    }
+
+    TValue *uv = captureKind == LUAUC_AOT_CAPTURE_V1_VAL ? L->base + sourceIndex
+                                                        : &parentClosure->l.uprefs[sourceIndex];
+    if (ncl == kcl && luaO_rawequalObj(&ncl->l.uprefs[captureIndex], uv)) {
+        // Reuse the shared template slot.
+    } else if (ncl == kcl && kcl->preload == 0) {
+        ncl = luaF_newLclosure(L, child->nups, parentClosure->env, child);
+        setclvalue(L, L->base + destinationRegister, ncl);
+        if (L->top <= L->base + destinationRegister)
+            L->top = L->base + destinationRegister + 1;
+        for (uint32_t prior = 0; prior < captureIndex; ++prior) {
+            setobj(L, &ncl->l.uprefs[prior], &kcl->l.uprefs[prior]);
+            luaC_barrier(L, ncl, &kcl->l.uprefs[prior]);
+        }
+        setobj(L, &ncl->l.uprefs[captureIndex], uv);
+        luaC_barrier(L, ncl, uv);
+    } else {
+        setobj(L, &ncl->l.uprefs[captureIndex], uv);
+        luaC_barrier(L, ncl, uv);
+    }
+
+    if (captureIndex + 1 == child->nups) {
+        ncl->preload = 0;
+        if (kcl != ncl)
+            luaC_checkGC(L);
+    }
 }
 
 extern "C" void luauc_runtime_v1_newclosure_empty(lua_State *L, uint32_t destinationRegister,
@@ -2251,6 +2347,7 @@ extern "C" uint32_t luauc_runtime_v1_require_static(lua_State *L, uint32_t desti
     lua_State *moduleThread = lua_newthread(globalThread);
     lua_xmove(globalThread, L, 1);
     luaL_sandboxthread(moduleThread);
+    bindAotClosureTemplateEnvs(moduleThread, moduleProto, moduleThread->gt);
     if (!lua_checkstack(moduleThread, 1)) {
         lua_pushliteral(L, "could not reserve module thread stack space");
         cacheAndRaiseModuleFailure(L, originalTop, recordIndex, targetModuleId, -1, false);
@@ -2462,6 +2559,35 @@ static void materializeAotConstants(lua_State *L, Proto *proto, const LuaucRunti
         }
         sethvalue(L, &proto->k[id], table);
     }
+}
+
+static void materializeAotClosureConstants(lua_State *L, Proto *parent,
+                                          const LuaucRuntimeProtoV1 *metadata) {
+    for (uint32_t id = 0; id < metadata->constant_count; ++id) {
+        const LuaucRuntimeVmConstantV1 &constant = metadata->constants[id];
+        if (constant.kind != LUAUC_AOT_VM_CONSTANT_V1_CLOSURE)
+            continue;
+        Proto *child = findDirectAotChild(parent, constant.payload0);
+        if (!child)
+            luaG_runerror(L, "strict AOT closure constant %u is not a direct child", constant.payload0);
+        LuaTable *parentEnv = L->gt;
+        Closure *kcl = luaF_newLclosure(L, child->nups, parentEnv, child);
+        kcl->preload = child->nups == 0 ? 0 : 1;
+        setclvalue(L, &parent->k[id], kcl);
+        luaC_objbarrier(L, parent, kcl);
+    }
+}
+
+static void bindAotClosureTemplateEnvs(lua_State *L, Proto *proto, LuaTable *env) {
+    for (int index = 0; index < proto->sizek; ++index) {
+        if (!ttisfunction(&proto->k[index]))
+            continue;
+        Closure *kcl = clvalue(&proto->k[index]);
+        kcl->env = env;
+        luaC_objbarrier(L, kcl, env);
+    }
+    for (int index = 0; index < proto->sizep; ++index)
+        bindAotClosureTemplateEnvs(L, proto->p[index], env);
 }
 
 static void initializeAotProto(lua_State *L, Proto *proto, const LuaucRuntimeProtoV1 *metadata,
@@ -2720,6 +2846,9 @@ extern "C" uint32_t luauc_runtime_v1_push_program(lua_State *L, const LuaucRunti
         const uint32_t parent = program->protos[id].parent_id;
         protos[parent]->p[childCounts[parent]++] = protos[id];
     }
+
+    for (int id = 0; id < protoCount; ++id)
+        materializeAotClosureConstants(L, protos[id], &program->protos[id]);
 
     if (moduleCount == 0)
         publishRootClosure(L, protos[program->root_proto_id]);

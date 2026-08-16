@@ -12,6 +12,7 @@ const coverage_hit_symbol = abi.coverage_hit_symbol;
 const do_arith_symbol = abi.do_arith_symbol;
 const compare_any_symbol = abi.compare_any_symbol;
 const dupclosure_symbol = abi.dupclosure_symbol;
+const dupclosure_capture_symbol = abi.dupclosure_capture_symbol;
 const newclosure_empty_symbol = abi.newclosure_empty_symbol;
 const newclosure_capture_symbol = abi.newclosure_capture_symbol;
 const get_upvalue_symbol = abi.get_upvalue_symbol;
@@ -132,6 +133,7 @@ pub const ImportNeeds = struct {
     do_arith: bool = false,
     compare_any: bool = false,
     dupclosure: bool = false,
+    dupclosure_capture: bool = false,
     newclosure_empty: bool = false,
     newclosure_capture: bool = false,
     get_upvalue: bool = false,
@@ -202,6 +204,7 @@ pub const RuntimeImports = struct {
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
+    dupclosure_capture: ?wasm.FunctionRef,
     newclosure_empty: ?wasm.FunctionRef,
     newclosure_capture: ?wasm.FunctionRef,
     get_upvalue: ?wasm.FunctionRef,
@@ -326,7 +329,7 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
             .cmp_any => needs.compare_any = true,
             .fallback_dupclosure => switch (try dupClosurePattern(snapshot, function, proto, instruction_id)) {
                 .closed => needs.dupclosure = true,
-                .captured => needs.newclosure_capture = true,
+                .captured => needs.dupclosure_capture = true,
             },
             .newclosure => {
                 if (instruction_value.operand_count != 3)
@@ -552,6 +555,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const do_arith_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32 };
     const compare_any_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const dupclosure_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
+    const dupclosure_capture_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 };
     const newclosure_empty_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const newclosure_capture_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 };
     const get_upvalue_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
@@ -614,6 +618,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const dupclosure = if (needs.dupclosure) blk: {
         const helper_type = try object.addType(.{ .params = &dupclosure_params, .results = &no_results });
         break :blk try object.importFunction("env", dupclosure_symbol, helper_type);
+    } else null;
+    const dupclosure_capture = if (needs.dupclosure_capture) blk: {
+        const helper_type = try object.addType(.{ .params = &dupclosure_capture_params, .results = &no_results });
+        break :blk try object.importFunction("env", dupclosure_capture_symbol, helper_type);
     } else null;
     const newclosure_empty = if (needs.newclosure_empty) blk: {
         const helper_type = try object.addType(.{ .params = &newclosure_empty_params, .results = &no_results });
@@ -866,6 +874,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .do_arith = do_arith,
         .compare_any = compare_any,
         .dupclosure = dupclosure,
+        .dupclosure_capture = dupclosure_capture,
         .newclosure_empty = newclosure_empty,
         .newclosure_capture = newclosure_capture,
         .get_upvalue = get_upvalue,

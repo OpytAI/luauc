@@ -553,6 +553,10 @@ function executeEmbedNamecallFamilyPackageShape() {
   let tableLenPointerOperand = null;
   let newTableNodeOperand = null;
   let deferredAllocAfter = null;
+  const setUpvalueIndexes = new Set();
+  let newclosureEnvOperand = null;
+  let captureKindOperand = null;
+  let dupclosureConstantOperand = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     const blockByInstruction = new Map();
     for (let blockId = 0; blockId < shape.blockCount(functionId); blockId++) {
@@ -571,6 +575,14 @@ function executeEmbedNamecallFamilyPackageShape() {
       );
       if (command === 9 && arrayAddressOperand === null)
         arrayAddressOperand = instruction.operand(0);
+      if (command === 167 && instruction.operandCount >= 2 && instruction.operand(1).kind === 4)
+        newclosureEnvOperand ??= instruction.operand(1);
+      if (command === 152 && instruction.operandCount >= 2)
+        captureKindOperand ??= instruction.operand(1);
+      if (command === 168 && instruction.operandCount >= 3 && instruction.operand(2).kind === 7)
+        dupclosureConstantOperand ??= instruction.operand(2);
+      if (command === 130 && instruction.operandCount >= 1 && instruction.operand(0).kind === 8)
+        setUpvalueIndexes.add(instruction.operand(0).value);
       if (command === 98 && tableLenPointerOperand === null)
         tableLenPointerOperand = instruction.operand(0);
       if (command === 100 && instruction.operandCount === 2 && newTableNodeOperand === null)
@@ -707,8 +719,8 @@ function executeEmbedNamecallFamilyPackageShape() {
   if (safeEnvironmentVmExits.length)
     throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
   for (const command of [
-    1, 2, 7, 9, 10, 11, 21, 33, 97, 98, 100, 101, 102, 103, 104, 125, 126, 131, 132, 133, 134, 135,
-    136, 137, 138, 139, 142, 143, 144, 146, 149, 153, 164,
+    1, 2, 7, 8, 9, 10, 11, 12, 21, 33, 97, 98, 100, 101, 102, 103, 104, 125, 126, 129, 130, 131, 132, 133, 134, 135,
+    136, 137, 138, 139, 142, 143, 144, 146, 149, 151, 152, 153, 164, 167, 168, 200,
   ])
     if (!commandCounts.get(command))
       throw new Error(`${name}: natural source did not emit command ${command}`);
@@ -730,6 +742,8 @@ function executeEmbedNamecallFamilyPackageShape() {
   requireOperandKind(126, 2, 6); // SET_TABLE dynamic TValue key
   requireOperandKind(126, 2, 2); // SET_TABLE immediate numeric key
   requireOperandKind(135, 0, 5); // CHECK_SAFE_ENV compiled slow arm
+  if (setUpvalueIndexes.size < 2)
+    throw new Error(`${name}: SET_UPVALUE did not emit two distinct vm_upvalue indexes`);
   if (arrayAddressOperand?.kind !== 4)
     throw new Error(`${name}: missing instruction-proven array address`);
   const malformedAddress = Buffer.from(snapshot);
@@ -781,6 +795,21 @@ function executeEmbedNamecallFamilyPackageShape() {
   if (!removedDeferredGc)
     throw new Error(`${name}: deferred NEW_TABLE has no later CHECK_GC to delete`);
   expectPackageRejection(malformedDeferredGc, "deferred NEW_TABLE lost collector ownership");
+  if (captureKindOperand === null)
+    throw new Error(`${name}: missing CAPTURE kind operand`);
+  const malformedCapture = Buffer.from(snapshot);
+  malformedCapture.writeUInt32LE(3, captureKindOperand.offset + 4);
+  expectPackageRejection(malformedCapture, "CAPTURE kind/source no longer matches initialized capture");
+  if (newclosureEnvOperand === null)
+    throw new Error(`${name}: missing NEWCLOSURE env operand`);
+  const malformedEnv = Buffer.from(snapshot);
+  malformedEnv.writeUInt32LE(0, newclosureEnvOperand.offset + 4);
+  expectPackageRejection(malformedEnv, "LOAD_ENV env operand of NEWCLOSURE rewritten away from the previous instruction");
+  if (dupclosureConstantOperand === null)
+    throw new Error(`${name}: missing FALLBACK_DUPCLOSURE child constant`);
+  const malformedDupclosure = Buffer.from(snapshot);
+  malformedDupclosure.writeUInt8(6, dupclosureConstantOperand.offset);
+  expectPackageRejection(malformedDupclosure, "FALLBACK_DUPCLOSURE child proto is not a child");
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
@@ -1906,7 +1935,7 @@ async function executeBufferScalarMatrixPackage() {
     ["env", "luauc_runtime_v1_interrupt", "function"],
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
-    ["env", "luauc_runtime_v1_newclosure_capture", "function"],
+    ["env", "luauc_runtime_v1_dupclosure_capture", "function"],
     ["env", "luauc_runtime_v1_get_upvalue", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
     ["env", "luauc_runtime_v1_exchange_continuation", "function"],

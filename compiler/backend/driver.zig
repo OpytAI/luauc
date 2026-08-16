@@ -153,6 +153,7 @@ fn lowerFunction(
         .do_arith = imports.do_arith,
         .compare_any = imports.compare_any,
         .dupclosure = imports.dupclosure,
+        .dupclosure_capture = imports.dupclosure_capture,
         .newclosure_empty = imports.newclosure_empty,
         .newclosure_capture = imports.newclosure_capture,
         .get_upvalue = imports.get_upvalue,
@@ -432,6 +433,7 @@ fn appendProtoConstantMetadata(
     allocator: std.mem.Allocator,
     snapshot: snapshot_v1.Snapshot,
     proto: snapshot_v1.Proto,
+    function_id_base: u32,
     constant_bytes: *std.ArrayList(u8),
     item_bytes: *std.ArrayList(u8),
     constant_strings: *StringKeyPool,
@@ -486,7 +488,13 @@ fn appendProtoConstantMetadata(
                 }
                 local_item_count = std.math.add(u32, local_item_count, constant.payload1) catch return Error.ResourceLimit;
             },
-            .import, .closure, .class_shape => {},
+            .closure => {
+                const child_proto_id = constant.closureProtoId() orelse return Error.InvalidOperandType;
+                const function_id = std.math.add(u32, function_id_base, child_proto_id) catch
+                    return Error.ResourceLimit;
+                writeU32(descriptor, 4, function_id);
+            },
+            .import, .class_shape => {},
         }
     }
 
@@ -604,6 +612,7 @@ fn emitStaticPackageMetadata(
                 allocator,
                 snapshot,
                 proto,
+                function_base,
                 &constant_bytes,
                 &item_bytes,
                 &constant_strings,
