@@ -95,6 +95,9 @@ static int embedNewIter(lua_State *L) {
 enum { kEmbedVec2Tag = 12 };
 
 static int embedVec2Mark(lua_State *L) {
+    luaL_checktype(L, 2, LUA_TTABLE);
+    lua_pushvalue(L, 1);
+    lua_rawseti(L, 2, 1);
     lua_pushnumber(L, 1);
     return 1;
 }

@@ -124,24 +124,24 @@ static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, s
     build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TUSERDATA));
     IrOp owner = build.inst(IrCmd::LOAD_POINTER, build.vmReg(resultReg));
     build.inst(IrCmd::BARRIER_OBJ, owner, build.vmReg(sourceReg), build.undef());
-    // Remark a companion table after the object is published. sourceReg is free after BARRIER_OBJ.
-    IrOp bag = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
-    build.inst(IrCmd::STORE_POINTER, build.vmReg(sourceReg), bag);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(sourceReg), build.constTag(LUA_TTABLE));
-    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
-    build.inst(IrCmd::BARRIER_TABLE_BACK, table);
     return true;
 }
 
 static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
                              int argResReg, int sourceReg, int params, int results, int pcpos) {
-    (void)pcpos;
     if (!isHookedUserdataType(type) || !compareMemberName(member, memberLength, "Mark"))
+        return false;
+
+    // seed:Mark(bag) writes the live receiver into an already-published table. That GC store
+    // requires BARRIER_TABLE_BACK. Do not overwrite sourceReg; later uses of seed stay userdata.
+    if (params >= 0 && params < 2)
         return false;
 
     IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
     build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
     build.loadAndCheckTag(build.vmReg(argResReg + 2), LUA_TTABLE, build.undef());
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+    build.inst(IrCmd::SET_TABLE, build.vmReg(sourceReg), build.vmReg(argResReg + 2), build.constUint(1));
     IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
     build.inst(IrCmd::BARRIER_TABLE_BACK, table);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(argResReg), build.constDouble(1.0));
