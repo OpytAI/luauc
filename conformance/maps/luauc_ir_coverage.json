@@ -1651,9 +1651,12 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1826; CodeGen/src/IrLoweringA64.cpp:1774; luaH_getn",
       "tests": [
         "//compiler/backend:dynamic_array_table_package_object_build_test",
-        "conformance:luauc_dynamic_array_table_survives_gc_and_matches_interpreter"
+        "conformance:luauc_dynamic_array_table_survives_gc_and_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_no_metatable_array_table"
+      "status": "implemented"
     },
     {
       "command": "STRING_LEN",
@@ -1702,9 +1705,12 @@
         "//compiler/backend:mixed_table_package_object_build_test",
         "conformance:luauc_mixed_table_deletion_survives_gc_and_matches_interpreter",
         "//compiler/backend:iteration_object_lifecycle_package_object_build_test",
-        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata"
+        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_natural_node_counts_deferred_exact_gc_and_resizable_mixed_tables"
+      "status": "implemented"
     },
     {
       "command": "DUP_TABLE",
@@ -1722,9 +1728,12 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1864; CodeGen/src/IrLoweringA64.cpp:1832; luaH_clone",
       "tests": [
         "//compiler/backend:table_clone_append_package_object_build_test",
-        "conformance:luauc_table_template_clone_and_append_matches_interpreter"
+        "conformance:luauc_table_template_clone_and_append_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_source_derived_plain_table_template_clone_graph"
+      "status": "implemented"
     },
     {
       "command": "TABLE_SETNUM",
@@ -1742,9 +1751,12 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1837; CodeGen/src/IrLoweringA64.cpp:1794; luaH_setnum",
       "tests": [
         "//compiler/backend:table_clone_append_package_object_build_test",
-        "conformance:luauc_table_template_clone_and_append_matches_interpreter"
+        "conformance:luauc_table_template_clone_and_append_matches_interpreter",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_source_derived_plain_table_insert_append_graph"
+      "status": "implemented"
     },
     {
       "command": "TRY_NUM_TO_INDEX",
@@ -2876,9 +2888,12 @@
         "//compiler/backend:generic_iteration_package_object_build_test",
         "conformance:luauc_generic_iteration_survives_gc_and_matches_interpreter",
         "//compiler/backend:iteration_object_lifecycle_package_object_build_test",
-        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata"
+        "conformance:luauc_iteration_object_lifecycle_matches_interpreter_and_finalizes_userdata",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_fixed_count_known_or_unknown_size_resizable_mixed_table"
+      "status": "implemented"
     },
     {
       "command": "CALL",

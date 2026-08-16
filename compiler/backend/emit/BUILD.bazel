@@ -1,6 +1,9 @@
 load(":defs.bzl", "backend_emit_library")
 
-backend_emit_library(name = "allocations")
+backend_emit_library(
+    name = "allocations",
+    deps = ["//compiler/backend:recognize"],
+)
 backend_emit_library(name = "builtin_patterns")
 backend_emit_library(
     name = "calls",

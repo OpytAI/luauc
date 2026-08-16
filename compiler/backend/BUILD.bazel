@@ -32,12 +32,25 @@ zig_library(
 )
 
 zig_library(
+    name = "recognize",
+    main = "recognize.zig",
+    import_name = "luauc_backend_recognize",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":model",
+        ":runtime_abi",
+        "//compiler/ir:frontend_snapshot_v1",
+    ],
+)
+
+zig_library(
     name = "plan",
     main = "plan.zig",
     import_name = "luauc_backend_plan",
     visibility = ["//compiler/backend:__subpackages__"],
     deps = [
         ":model",
+        ":recognize",
         ":runtime_abi",
         "//compiler/ir:frontend_snapshot_v1",
     ],

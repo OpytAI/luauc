@@ -388,6 +388,7 @@ pub const Context = struct {
     pub const emitInlineArrayGet = tables.emitInlineArrayGet;
     pub const tableLenPattern = tables.tableLenPattern;
     pub const dynamicLengthPattern = tables.dynamicLengthPattern;
+    pub const emitPlainTableLen = tables.emitPlainTableLen;
 
     // operators
     pub const powPattern = operators.powPattern;

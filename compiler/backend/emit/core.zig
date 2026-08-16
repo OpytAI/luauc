@@ -193,20 +193,26 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
 
     var cursor = std.math.add(u32, newclosure_id, 3) catch return Error.ResourceLimit;
     if (capture_count == 0) {
-        const gc_marker = try self.instruction(cursor);
-        if (gc_marker.command != .check_gc and gc_marker.command != .nop)
-            return Error.UnsupportedControlFlow;
-        try self.requireOperandCount(gc_marker, 0);
-        try self.requireSingleCompilableBlockRange(newclosure_id - 2, cursor);
+        var finish = newclosure_id + 2;
+        var check_gc = false;
+        if (cursor < self.function.instruction_count) {
+            const gc_marker = try self.instruction(cursor);
+            if (gc_marker.command == .check_gc or gc_marker.command == .nop) {
+                try self.requireOperandCount(gc_marker, 0);
+                finish = cursor;
+                check_gc = gc_marker.command == .check_gc;
+            }
+        }
+        try self.requireSingleCompilableBlockRange(newclosure_id - 2, finish);
         return .{
             .start = newclosure_id - 2,
-            .finish = cursor,
+            .finish = finish,
             .destination = destination,
             .child_proto_id = child_proto_id,
             .capture_count = 0,
-            .capture_ir_start = cursor,
-            .marker_start = cursor + 1,
-            .check_gc = gc_marker.command == .check_gc,
+            .capture_ir_start = finish,
+            .marker_start = finish + 1,
+            .check_gc = check_gc,
         };
     }
     const leading_marker = try self.instruction(cursor);

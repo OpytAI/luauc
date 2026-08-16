@@ -36,7 +36,7 @@ try {
   for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
     const result = invoke(instance, number, text, context);
     const protoResult = number % 2 !== 0 ? number * 3 + text.length : number - text.length;
-    const expectedNumber = 15 * number + 123 + text.length + protoResult;
+    const expectedNumber = 18 * number + 161 + text.length + protoResult;
     const expectedText = `${text}:${number + 1}:2/1/11:missing`;
     if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
       throw new Error(`CLI artifact ${number}/${text}: ${JSON.stringify(result)}`);

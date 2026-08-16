@@ -281,6 +281,7 @@ function snapshotShape(snapshot) {
       const operandCount = snapshot.readUInt32LE(instructionOffset + 12);
       return {
         command: snapshot[instructionOffset],
+        offset: instructionOffset,
         operandCount,
         operand(operandId) {
           if (operandId >= operandCount)
@@ -545,6 +546,13 @@ function executeEmbedNamecallFamilyPackageShape() {
   const safeEnvironmentVmExits = [];
   let arrayAddressOperand = null;
   let crossBlockTablePointerLoad = null;
+  let setListCountOperand = null;
+  let setListSourceOperand = null;
+  let setListKnownSizeOperand = null;
+  let dupTableConstantOperand = null;
+  let tableLenPointerOperand = null;
+  let newTableNodeOperand = null;
+  let deferredAllocAfter = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     const blockByInstruction = new Map();
     for (let blockId = 0; blockId < shape.blockCount(functionId); blockId++) {
@@ -563,6 +571,38 @@ function executeEmbedNamecallFamilyPackageShape() {
       );
       if (command === 9 && arrayAddressOperand === null)
         arrayAddressOperand = instruction.operand(0);
+      if (command === 98 && tableLenPointerOperand === null)
+        tableLenPointerOperand = instruction.operand(0);
+      if (command === 100 && instruction.operandCount === 2 && newTableNodeOperand === null)
+        newTableNodeOperand = instruction.operand(1);
+      if (command === 101 && instruction.operandCount === 1) {
+        const source = instruction.operand(0);
+        if (source.kind === 4) {
+          const producer = shape.instruction(functionId, source.value);
+          if (producer.command === 2 && producer.operandCount === 1 && producer.operand(0).kind === 7)
+            dupTableConstantOperand ??= producer.operand(0);
+        }
+      }
+      if (command === 153 && instruction.operandCount === 6) {
+        setListCountOperand ??= instruction.operand(3);
+        setListSourceOperand ??= instruction.operand(2);
+        if (instruction.operand(5).kind === 2)
+          setListKnownSizeOperand ??= instruction.operand(5);
+      }
+      if (command === 100 && instruction.operandCount === 2 && deferredAllocAfter === null) {
+        const blockId = blockByInstruction.get(instructionId);
+        const block = blockId === undefined ? null : shape.block(functionId, blockId);
+        if (block && instructionId + 2 <= block.finish) {
+          const storePointer = shape.instruction(functionId, instructionId + 1);
+          const storeTag = shape.instruction(functionId, instructionId + 2);
+          const nextCommand = instructionId + 3 <= block.finish
+            ? shape.instruction(functionId, instructionId + 3).command
+            : null;
+          if (storePointer.command === 15 && storeTag.command === 13 && nextCommand !== 146 && nextCommand !== 0) {
+            deferredAllocAfter = { functionId, after: instructionId + 2 };
+          }
+        }
+      }
       if (command === 21 && instruction.operandCount >= 3 && instruction.operand(1).kind === 2 &&
           instruction.operand(2).kind === 4 &&
           instruction.constant(1).bits === 7n)
@@ -667,8 +707,8 @@ function executeEmbedNamecallFamilyPackageShape() {
   if (safeEnvironmentVmExits.length)
     throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
   for (const command of [
-    1, 2, 7, 9, 10, 11, 21, 33, 97, 103, 104, 125, 126, 131, 132, 133, 134, 135,
-    136, 137, 138, 139, 142, 143, 144, 146, 149, 164,
+    1, 2, 7, 9, 10, 11, 21, 33, 97, 98, 100, 101, 102, 103, 104, 125, 126, 131, 132, 133, 134, 135,
+    136, 137, 138, 139, 142, 143, 144, 146, 149, 153, 164,
   ])
     if (!commandCounts.get(command))
       throw new Error(`${name}: natural source did not emit command ${command}`);
@@ -700,6 +740,47 @@ function executeEmbedNamecallFamilyPackageShape() {
   const malformedTablePointer = Buffer.from(snapshot);
   malformedTablePointer.writeUInt32LE(0, crossBlockTablePointerLoad.offset + 4);
   expectPackageRejection(malformedTablePointer, "cross-block table pointer lost its guarded VM register");
+  if (setListCountOperand === null || setListSourceOperand === null)
+    throw new Error(`${name}: missing SETLIST count/source operands`);
+  const malformedSetListCount = Buffer.from(snapshot);
+  malformedSetListCount.writeUInt32LE(0, setListCountOperand.offset + 4);
+  expectPackageRejection(malformedSetListCount, "SETLIST rejected the validated array range");
+  const malformedSetListSource = Buffer.from(snapshot);
+  malformedSetListSource.writeUInt32LE(250, setListSourceOperand.offset + 4);
+  expectPackageRejection(malformedSetListSource, "SETLIST source+count past maxstacksize");
+  if (setListKnownSizeOperand !== null) {
+    const malformedSetListSize = Buffer.from(snapshot);
+    malformedSetListSize.writeUInt32LE(0, setListKnownSizeOperand.offset + 4);
+    expectPackageRejection(malformedSetListSize, "SETLIST known-size constant is below the last written index");
+  }
+  if (dupTableConstantOperand === null)
+    throw new Error(`${name}: missing DUP_TABLE template constant`);
+  const malformedDupTable = Buffer.from(snapshot);
+  malformedDupTable.writeUInt32LE(0, dupTableConstantOperand.offset + 4);
+  expectPackageRejection(malformedDupTable, "DUP_TABLE rejected a non-table template");
+  if (tableLenPointerOperand === null)
+    throw new Error(`${name}: missing TABLE_LEN pointer`);
+  const malformedTableLen = Buffer.from(snapshot);
+  malformedTableLen.writeUInt32LE(0, tableLenPointerOperand.offset + 4);
+  expectPackageRejection(malformedTableLen, "TABLE_LEN pointer lost its guarded VM register");
+  if (newTableNodeOperand === null)
+    throw new Error(`${name}: missing NEW_TABLE node operand`);
+  const malformedNewTableNode = Buffer.from(snapshot);
+  malformedNewTableNode.writeUInt8(1, newTableNodeOperand.offset);
+  expectPackageRejection(malformedNewTableNode, "NEW_TABLE node operand rewritten to a non-uint");
+  if (deferredAllocAfter === null)
+    throw new Error(`${name}: missing deferred NEW_TABLE later CHECK_GC`);
+  const malformedDeferredGc = Buffer.from(snapshot);
+  let removedDeferredGc = false;
+  for (let later = deferredAllocAfter.after + 1; later < shape.instructionCount(deferredAllocAfter.functionId); later++) {
+    const candidate = shape.instruction(deferredAllocAfter.functionId, later);
+    if (candidate.command !== 146) continue;
+    malformedDeferredGc.writeUInt8(0, candidate.offset);
+    removedDeferredGc = true;
+  }
+  if (!removedDeferredGc)
+    throw new Error(`${name}: deferred NEW_TABLE has no later CHECK_GC to delete`);
+  expectPackageRejection(malformedDeferredGc, "deferred NEW_TABLE lost collector ownership");
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }

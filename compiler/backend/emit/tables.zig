@@ -1277,3 +1277,10 @@ pub noinline fn dynamicLengthPattern(self: anytype, block: snapshot_v1.IrBlock) 
         .marker = marker,
     };
 }
+pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(dest_reg));
+    try self.body.i32Const(self.allocator, @intCast(table_reg));
+    try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}

@@ -48,6 +48,29 @@ return function(value, text)
         return object[key]
     end
 
+    local function tableBreadth(input, text)
+        local seedA = { input }
+        local seedB = { input + 1 }
+        local seedC = { input + 2 }
+        local seedLen = #seedA + #seedB + #seedC
+        local arr = { input, input + 1, input + 2 }
+        local hash = { name = text, bias = input, extra = input + 3 }
+        local hashLen = #hash
+        hash[1] = input
+        hash[2] = input + 1
+        table.insert(arr, text)
+        local first = { count = 17, kind = "seed", ready = true }
+        local second = { count = 17, kind = "seed", ready = true }
+        table.insert(first, input)
+        local mixed = { input, name = text, extra = input + 4 }
+        local extraA = { input + 5 }
+        local extraB = { flag = true, more = text }
+        extraA[2] = input + 6
+        coroutine.yield("gc-boundary")
+        return seedLen + #arr + hashLen + #hash + #mixed + first[1] + second.count + extraA[1] + extraA[2]
+            + (extraB.flag and 0 or 1)
+    end
+
     local records = {
         { amount = value },
         { amount = value + 1 },
@@ -140,6 +163,7 @@ return function(value, text)
         end,
     })
     local functionResult = callStep(functionReceiver, value + 2)
+    local tableBreadthResult = tableBreadth(value, text)
     local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
@@ -162,7 +186,7 @@ return function(value, text)
 
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
-            + guardResult
+            + guardResult + tableBreadthResult
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

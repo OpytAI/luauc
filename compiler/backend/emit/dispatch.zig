@@ -111,6 +111,11 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
             try self.emitTableInsertAppend(pattern);
         return false;
     }
+    if (self.plan.plainLenContaining(instruction_id)) |cluster| {
+        if (instruction_id == cluster.finish)
+            try self.emitPlainTableLen(cluster.dest_reg, cluster.table_reg);
+        return false;
+    }
     if (try self.concatPatternContaining(instruction_id)) |pattern| {
         if (instruction_id == pattern.finish)
             try self.emitConcat(pattern);

@@ -2,6 +2,7 @@ const std = @import("std");
 const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const recognize = @import("luauc_backend_recognize");
 
 const Error = model.Error;
 
@@ -64,6 +65,7 @@ pub const FunctionPlan = struct {
     array_address_guards: []?ArrayGuard,
     guarded_buffer_operations: []bool,
     resume_safe_blocks: []bool,
+    facts: recognize.Facts,
 
     pub const RegionDominators = struct {
         allocator: std.mem.Allocator,
@@ -391,6 +393,19 @@ pub const FunctionPlan = struct {
                 resume_safe_blocks[block_id] = false;
         }
 
+        var facts = try recognize.recognize(
+            allocator,
+            snapshot,
+            function,
+            proto,
+            .{
+                .table_pointer_provenance = table_pointer_provenance,
+                .instruction_blocks = instruction_blocks,
+                .transient_address_invalidator_prefix = transient_address_invalidator_prefix,
+            },
+        );
+        errdefer facts.deinit();
+
         return .{
             .allocator = allocator,
             .instruction_blocks = instruction_blocks,
@@ -406,6 +421,7 @@ pub const FunctionPlan = struct {
             .array_address_guards = array_address_guards,
             .guarded_buffer_operations = guarded_buffer_operations,
             .resume_safe_blocks = resume_safe_blocks,
+            .facts = facts,
         };
     }
 
@@ -423,7 +439,20 @@ pub const FunctionPlan = struct {
         self.allocator.free(self.array_address_guards);
         self.allocator.free(self.guarded_buffer_operations);
         self.allocator.free(self.resume_safe_blocks);
+        self.facts.deinit();
         self.* = undefined;
+    }
+
+    pub fn plainLenAt(self: FunctionPlan, instruction_id: u32) ?recognize.PlainLen {
+        return self.facts.plainLenAt(instruction_id);
+    }
+
+    pub fn plainLenContaining(self: FunctionPlan, instruction_id: u32) ?recognize.PlainLen {
+        return self.facts.plainLenContaining(instruction_id);
+    }
+
+    pub fn deferredGcOwns(self: FunctionPlan, check_gc_id: u32) bool {
+        return self.facts.deferredGcOwns(check_gc_id);
     }
 
     pub fn instructionBlock(self: FunctionPlan, instruction_id: u32) ?u32 {
