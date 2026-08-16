@@ -742,7 +742,7 @@ function executeEmbedNamecallFamilyPackageShape() {
     throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
   for (const command of [
     1, 2, 7, 8, 9, 10, 11, 12, 21, 33, 83, 97, 98, 100, 101, 102, 103, 104, 123, 124, 125, 126, 128, 129, 130, 131, 132, 133, 134, 135,
-    136, 137, 138, 139, 142, 143, 144, 146, 149, 151, 152, 153, 156, 157, 160, 161, 162, 163, 164, 167, 168, 169, 200,
+    136, 137, 138, 139, 142, 143, 144, 146, 149, 151, 152, 153, 156, 157, 160, 161, 162, 163, 164, 167, 168, 169, 172, 200,
     127,
   ])
     if (!commandCounts.get(command))

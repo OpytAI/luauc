@@ -100,7 +100,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:96; CodeGen/src/IrLoweringA64.cpp:337",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -115,7 +119,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:101; CodeGen/src/IrLoweringA64.cpp:344",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -311,7 +319,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:247; CodeGen/src/IrLoweringA64.cpp:485",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -366,7 +378,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:282; CodeGen/src/IrLoweringA64.cpp:514",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -381,7 +397,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:290; CodeGen/src/IrLoweringA64.cpp:528",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -453,7 +473,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:402; CodeGen/src/IrLoweringA64.cpp:612",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -468,7 +492,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:506; CodeGen/src/IrLoweringA64.cpp:625",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -483,7 +511,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:435; CodeGen/src/IrLoweringA64.cpp:636",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -498,7 +530,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:537; CodeGen/src/IrLoweringA64.cpp:649",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -528,7 +564,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:659; CodeGen/src/IrLoweringA64.cpp:668",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -841,7 +881,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:971; CodeGen/src/IrLoweringA64.cpp:881",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -901,7 +945,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1005; CodeGen/src/IrLoweringA64.cpp:909",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1471,7 +1519,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1600; CodeGen/src/IrLoweringA64.cpp:1490",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1507,7 +1559,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1708; CodeGen/src/IrLoweringA64.cpp:1581",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1522,7 +1578,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1712; CodeGen/src/IrLoweringA64.cpp:1597",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1537,7 +1597,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1716; CodeGen/src/IrLoweringA64.cpp:1613",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1569,7 +1633,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1768; CodeGen/src/IrLoweringA64.cpp:1699",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1838,7 +1906,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1925; CodeGen/src/IrLoweringA64.cpp:1906",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1853,7 +1925,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3369; CodeGen/src/IrLoweringA64.cpp:1899",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -1868,7 +1944,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1930; CodeGen/src/IrLoweringA64.cpp:1913",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -3395,7 +3475,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3746; CodeGen/src/IrLoweringA64.cpp:3122",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -3410,7 +3494,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3379; CodeGen/src/IrLoweringA64.cpp:3126",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -3485,7 +3573,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3480; CodeGen/src/IrLoweringA64.cpp:3191",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -3590,7 +3682,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2906; CodeGen/src/IrLoweringA64.cpp:3309",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -3665,7 +3761,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2966; CodeGen/src/IrLoweringA64.cpp:3371",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
