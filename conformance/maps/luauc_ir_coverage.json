@@ -183,9 +183,11 @@
         "//compiler/backend:global_state_package_object_build_test",
         "conformance:luauc_mutable_global_state_and_standard_library_survive_gc",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_ordered_value_reference_and_forwarded_upvalue_newclosure_or_exact_luav_environment_global_clusters_including_optimizer_linearized"
+      "status": "implemented"
     },
     {
       "command": "GET_ARR_ADDR",
@@ -2226,7 +2228,8 @@
       "wasm_features": [],
       "runtime_symbols": [
         "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_require_static"
+        "luauc_runtime_v1_require_static",
+        "luauc_runtime_v1_table_get_string"
       ],
       "may_allocate": true,
       "may_raise": true,
@@ -2244,9 +2247,12 @@
         "conformance:luauc_static_cycle_fails_closed_and_can_be_retried",
         "conformance:luauc_failed_static_initializer_retries_after_gc",
         "//compiler/backend:global_state_package_object_build_test",
-        "conformance:luauc_mutable_global_state_and_standard_library_survive_gc"
+        "conformance:luauc_mutable_global_state_and_standard_library_survive_gc",
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_literal_static_require_or_decoded_depth_one_plain_environment_global"
+      "status": "implemented"
     },
     {
       "command": "CONCAT",
@@ -3086,9 +3092,11 @@
         "//compiler/backend:global_state_package_object_build_test",
         "conformance:luauc_mutable_global_state_and_standard_library_survive_gc",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_decoded_literal_key_luav_environment_clusters_including_optimizer_linearized"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_SETGLOBAL",
@@ -3109,9 +3117,11 @@
         "//compiler/backend:global_state_package_object_build_test",
         "conformance:luauc_mutable_global_state_and_standard_library_survive_gc",
         "//compiler/backend:object_semantics_package_object_build_test",
-        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators"
+        "conformance:luauc_object_semantics_cover_namecall_globals_and_operators",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
       ],
-      "status": "partial_exact_decoded_literal_key_luav_environment_clusters_including_optimizer_linearized"
+      "status": "implemented"
     },
     {
       "command": "FALLBACK_GETTABLEKS",

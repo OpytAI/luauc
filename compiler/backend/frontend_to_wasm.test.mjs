@@ -557,6 +557,10 @@ function executeEmbedNamecallFamilyPackageShape() {
   let newclosureEnvOperand = null;
   let captureKindOperand = null;
   let dupclosureConstantOperand = null;
+  const importDepths = new Set();
+  let importPayload1Offset = null;
+  let getglobalKeyOperand = null;
+  let globalEnvPointerOperand = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     const blockByInstruction = new Map();
     for (let blockId = 0; blockId < shape.blockCount(functionId); blockId++) {
@@ -581,6 +585,24 @@ function executeEmbedNamecallFamilyPackageShape() {
         captureKindOperand ??= instruction.operand(1);
       if (command === 168 && instruction.operandCount >= 3 && instruction.operand(2).kind === 7)
         dupclosureConstantOperand ??= instruction.operand(2);
+      if (command === 127 && instruction.operandCount >= 2 && instruction.operand(1).kind === 7) {
+        const protos = snapshotSection(snapshot, 3);
+        const vm = snapshotSection(snapshot, 6);
+        const functions = snapshotSection(snapshot, 15);
+        const protoId = snapshot.readUInt32LE(functions.offset + functionId * functions.recordSize + 4);
+        const proto = protos.offset + protoId * protos.recordSize;
+        const constant = vm.offset +
+          (snapshot.readUInt32LE(proto + 44) + instruction.operand(1).value) * vm.recordSize;
+        importDepths.add(snapshot.readUInt32LE(constant + 8));
+        importPayload1Offset ??= constant + 8;
+      }
+      if ((command === 160 || command === 161) && instruction.operandCount >= 3)
+        getglobalKeyOperand ??= instruction.operand(2);
+      if (command === 10 && instruction.operandCount >= 1 && instruction.operand(0).kind === 4) {
+        const producer = shape.instruction(functionId, instruction.operand(0).value);
+        if (producer.command === 8)
+          globalEnvPointerOperand ??= instruction.operand(0);
+      }
       if (command === 130 && instruction.operandCount >= 1 && instruction.operand(0).kind === 8)
         setUpvalueIndexes.add(instruction.operand(0).value);
       if (command === 98 && tableLenPointerOperand === null)
@@ -720,7 +742,8 @@ function executeEmbedNamecallFamilyPackageShape() {
     throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
   for (const command of [
     1, 2, 7, 8, 9, 10, 11, 12, 21, 33, 97, 98, 100, 101, 102, 103, 104, 125, 126, 129, 130, 131, 132, 133, 134, 135,
-    136, 137, 138, 139, 142, 143, 144, 146, 149, 151, 152, 153, 164, 167, 168, 200,
+    136, 137, 138, 139, 142, 143, 144, 146, 149, 151, 152, 153, 160, 161, 164, 167, 168, 200,
+    127,
   ])
     if (!commandCounts.get(command))
       throw new Error(`${name}: natural source did not emit command ${command}`);
@@ -810,6 +833,29 @@ function executeEmbedNamecallFamilyPackageShape() {
   const malformedDupclosure = Buffer.from(snapshot);
   malformedDupclosure.writeUInt8(6, dupclosureConstantOperand.offset);
   expectPackageRejection(malformedDupclosure, "FALLBACK_DUPCLOSURE child proto is not a child");
+  if (!importDepths.has(2) || !importDepths.has(3))
+    throw new Error(`${name}: GET_CACHED_IMPORT did not emit 2-key and 3-key depths: ${[...importDepths]}`);
+  if (importPayload1Offset === null)
+    throw new Error(`${name}: missing GET_CACHED_IMPORT payload1`);
+  const malformedImportZero = Buffer.from(snapshot);
+  malformedImportZero.writeUInt32LE(0, importPayload1Offset);
+  expectPackageRejection(malformedImportZero, "import payload1 rewritten to 0");
+  const malformedImportFour = Buffer.from(snapshot);
+  malformedImportFour.writeUInt32LE(4, importPayload1Offset);
+  expectPackageRejection(malformedImportFour, "import payload1 rewritten to 4");
+  if (getglobalKeyOperand === null)
+    throw new Error(`${name}: missing GETGLOBAL/SETGLOBAL key`);
+  const malformedGlobalKey = Buffer.from(snapshot);
+  malformedGlobalKey.writeUInt8(6, getglobalKeyOperand.offset);
+  expectPackageRejection(malformedGlobalKey, "GETGLOBAL/SETGLOBAL key rewritten to a non-string vm_const");
+  if (globalEnvPointerOperand === null)
+    throw new Error(`${name}: missing global-cluster LOAD_ENV pointer`);
+  const malformedGlobalEnv = Buffer.from(snapshot);
+  malformedGlobalEnv.writeUInt32LE(
+    globalEnvPointerOperand.value === 0 ? 1 : 0,
+    globalEnvPointerOperand.offset + 4,
+  );
+  expectPackageRejection(malformedGlobalEnv, "LOAD_ENV of a global cluster rewritten so GET_SLOT_NODE_ADDR pointer is not that instruction");
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }

@@ -463,6 +463,10 @@ pub const FunctionPlan = struct {
         return self.facts.dupClosureCaptureContaining(instruction_id);
     }
 
+    pub fn envLoadAt(self: FunctionPlan, instruction_id: u32) ?recognize.EnvLoad {
+        return self.facts.envLoadAt(instruction_id);
+    }
+
     pub fn instructionBlock(self: FunctionPlan, instruction_id: u32) ?u32 {
         if (instruction_id >= self.instruction_blocks.len)
             return null;

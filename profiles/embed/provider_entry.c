@@ -56,6 +56,20 @@ typedef struct LuaucEmbedCoverageCollector {
 static char context_error[512];
 static uint32_t context_error_size;
 
+static int embedStamp(lua_State *L) {
+    lua_pushinteger(L, 1);
+    return 1;
+}
+
+static void publishEmbedImport(lua_State *L) {
+    lua_createtable(L, 0, 1);
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, embedStamp, "stamp");
+    lua_setfield(L, -2, "stamp");
+    lua_setfield(L, -2, "util");
+    lua_setglobal(L, "embed");
+}
+
 static void setContextError(const char *message, size_t size) {
     if (!message) {
         context_error_size = 0;
@@ -125,6 +139,7 @@ uint32_t luauc_embed_v1_context_create(void) {
         return 0;
     }
     luaL_openlibs(context->state);
+    publishEmbedImport(context->state);
     luaL_sandbox(context->state);
     static const char source_name[] = "@main.luau";
     const int push_status = luauc_runtime_v1_push_program(

@@ -155,6 +155,7 @@ pub const lua_state_base_offset: u32 = 12;
 pub const lua_state_ci_offset: u32 = 20;
 pub const callinfo_func_offset: u32 = 4;
 pub const callinfo_top_offset: u32 = 8;
+pub const closure_env_offset: u32 = 20;
 pub const closure_l_proto_offset: u32 = 24;
 pub const proto_constants_offset: u32 = 8;
 pub const table_sizearray_offset: u32 = 8;

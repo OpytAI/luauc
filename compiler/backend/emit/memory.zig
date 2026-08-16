@@ -529,6 +529,9 @@ pub noinline fn emitGetSlotNodeAddr(
         (try self.constant(pc.value)).uintValue() == null or key.kind != .vm_const or
         key.value >= self.proto.vm_constant_count)
         return Error.InvalidOperandType;
+    const table_producer = try self.instruction(table.value);
+    if (table_producer.command != .load_env and !self.plan.isProvenTablePointer(table.value))
+        return Error.UnsupportedControlFlow;
     try self.body.localGet(self.allocator, 0);
     try self.emitPointerValue(table);
     try self.body.i32Const(self.allocator, @intCast(key.value));

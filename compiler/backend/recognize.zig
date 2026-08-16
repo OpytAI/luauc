@@ -11,6 +11,9 @@ const ir_cmd_dup_table = abi.ir_cmd_dup_table;
 const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
 const ir_cmd_setlist = abi.ir_cmd_setlist;
+const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
+const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
+const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
 const lua_tag_table = abi.lua_tag_table;
 
 pub const PlanSlices = struct {
@@ -65,6 +68,26 @@ pub const DupClosure = struct {
     finish: u32,
 };
 
+pub const EnvUse = enum { newclosure_env, global_cluster, rematerialize_env };
+
+pub const EnvLoad = struct {
+    id: u32,
+    use: EnvUse,
+};
+
+pub const Import = struct {
+    id: u32,
+    dest: u32,
+    key_count: u32,
+};
+
+pub const Global = struct {
+    id: u32,
+    op: enum { get, set },
+    value_reg: u32,
+    key: u32,
+};
+
 pub const Facts = struct {
     allocator: std.mem.Allocator,
     table_allocs: []TableAlloc,
@@ -77,6 +100,10 @@ pub const Facts = struct {
     dupclosures: []DupClosure,
     closure_index: []u32,
     dup_capture_index: []u32,
+    env_loads: []EnvLoad,
+    env_load_index: []u32,
+    imports: []Import,
+    globals: []Global,
 
     pub fn deinit(self: *Facts) void {
         self.allocator.free(self.table_allocs);
@@ -89,6 +116,10 @@ pub const Facts = struct {
         self.allocator.free(self.dupclosures);
         self.allocator.free(self.closure_index);
         self.allocator.free(self.dup_capture_index);
+        self.allocator.free(self.env_loads);
+        self.allocator.free(self.env_load_index);
+        self.allocator.free(self.imports);
+        self.allocator.free(self.globals);
         self.* = undefined;
     }
 
@@ -123,6 +154,15 @@ pub const Facts = struct {
         return instruction_id < self.dup_capture_index.len and
             self.dup_capture_index[instruction_id] != snapshot_v1.no_id;
     }
+
+    pub fn envLoadAt(self: Facts, instruction_id: u32) ?EnvLoad {
+        if (instruction_id >= self.env_load_index.len)
+            return null;
+        const index = self.env_load_index[instruction_id];
+        if (index == snapshot_v1.no_id)
+            return null;
+        return self.env_loads[index];
+    }
 };
 
 pub fn recognize(
@@ -144,6 +184,12 @@ pub fn recognize(
     defer closures.deinit(allocator);
     var dupclosures: std.ArrayList(DupClosure) = .empty;
     defer dupclosures.deinit(allocator);
+    var env_loads: std.ArrayList(EnvLoad) = .empty;
+    defer env_loads.deinit(allocator);
+    var imports: std.ArrayList(Import) = .empty;
+    defer imports.deinit(allocator);
+    var globals: std.ArrayList(Global) = .empty;
+    defer globals.deinit(allocator);
 
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
@@ -206,6 +252,43 @@ pub fn recognize(
             if (try newClosureRangeAt(snapshot, function, proto, instruction_id)) |decoded|
                 try closures.append(allocator, decoded);
 
+        if (instruction.command == .load_env)
+            try env_loads.append(allocator, .{
+                .id = instruction_id,
+                .use = envUseAt(snapshot, function, instruction_id),
+            });
+
+        if (instruction.command == .get_cached_import and instruction.operand_count == 4) {
+            const dest = try snapshot.irOperand(instruction, 0);
+            const import_operand = try snapshot.irOperand(instruction, 1);
+            if (dest.kind == .vm_reg and import_operand.kind == .vm_const and
+                import_operand.value < proto.vm_constant_count)
+            {
+                const import = try snapshot.vmConstant(proto, import_operand.value);
+                if (import.kind == .import and import.payload1 >= 1 and import.payload1 <= 3)
+                    try imports.append(allocator, .{
+                        .id = instruction_id,
+                        .dest = dest.value,
+                        .key_count = import.payload1,
+                    });
+            }
+        }
+
+        if ((instruction.command == abi.ir_cmd_fallback_getglobal or
+            instruction.command == abi.ir_cmd_fallback_setglobal) and
+            instruction.operand_count == 3)
+        {
+            const value = try snapshot.irOperand(instruction, 1);
+            const key = try snapshot.irOperand(instruction, 2);
+            if (value.kind == .vm_reg and key.kind == .vm_const)
+                try globals.append(allocator, .{
+                    .id = instruction_id,
+                    .op = if (instruction.command == abi.ir_cmd_fallback_getglobal) .get else .set,
+                    .value_reg = value.value,
+                    .key = key.value,
+                });
+        }
+
         if (instruction.command == .fallback_dupclosure) {
             const pattern = model.dupClosurePattern(snapshot, function, proto, instruction_id) catch |err| switch (err) {
                 Error.UnsupportedControlFlow, Error.InvalidOperandCount, Error.InvalidOperandType => null,
@@ -240,6 +323,12 @@ pub fn recognize(
     errdefer allocator.free(closure_slice);
     const dupclosure_slice = try dupclosures.toOwnedSlice(allocator);
     errdefer allocator.free(dupclosure_slice);
+    const env_load_slice = try env_loads.toOwnedSlice(allocator);
+    errdefer allocator.free(env_load_slice);
+    const import_slice = try imports.toOwnedSlice(allocator);
+    errdefer allocator.free(import_slice);
+    const global_slice = try globals.toOwnedSlice(allocator);
+    errdefer allocator.free(global_slice);
 
     const plain_len_index = try allocator.alloc(u32, function.instruction_count);
     errdefer allocator.free(plain_len_index);
@@ -276,6 +365,12 @@ pub fn recognize(
             dup_capture_index[cursor] = @intCast(index);
     }
 
+    const env_load_index = try allocator.alloc(u32, function.instruction_count);
+    errdefer allocator.free(env_load_index);
+    @memset(env_load_index, snapshot_v1.no_id);
+    for (env_load_slice, 0..) |fact, index|
+        env_load_index[fact.id] = @intCast(index);
+
     return .{
         .allocator = allocator,
         .table_allocs = table_alloc_slice,
@@ -288,7 +383,26 @@ pub fn recognize(
         .dupclosures = dupclosure_slice,
         .closure_index = closure_index,
         .dup_capture_index = dup_capture_index,
+        .env_loads = env_load_slice,
+        .env_load_index = env_load_index,
+        .imports = import_slice,
+        .globals = global_slice,
     };
+}
+
+fn envUseAt(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    instruction_id: u32,
+) EnvUse {
+    if (instruction_id + 1 >= function.instruction_count)
+        return .rematerialize_env;
+    const next = snapshot.irInstruction(function, instruction_id + 1) catch return .rematerialize_env;
+    if (next.command == .newclosure)
+        return .newclosure_env;
+    if (next.command == ir_cmd_get_slot_node_addr)
+        return .global_cluster;
+    return .rematerialize_env;
 }
 
 fn newClosureRangeAt(

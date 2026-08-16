@@ -19,6 +19,30 @@ std::string readFile(const char *path) {
     return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
+int embedStamp(lua_State *L) {
+    lua_pushinteger(L, 1);
+    return 1;
+}
+
+void publishEmbedImport(lua_State *state) {
+    lua_createtable(state, 0, 1);
+    lua_createtable(state, 0, 1);
+    lua_pushcfunction(state, embedStamp, "stamp");
+    lua_setfield(state, -2, "stamp");
+    lua_setfield(state, -2, "util");
+    lua_setglobal(state, "embed");
+}
+
+void installWritableProxyGlobals(lua_State *state) {
+    lua_newtable(state);
+    lua_newtable(state);
+    lua_pushvalue(state, LUA_GLOBALSINDEX);
+    lua_setfield(state, -2, "__index");
+    lua_setreadonly(state, -1, true);
+    lua_setmetatable(state, -2);
+    lua_replace(state, LUA_GLOBALSINDEX);
+}
+
 bool pushChunk(lua_State *state, const std::string &source, const char *sourceName) {
     size_t bytecodeSize = 0;
     char *bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
@@ -110,6 +134,9 @@ int main(int argc, char **argv) {
     if (!state)
         return 2;
     luaL_openlibs(state);
+    publishEmbedImport(state);
+    luaL_sandbox(state);
+    installWritableProxyGlobals(state);
     if (!pushChunk(state, libSource, "@lib.luau") || lua_pcall(state, 0, 1, 0) != LUA_OK || !lua_isfunction(state, -1)) {
         reportStackError(state, "load lib");
         lua_close(state);
@@ -125,7 +152,6 @@ int main(int argc, char **argv) {
     lua_setglobal(state, "__luauc_proto_identity");
     lua_pushcfunction(state, requireModule, "require");
     lua_setglobal(state, "require");
-    luaL_sandbox(state);
     if (!pushChunk(state, mainSource, "@main.luau") || lua_pcall(state, 0, 1, 0) != LUA_OK || !lua_isfunction(state, -1)) {
         reportStackError(state, "load main");
         lua_close(state);

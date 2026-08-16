@@ -724,6 +724,16 @@ pub noinline fn emitTValueAddress(self: anytype, operand_value: snapshot_v1.IrOp
         else => return Error.UnsupportedOperand,
     }
 }
+pub noinline fn emitLoadEnv(self: anytype, instruction_id: u32) Error!void {
+    if (instruction_id >= self.slots.len or self.slots[instruction_id].shape != .pointer)
+        return Error.InvalidInstructionResult;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Load(self.allocator, 2, abi.closure_env_offset);
+    try self.emitInstructionResultSet(instruction_id);
+}
 pub noinline fn emitVmConstantAddress(self: anytype, operand_value: snapshot_v1.IrOperand) Error!void {
     if (operand_value.kind != .vm_const or operand_value.value >= self.proto.vm_constant_count)
         return Error.InvalidOperandType;

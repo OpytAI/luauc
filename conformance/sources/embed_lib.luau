@@ -46,6 +46,14 @@ return function(value, text)
     end
     local addedDup = addDup(value, 1)
 
+    local function globalBreadth(input)
+        embed_seen = input
+        coroutine.yield("gc-boundary")
+        local seen = embed_seen
+        local stamp = embed.util.stamp
+        return seen + stamp()
+    end
+
     local function closureBreadth(input, text)
         local function factory()
             local function blank()
@@ -216,6 +224,7 @@ return function(value, text)
     local functionResult = callStep(functionReceiver, value + 2)
     local tableBreadthResult = tableBreadth(value, text)
     local closureBreadthResult = closureBreadth(value, text)
+    local globalBreadthResult = globalBreadth(value)
     local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
@@ -238,7 +247,7 @@ return function(value, text)
 
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
-            + guardResult + tableBreadthResult + closureBreadthResult + addedDup
+            + guardResult + tableBreadthResult + closureBreadthResult + globalBreadthResult + addedDup
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

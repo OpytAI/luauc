@@ -129,10 +129,13 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
     switch (instruction_value.command) {
         .nop, .substitute, .mark_used, .mark_dead => return false,
         .load_env => {
-            if (instruction_id + 1 >= self.function.instruction_count or
-                (try self.instruction(instruction_id + 1)).command != .newclosure)
-                return Error.UnsupportedControlFlow;
-            _ = try self.newClosurePattern(instruction_id + 1);
+            if (instruction_id + 1 < self.function.instruction_count and
+                (try self.instruction(instruction_id + 1)).command == .newclosure)
+            {
+                _ = try self.newClosurePattern(instruction_id + 1);
+            } else {
+                try self.emitLoadEnv(instruction_id);
+            }
         },
         .get_closure_upval_addr => {
             if (self.plan.closureContaining(instruction_id) == null)

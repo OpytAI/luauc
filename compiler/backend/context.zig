@@ -139,6 +139,7 @@ pub const Context = struct {
     pub const emitStoreTValueOperand = core.emitStoreTValueOperand;
     pub const emitCopyTValueRegisterToAddress = core.emitCopyTValueRegisterToAddress;
     pub const emitStoreSplitTValue = core.emitStoreSplitTValue;
+    pub const emitLoadEnv = core.emitLoadEnv;
     pub const emitVmConstantAddress = core.emitVmConstantAddress;
     pub const emitI32Value = core.emitI32Value;
     pub const emitPointerValue = core.emitPointerValue;
