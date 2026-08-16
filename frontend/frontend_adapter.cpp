@@ -36,6 +36,131 @@ using namespace Luau::CodeGen;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 
+// Host userdata types follow the pinned Luau HostIrHooks contract (same class as CALLFB /
+// inline_plans): the production frontend emits NEW_USERDATA / CHECK_USERDATA_TAG / BARRIER_OBJ /
+// BARRIER_TABLE_BACK from ordinary typed Luau. Names must match CompileOptions.userdataTypes.
+static const char *const kUserdataCompileTypes[] = {"extra", "color", "vec2", "mat3", "vertex", nullptr};
+constexpr uint8_t kUserdataVec2Index = 2;
+constexpr int kTagVec2 = 12;
+constexpr int kVec2ByteSize = 8;
+
+static bool sourceMentionsUserdataType(const char *source, size_t size) {
+    // Only the types this frontend actually lowers. Do not scan "extra"/"color": those
+    // strings appear as ordinary identifiers in existing sources.
+    // Require a type annotation (`: vec2`) so constructor names like embed.vec2 do not
+    // enable typeInfoLevel for unrelated modules.
+    static const char kNeeded[] = ": vec2";
+    const size_t nameSize = sizeof(kNeeded) - 1;
+    if (nameSize > size)
+        return false;
+    for (size_t index = 0; index + nameSize <= size; ++index) {
+        if (memcmp(source + index, kNeeded, nameSize) == 0)
+            return true;
+    }
+    static const char kNeededTight[] = ":vec2";
+    const size_t tightSize = sizeof(kNeededTight) - 1;
+    for (size_t index = 0; index + tightSize <= size; ++index) {
+        if (memcmp(source + index, kNeededTight, tightSize) == 0)
+            return true;
+    }
+    return false;
+}
+
+template <typename Options>
+void applyUserdataCompileOptions(Options &options, const char *source, size_t size) {
+    options.userdataTypes = kUserdataCompileTypes;
+    if (sourceMentionsUserdataType(source, size))
+        options.typeInfoLevel = 1;
+}
+
+static bool compareMemberName(const char *member, size_t memberLength, const char *expected) {
+    const size_t expectedLength = strlen(expected);
+    return memberLength == expectedLength && memcmp(member, expected, expectedLength) == 0;
+}
+
+static uint8_t typeToUserdataIndex(uint8_t type) {
+    return uint8_t(type - LBC_TYPE_TAGGED_USERDATA_BASE);
+}
+
+static uint8_t userdataIndexToType(uint8_t userdataIndex) {
+    return uint8_t(LBC_TYPE_TAGGED_USERDATA_BASE + userdataIndex);
+}
+
+static bool isHookedUserdataType(uint8_t type) {
+    return type == LBC_TYPE_USERDATA ||
+           (type >= LBC_TYPE_TAGGED_USERDATA_BASE && type < LBC_TYPE_TAGGED_USERDATA_END);
+}
+
+static uint8_t userdataAccessBytecodeType(uint8_t type, const char *member, size_t memberLength) {
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Unit"))
+        return userdataIndexToType(kUserdataVec2Index);
+    return LBC_TYPE_ANY;
+}
+
+static uint8_t userdataNamecallBytecodeType(uint8_t type, const char *member, size_t memberLength) {
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Mark"))
+        return LBC_TYPE_NUMBER;
+    return LBC_TYPE_ANY;
+}
+
+// AOT guards use undef (canonical internal reject) rather than vm_exit so the snapshot never
+// asks the backend to resume bytecode. IrTranslation still emits CHECK_TAG + vm_exit in front
+// of the hook; emitCheckTag treats that userdata vm_exit as the same reject.
+static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
+                           int resultReg, int sourceReg, int pcpos) {
+    (void)pcpos;
+    if (!isHookedUserdataType(type) || !compareMemberName(member, memberLength, "Unit"))
+        return false;
+
+    IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+    build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+    build.inst(IrCmd::CHECK_GC);
+    IrOp created = build.inst(IrCmd::NEW_USERDATA, build.constUint(kVec2ByteSize), build.constUint(kTagVec2));
+    build.inst(IrCmd::BUFFER_WRITEI32, created, build.constUint(0), build.constUint(0),
+               build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::BUFFER_WRITEI32, created, build.constUint(4), build.constUint(0),
+               build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::STORE_POINTER, build.vmReg(resultReg), created);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TUSERDATA));
+    IrOp owner = build.inst(IrCmd::LOAD_POINTER, build.vmReg(resultReg));
+    build.inst(IrCmd::BARRIER_OBJ, owner, build.vmReg(sourceReg), build.undef());
+    // Remark a companion table after the object is published. sourceReg is free after BARRIER_OBJ.
+    IrOp bag = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
+    build.inst(IrCmd::STORE_POINTER, build.vmReg(sourceReg), bag);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(sourceReg), build.constTag(LUA_TTABLE));
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+    build.inst(IrCmd::BARRIER_TABLE_BACK, table);
+    return true;
+}
+
+static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
+                             int argResReg, int sourceReg, int params, int results, int pcpos) {
+    (void)pcpos;
+    if (!isHookedUserdataType(type) || !compareMemberName(member, memberLength, "Mark"))
+        return false;
+
+    IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+    build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+    build.loadAndCheckTag(build.vmReg(argResReg + 2), LUA_TTABLE, build.undef());
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
+    build.inst(IrCmd::BARRIER_TABLE_BACK, table);
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(argResReg), build.constDouble(1.0));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(argResReg), build.constTag(LUA_TNUMBER));
+    if (results == LUA_MULTRET)
+        build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(argResReg), build.constInt(1));
+    return true;
+}
+
+static HostIrHooks makeHostIrHooks() {
+    HostIrHooks hooks{};
+    hooks.cacheIndependentImports = true;
+    hooks.userdataAccessBytecodeType = userdataAccessBytecodeType;
+    hooks.userdataNamecallBytecodeType = userdataNamecallBytecodeType;
+    hooks.userdataAccess = userdataAccess;
+    hooks.userdataNamecall = userdataNamecall;
+    return hooks;
+}
+
 static_assert(sizeof(IrCmd) == 1, "FrontendSnapshotV1 pins IrCmd to one byte");
 static_assert(unsigned(IrCmd::JUMP_CMP_PROTOID) == 215, "IrCmd pin drift");
 static_assert(unsigned(IrOpKind::VmExit) == 9, "IrOpKind pin drift");
@@ -684,8 +809,7 @@ bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &
     SectionData &mapping = section(sections, LUAUC_SNAPSHOT_V1_BC_MAPPING);
 
     size_t totalInstructions = 0;
-    HostIrHooks hooks{};
-    hooks.cacheIndependentImports = true;
+    const HostIrHooks hooks = makeHostIrHooks();
 
     for (size_t functionIndex = 0; functionIndex < protos.size(); ++functionIndex) {
         Proto *proto = protos[functionIndex].proto;
@@ -888,6 +1012,7 @@ bool compileSource(const uint8_t *source, size_t sourceSize, uint32_t coverageLe
     options.optimizationLevel = 1;
     options.debugLevel = 1;
     options.coverageLevel = int(coverageLevel);
+    applyUserdataCompileOptions(options, sourceBytes, sourceSize);
     char *rawBytecode = luau_compile(sourceBytes, sourceSize, &options, &bytecodeSize);
     if (!rawBytecode || bytecodeSize == 0 || bytecodeSize > kMaxBytecodeBytes) {
         free(rawBytecode);
@@ -1036,6 +1161,8 @@ bool buildInlinedBytecode(const uint8_t *source, size_t sourceSize, uint32_t cov
     options.optimizationLevel = 1;
     options.debugLevel = 1;
     options.coverageLevel = int(coverageLevel);
+    applyUserdataCompileOptions(options, sourceSize ? reinterpret_cast<const char *>(source) : "",
+                                sourceSize);
     Luau::BytecodeBuilder original;
     std::string compileDiagnostic = Luau::compileInto(
         original,

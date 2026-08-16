@@ -55,14 +55,67 @@ int embedNewIter(lua_State *L) {
     return 1;
 }
 
-void publishEmbedImport(lua_State *state) {
+constexpr int kEmbedVec2Tag = 12;
+
+int embedVec2Mark(lua_State *L) {
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+int embedVec2Index(lua_State *L) {
+    size_t keySize = 0;
+    const char *key = luaL_checklstring(L, 2, &keySize);
+    if (keySize == 4 && memcmp(key, "Unit", 4) == 0) {
+        auto *payload = static_cast<float *>(lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag));
+        payload[0] = 0;
+        payload[1] = 0;
+        return 1;
+    }
+    if (keySize == 4 && memcmp(key, "Mark", 4) == 0) {
+        lua_pushcfunction(L, embedVec2Mark, "Mark");
+        return 1;
+    }
+    luaL_error(L, "invalid vec2 index");
+    return 0;
+}
+
+int embedVec2Namecall(lua_State *L) {
+    const char *name = lua_namecallatom(L, nullptr);
+    if (name && strcmp(name, "Mark") == 0)
+        return embedVec2Mark(L);
+    luaL_error(L, "invalid vec2 namecall");
+    return 0;
+}
+
+int embedNewVec2(lua_State *L) {
+    const float seed = float(luaL_checknumber(L, 1));
+    auto *payload = static_cast<float *>(lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag));
+    payload[0] = seed;
+    payload[1] = seed;
+    return 1;
+}
+
+void publishVec2Metatable(lua_State *state) {
     lua_createtable(state, 0, 2);
+    lua_pushcfunction(state, embedVec2Index, "__index");
+    lua_setfield(state, -2, "__index");
+    lua_pushcfunction(state, embedVec2Namecall, "__namecall");
+    lua_setfield(state, -2, "__namecall");
+    lua_setreadonly(state, -1, true);
+    lua_setuserdatametatable(state, kEmbedVec2Tag);
+}
+
+void publishEmbedImport(lua_State *state) {
+    publishVec2Metatable(state);
+    lua_createtable(state, 0, 3);
     lua_createtable(state, 0, 1);
     lua_pushcfunction(state, embedStamp, "stamp");
     lua_setfield(state, -2, "stamp");
     lua_setfield(state, -2, "util");
     lua_pushcfunction(state, embedNewIter, "iter");
     lua_setfield(state, -2, "iter");
+    lua_pushcfunction(state, embedNewVec2, "vec2");
+    lua_setfield(state, -2, "vec2");
     lua_setglobal(state, "embed");
 }
 
@@ -95,6 +148,9 @@ int requireModule(lua_State *state) {
     else if (nameSize == sizeof("proto_identity") - 1 &&
              memcmp(name, "proto_identity", sizeof("proto_identity") - 1) == 0)
         global = "__luauc_proto_identity";
+    else if (nameSize == sizeof("userdata_hooks") - 1 &&
+             memcmp(name, "userdata_hooks", sizeof("userdata_hooks") - 1) == 0)
+        global = "__luauc_userdata_hooks";
     if (!global) {
         luaL_error(state, "unknown module '%s'", name);
         return 0;
@@ -150,15 +206,18 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
+    if (argc != 5) {
         fprintf(stderr,
-                "usage: luauc-pinned-interpreter <lib.luau> <main.luau> <proto_identity.luau>\n");
+                "usage: luauc-pinned-interpreter <lib.luau> <main.luau> <proto_identity.luau> "
+                "<userdata_hooks.luau>\n");
         return 2;
     }
     std::string libSource = readFile(argv[1]);
     std::string mainSource = readFile(argv[2]);
     std::string protoIdentitySource = readFile(argv[3]);
-    if (libSource.empty() || mainSource.empty() || protoIdentitySource.empty()) {
+    std::string userdataHooksSource = readFile(argv[4]);
+    if (libSource.empty() || mainSource.empty() || protoIdentitySource.empty() ||
+        userdataHooksSource.empty()) {
         fprintf(stderr, "failed to read source corpus\n");
         return 2;
     }
@@ -183,6 +242,13 @@ int main(int argc, char **argv) {
         return 1;
     }
     lua_setglobal(state, "__luauc_proto_identity");
+    if (!pushChunk(state, userdataHooksSource, "@userdata_hooks.luau") ||
+        lua_pcall(state, 0, 1, 0) != LUA_OK || !lua_isfunction(state, -1)) {
+        reportStackError(state, "load userdata hooks module");
+        lua_close(state);
+        return 1;
+    }
+    lua_setglobal(state, "__luauc_userdata_hooks");
     lua_pushcfunction(state, requireModule, "require");
     lua_setglobal(state, "require");
     if (!pushChunk(state, mainSource, "@main.luau") || lua_pcall(state, 0, 1, 0) != LUA_OK || !lua_isfunction(state, -1)) {

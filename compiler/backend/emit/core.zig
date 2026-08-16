@@ -65,17 +65,12 @@ pub fn requireSingleBytecodeBlockRange(self: anytype, start: u32, finish: u32) E
     return requireSingleBytecodeBlockRangeFor(self.snapshot, self.function, start, finish);
 }
 pub fn requireSingleCompilableBlockRange(self: anytype, start: u32, finish: u32) Error!void {
-    var owner: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (block.isEmpty() or block.finish < start or block.start > finish)
-            continue;
-        if (owner != null or !block.kind.isCompilable() or block.start > start or block.finish < finish)
-            return Error.UnsupportedControlFlow;
-        owner = block_id;
-    }
-    if (owner == null)
+    const start_block = self.plan.instructionBlock(start) orelse return Error.UnsupportedControlFlow;
+    const finish_block = self.plan.instructionBlock(finish) orelse return Error.UnsupportedControlFlow;
+    if (start_block != finish_block)
+        return Error.UnsupportedControlFlow;
+    const block = try self.snapshot.irBlock(self.function, start_block);
+    if (block.isEmpty() or !block.kind.isCompilable() or block.start > start or block.finish < finish)
         return Error.UnsupportedControlFlow;
 }
 pub fn requireSingleCallBlockRange(self: anytype, start: u32, finish: u32) Error!void {

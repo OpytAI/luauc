@@ -14,6 +14,7 @@ const modules = [
     source: readFileSync(runfile(process.env.LUAUC_PROTO_IDENTITY), "utf8"),
     inlinePlans: [{ callerFunctionId: 2, feedbackSlot: 0, targetFunctionId: 0 }],
   },
+  { name: "userdata_hooks", source: readFileSync(runfile(process.env.LUAUC_USERDATA_HOOKS), "utf8") },
 ];
 const first = await compilePackage(compiler, profile, pack, modules, "main", { coverageLevel: 1 });
 const second = await compilePackage(compiler, profile, pack, modules, "main", { coverageLevel: 1 });
@@ -28,7 +29,8 @@ try {
       + (number + number) + number * number + (-number) + 1 + 1 + (text.length * 2 + 1) + text.length * 2 + 3;
     const iterationResult = 12 * number + 16;
     const ksResult = (number + 1) + (number + 2);
-    const expectedNumber = 32 * number + 175 + text.length + protoResult + operatorResult + iterationResult + ksResult;
+    const userdataResult = 1;
+    const expectedNumber = 32 * number + 175 + text.length + protoResult + operatorResult + iterationResult + ksResult + userdataResult;
     const expectedText = `${text}:${number + 1}:2/1/11:missing`;
     if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
       throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${expectedNumber}/${expectedText}`);

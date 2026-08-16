@@ -32,6 +32,8 @@ const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
 const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
 const ir_cmd_check_array_size = abi.ir_cmd_check_array_size;
 const ir_cmd_do_len = abi.ir_cmd_do_len;
+const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
+const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_concat = abi.ir_cmd_concat;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
@@ -358,6 +360,8 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         ir_cmd_invoke_libm => try self.emitLibm(instruction_id, instruction_value),
         ir_cmd_fastcall => try self.emitDirectFastcall(instruction_value),
+        ir_cmd_new_userdata => try self.emitNewUserdata(instruction_id, instruction_value),
+        ir_cmd_table_len => try self.emitGeneralTableLen(instruction_id, instruction_value),
         ir_cmd_string_len => try self.emitStringLen(instruction_id, instruction_value),
         .coverage => try self.emitCoverage(instruction_id, instruction_value),
         .interrupt => try self.emitInterrupt(instruction_id, instruction_value),

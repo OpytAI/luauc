@@ -300,7 +300,6 @@ pub const Context = struct {
     // allocations
     pub const tableAllocationPatternAt = allocations.tableAllocationPatternAt;
     pub const isDeferredTableInitializationCommand = allocations.isDeferredTableInitializationCommand;
-    pub const checkGcClosesDeferredTableAllocation = allocations.checkGcClosesDeferredTableAllocation;
     pub const userdataWriteWidth = allocations.userdataWriteWidth;
     pub const userdataAllocationPatternAt = allocations.userdataAllocationPatternAt;
     pub const userdataAllocationPatternContaining = allocations.userdataAllocationPatternContaining;
@@ -334,6 +333,7 @@ pub const Context = struct {
     pub const tableAllocationPatternContaining = namecall.tableAllocationPatternContaining;
     pub const emitTableAllocation = namecall.emitTableAllocation;
     pub const emitUserdataAllocationInstruction = namecall.emitUserdataAllocationInstruction;
+    pub const emitNewUserdata = namecall.emitNewUserdata;
     pub const emitSetList = namecall.emitSetList;
     pub const commandRangeMatches = namecall.commandRangeMatches;
     pub const concatPatternAt = namecall.concatPatternAt;
@@ -393,6 +393,7 @@ pub const Context = struct {
     pub const tableLenPattern = tables.tableLenPattern;
     pub const dynamicLengthPattern = tables.dynamicLengthPattern;
     pub const emitPlainTableLen = tables.emitPlainTableLen;
+    pub const emitGeneralTableLen = tables.emitGeneralTableLen;
 
     // operators
     pub const powPattern = operators.powPattern;

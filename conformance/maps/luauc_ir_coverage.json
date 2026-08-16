@@ -1716,10 +1716,10 @@
       "runtime_symbols": [
         "luauc_runtime_v1_table_len"
       ],
-      "may_allocate": false,
-      "may_raise": false,
-      "may_call_luau": false,
-      "safepoint": false,
+      "may_allocate": true,
+      "may_raise": true,
+      "may_call_luau": true,
+      "safepoint": true,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1826; CodeGen/src/IrLoweringA64.cpp:1774; luaH_getn",
       "tests": [
@@ -1889,7 +1889,11 @@
       "safepoint": true,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1915; CodeGen/src/IrLoweringA64.cpp:1888; lua_newuserdatatagged",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -2691,7 +2695,11 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2572; CodeGen/src/IrLoweringA64.cpp:2603",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -2826,7 +2834,11 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2640; CodeGen/src/IrLoweringA64.cpp:2727; luaC_barrierf",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -2843,7 +2855,11 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2643; CodeGen/src/IrLoweringA64.cpp:2748; luaC_barriertable",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test",
+        "//hosts/js:embed_test",
+        "//hosts/wasmtime:parity_test"
+      ],
       "status": "implemented"
     },
     {
@@ -3443,7 +3459,9 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:3744; CodeGen/src/IrLoweringA64.cpp:3120",
-      "tests": [],
+      "tests": [
+        "//compiler/backend:frontend_to_wasm_test"
+      ],
       "status": "implemented"
     },
     {

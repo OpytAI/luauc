@@ -496,13 +496,15 @@ pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_
             .check_tag => if (instruction_value.operand_count == 3) {
                 const failure = try snapshot.irOperand(instruction_value, 2);
                 if (failure.kind == .vm_exit) {
-                    if (failure.value >= proto.code_count)
-                        return Error.UnsupportedControlFlow;
-                    const word = try snapshot.bytecodeWord(proto, failure.value);
-                    if (@as(u8, @truncate(word)) == abi.lop_fornprep)
-                        needs.forn_prepare = true
-                    else
+                    if (failure.value < proto.code_count) {
+                        const word = try snapshot.bytecodeWord(proto, failure.value);
+                        if (@as(u8, @truncate(word)) == abi.lop_fornprep)
+                            needs.forn_prepare = true
+                        else
+                            needs.builtin_type_error = true;
+                    } else {
                         needs.builtin_type_error = true;
+                    }
                     needs.set_location = true;
                 }
             },

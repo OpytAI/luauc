@@ -533,6 +533,41 @@ async function executeCoveragePackageShape() {
   return { objectSize: first.length, sites: irSites };
 }
 
+function executeUserdataHooksPackageShape() {
+  const name = "userdata-hooks-package-shape";
+  const source = readFileSync(
+    runfile(process.env.LUAUC_USERDATA_HOOKS_SOURCE, "LUAUC_USERDATA_HOOKS_SOURCE"),
+    "utf8",
+  );
+  const snapshot = frontendSnapshot(source, "@userdata_hooks.luau");
+  const shape = snapshotShape(snapshot);
+  const commandCounts = new Map();
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
+      const command = shape.instruction(functionId, instructionId).command;
+      commandCounts.set(command, (commandCounts.get(command) ?? 0) + 1);
+    }
+    try {
+      backendObject(snapshot, functionId);
+    } catch (error) {
+      const commands = Array.from(
+        { length: shape.instructionCount(functionId) },
+        (_, id) => {
+          const instruction = shape.instruction(functionId, id);
+          const ops = Array.from({ length: instruction.operandCount }, (_, operandId) => {
+            const operand = instruction.operand(operandId);
+            return `${operand.kind}:${operand.value}`;
+          });
+          return `${id}:${instruction.command}(${ops.join(",")})`;
+        },
+      );
+      throw new Error(`${name}: function ${functionId} failed: ${error.message}; commands ${commands.join(" ")}`);
+    }
+  }
+  const object = backendPackage(snapshot);
+  return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
+}
+
 function executeEmbedNamecallFamilyPackageShape() {
   const name = "embed-namecall-family-package-shape";
   const source = readFileSync(
@@ -561,6 +596,11 @@ function executeEmbedNamecallFamilyPackageShape() {
   let importPayload1Offset = null;
   let getglobalKeyOperand = null;
   let globalEnvPointerOperand = null;
+  let ksFallbackCommand = null;
+  let ksKeyOperand = null;
+  let ksTableOperand = null;
+  let ksRejoinOperand = null;
+  let ksJumpOffset = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     const blockByInstruction = new Map();
     for (let blockId = 0; blockId < shape.blockCount(functionId); blockId++) {
@@ -649,6 +689,20 @@ function executeEmbedNamecallFamilyPackageShape() {
       }
       if (command === 135 && instruction.operand(0).kind === 9) {
         safeEnvironmentVmExits.push(`${functionId}:${instructionId}/pc${instruction.operand(0).value}`);
+      }
+      if ((command === 162 || command === 163) && instruction.operandCount >= 4) {
+        ksFallbackCommand ??= { functionId, instructionId, offset: instruction.offset, command };
+        ksTableOperand ??= instruction.operand(2);
+        ksKeyOperand ??= instruction.operand(3);
+        const blockId = blockByInstruction.get(instructionId);
+        const block = blockId === undefined ? null : shape.block(functionId, blockId);
+        if (block && block.finish > instructionId) {
+          const jump = shape.instruction(functionId, block.finish);
+          if (jump.command === 88 && jump.operandCount === 1) {
+            ksRejoinOperand ??= jump.operand(0);
+            ksJumpOffset ??= jump.offset;
+          }
+        }
       }
     }
     try {
@@ -856,6 +910,22 @@ function executeEmbedNamecallFamilyPackageShape() {
     globalEnvPointerOperand.offset + 4,
   );
   expectPackageRejection(malformedGlobalEnv, "LOAD_ENV of a global cluster rewritten so GET_SLOT_NODE_ADDR pointer is not that instruction");
+  if (ksFallbackCommand === null || ksKeyOperand === null || ksTableOperand === null)
+    throw new Error(`${name}: missing KS fallback operands`);
+  const malformedKsNop = Buffer.from(snapshot);
+  malformedKsNop.writeUInt8(0, ksFallbackCommand.offset);
+  expectPackageRejection(malformedKsNop, "KS fallback rewritten to NOP");
+  const malformedKsKey = Buffer.from(snapshot);
+  malformedKsKey.writeUInt8(6, ksKeyOperand.offset);
+  expectPackageRejection(malformedKsKey, "KS key no longer a string vm_const");
+  const malformedKsTable = Buffer.from(snapshot);
+  malformedKsTable.writeUInt32LE(250, ksTableOperand.offset + 4);
+  expectPackageRejection(malformedKsTable, "KS table/value register out of frame");
+  if (ksJumpOffset !== null) {
+    const malformedKsRejoin = Buffer.from(snapshot);
+    malformedKsRejoin.writeUInt8(0, ksJumpOffset);
+    expectPackageRejection(malformedKsRejoin, "KS fallback no longer jumps to the fast rejoin");
+  }
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
@@ -3230,6 +3300,12 @@ const fastBuiltins = await executeFastBuiltinsPackage();
 const bufferScalarMatrix = await executeBufferScalarMatrixPackage();
 const embedNamecallFamily = executeEmbedNamecallFamilyPackageShape();
 const protoIdentityControl = await executeProtoIdentityControlPackageShape();
+const userdataHooks = executeUserdataHooksPackageShape();
+for (const command of [105, 141, 147, 148])
+  if (!userdataHooks.commandCounts.get(command))
+    throw new Error(`Phase E hook did not execute command ${command} in the userdata-hooks snapshot`);
+if (!embedNamecallFamily.commandCounts.get(172))
+  throw new Error("compile-only MARK_DEAD is missing from the embed snapshot");
 
 console.log(
   `frontend -> IR -> relocatable wasm: scalar ${scalar.objectSize} bytes, loop ${loop.objectSize} bytes; ` +
@@ -3259,6 +3335,7 @@ console.log(
     `buffer scalar matrix ${bufferScalarMatrix.objectSize} bytes/${bufferScalarMatrix.functionCount} functions; ` +
     `embed NAMECALL family ${embedNamecallFamily.objectSize} bytes/${embedNamecallFamily.functionCount} functions; ` +
     `Proto identity control ${protoIdentityControl.objectSize} bytes/${protoIdentityControl.functionCount} functions; ` +
+    `userdata hooks ${userdataHooks.objectSize} bytes/${userdataHooks.functionCount} functions; ` +
     `multi-result package ${multiResultCall.objectSize} bytes/${multiResultCall.pairReturns} pair returns; ` +
     `interrupt calls ${scalar.interrupts}/${loop.interrupts}/${silent.interrupts}/${slowAdd.interrupts}; ` +
     `slow helpers ${slowAdd.helperCalls}`,

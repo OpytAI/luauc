@@ -1284,3 +1284,33 @@ pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) 
     try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
 }
+pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 1);
+    const pointer = try self.operand(instruction_value, 0);
+    const table_reg = (try self.loadedPointerRegister(pointer)) orelse
+        ((try self.rootedTablePointerRegister(pointer)) orelse return Error.UnsupportedControlFlow);
+    const dest_reg = (try tableLenDestination(self, instruction_id)) orelse return Error.UnsupportedControlFlow;
+    try self.emitPlainTableLen(dest_reg, table_reg);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, dest_reg * tvalue_size);
+    try self.body.opcode(self.allocator, 0xaa); // i32.trunc_f64_s
+    try self.emitInstructionResultSet(instruction_id);
+}
+
+fn tableLenDestination(self: anytype, table_len_id: u32) Error!?u32 {
+    if (self.plan.plainLenAt(table_len_id)) |fact|
+        return fact.dest_reg;
+    if (table_len_id + 2 >= self.function.instruction_count)
+        return null;
+    const convert = try self.instruction(table_len_id + 1);
+    const store = try self.instruction(table_len_id + 2);
+    if (convert.command != .int_to_num or convert.operand_count != 1 or
+        store.command != .store_double or store.operand_count != 2)
+        return null;
+    const converted = try self.operand(convert, 0);
+    const stored = try self.operand(store, 1);
+    if (converted.kind != .instruction or converted.value != table_len_id or
+        stored.kind != .instruction or stored.value != table_len_id + 1)
+        return null;
+    return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+}

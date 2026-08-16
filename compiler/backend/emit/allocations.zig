@@ -43,13 +43,10 @@ const lop_call = abi.lop_call;
 const lop_fastcall2k = abi.lop_fastcall2k;
 
 pub noinline fn tableAllocationPatternAt(self: anytype, start: u32) Error!?TableAllocationPattern {
-    return recognize.tableAllocationAt(self.snapshot, self.function, self.proto, start);
+    return recognize.tableAllocationAt(self.snapshot, self.function, self.proto, self.plan.instruction_blocks, start);
 }
 pub fn isDeferredTableInitializationCommand(_: anytype, command: snapshot_v1.IrCommand) bool {
     return recognize.isDeferredTableInitializationCommand(command);
-}
-pub fn checkGcClosesDeferredTableAllocation(self: anytype, instruction_id: u32) Error!bool {
-    return self.plan.deferredGcOwns(instruction_id);
 }
 pub fn userdataWriteWidth(_: anytype, command: snapshot_v1.IrCommand) ?u32 {
     return if (command == ir_cmd_buffer_writei8)
@@ -253,7 +250,7 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
     try self.body.localSet(self.allocator, self.slots[result_id].second);
 }
 pub noinline fn dupTablePatternAt(self: anytype, start: u32) Error!?DupTablePattern {
-    return recognize.dupTableAt(self.snapshot, self.function, self.proto, start);
+    return recognize.dupTableAt(self.snapshot, self.function, self.proto, self.plan.instruction_blocks, start);
 }
 pub noinline fn dupTablePatternContaining(self: anytype, instruction_id: u32) Error!?DupTablePattern {
     var distance: u32 = 0;

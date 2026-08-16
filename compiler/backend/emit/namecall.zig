@@ -19,6 +19,7 @@ const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
 const lua_tag_table = abi.lua_tag_table;
+const lua_utag_limit = abi.lua_utag_limit;
 
 pub fn blockReferenceCount(self: anytype, target: u32) Error!u32 {
     return self.plan.blockReferences(target) orelse Error.UnsupportedControlFlow;
@@ -322,6 +323,19 @@ pub noinline fn emitUserdataAllocationInstruction(
         return;
     }
     return Error.UnsupportedControlFlow;
+}
+pub noinline fn emitNewUserdata(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    const byte_size = try self.uintConstant(try self.operand(instruction_value, 0));
+    const user_tag = try self.uintConstant(try self.operand(instruction_value, 1));
+    if (user_tag >= lua_utag_limit)
+        return Error.InvalidOperandType;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(byte_size));
+    try self.body.i32Const(self.allocator, @intCast(user_tag));
+    try self.body.call(self.allocator, self.new_userdata orelse return Error.UnsupportedCommand);
+    try self.emitInstructionResultSet(instruction_id);
+    try self.emitReloadBase();
 }
 pub noinline fn emitSetList(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (instruction_value.operand_count != 6)

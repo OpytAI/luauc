@@ -92,14 +92,67 @@ static int embedNewIter(lua_State *L) {
     return 1;
 }
 
-static void publishEmbedImport(lua_State *L) {
+enum { kEmbedVec2Tag = 12 };
+
+static int embedVec2Mark(lua_State *L) {
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+static int embedVec2Index(lua_State *L) {
+    size_t key_size = 0;
+    const char *key = luaL_checklstring(L, 2, &key_size);
+    if (key_size == 4 && memcmp(key, "Unit", 4) == 0) {
+        float *payload = (float *)lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag);
+        payload[0] = 0;
+        payload[1] = 0;
+        return 1;
+    }
+    if (key_size == 4 && memcmp(key, "Mark", 4) == 0) {
+        lua_pushcfunction(L, embedVec2Mark, "Mark");
+        return 1;
+    }
+    luaL_error(L, "invalid vec2 index");
+    return 0;
+}
+
+static int embedVec2Namecall(lua_State *L) {
+    const char *name = lua_namecallatom(L, NULL);
+    if (name && strcmp(name, "Mark") == 0)
+        return embedVec2Mark(L);
+    luaL_error(L, "invalid vec2 namecall");
+    return 0;
+}
+
+static int embedNewVec2(lua_State *L) {
+    const float seed = (float)luaL_checknumber(L, 1);
+    float *payload = (float *)lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag);
+    payload[0] = seed;
+    payload[1] = seed;
+    return 1;
+}
+
+static void publishVec2Metatable(lua_State *L) {
     lua_createtable(L, 0, 2);
+    lua_pushcfunction(L, embedVec2Index, "__index");
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, embedVec2Namecall, "__namecall");
+    lua_setfield(L, -2, "__namecall");
+    lua_setreadonly(L, -1, 1);
+    lua_setuserdatametatable(L, kEmbedVec2Tag);
+}
+
+static void publishEmbedImport(lua_State *L) {
+    publishVec2Metatable(L);
+    lua_createtable(L, 0, 3);
     lua_createtable(L, 0, 1);
     lua_pushcfunction(L, embedStamp, "stamp");
     lua_setfield(L, -2, "stamp");
     lua_setfield(L, -2, "util");
     lua_pushcfunction(L, embedNewIter, "iter");
     lua_setfield(L, -2, "iter");
+    lua_pushcfunction(L, embedNewVec2, "vec2");
+    lua_setfield(L, -2, "vec2");
     lua_setglobal(L, "embed");
 }
 

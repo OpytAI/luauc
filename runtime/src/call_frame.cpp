@@ -1634,7 +1634,7 @@ extern "C" void luauc_runtime_v1_dupclosure_capture(lua_State *L, uint32_t desti
     TValue *uv = captureKind == LUAUC_AOT_CAPTURE_V1_VAL ? L->base + sourceIndex
                                                         : &parentClosure->l.uprefs[sourceIndex];
     if (ncl == kcl && luaO_rawequalObj(&ncl->l.uprefs[captureIndex], uv)) {
-        // Reuse the shared template slot.
+        // Pin LOP_DUPCLOSURE: matching preload slots stay on the shared template.
     } else if (ncl == kcl && kcl->preload == 0) {
         ncl = luaF_newLclosure(L, child->nups, parentClosure->env, child);
         setclvalue(L, L->base + destinationRegister, ncl);

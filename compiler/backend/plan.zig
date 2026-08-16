@@ -451,20 +451,12 @@ pub const FunctionPlan = struct {
         return self.facts.plainLenContaining(instruction_id);
     }
 
-    pub fn deferredGcOwns(self: FunctionPlan, check_gc_id: u32) bool {
-        return self.facts.deferredGcOwns(check_gc_id);
-    }
-
     pub fn closureContaining(self: FunctionPlan, instruction_id: u32) ?recognize.Closure {
         return self.facts.closureContaining(instruction_id);
     }
 
     pub fn dupClosureCaptureContaining(self: FunctionPlan, instruction_id: u32) bool {
         return self.facts.dupClosureCaptureContaining(instruction_id);
-    }
-
-    pub fn envLoadAt(self: FunctionPlan, instruction_id: u32) ?recognize.EnvLoad {
-        return self.facts.envLoadAt(instruction_id);
     }
 
     pub fn instructionBlock(self: FunctionPlan, instruction_id: u32) ?u32 {

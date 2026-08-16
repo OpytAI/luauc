@@ -234,6 +234,7 @@ int32_t luauc_runtime_v1_fastcall(lua_State *state, uint32_t builtin_id,
 uint32_t luauc_runtime_v1_type_name(lua_State *state, uint32_t destination_register,
                                   uint32_t source_register, uint32_t custom_name);
 double luauc_runtime_v1_libm(uint32_t builtin_id, double first, double second);
+// May allocate, raise, or call Luau: a linearized #t with a metatable falls through to do_len.
 void luauc_runtime_v1_table_len(lua_State *state, uint32_t destination_register,
                               uint32_t table_register);
 void luauc_runtime_v1_concat(lua_State *state, uint32_t destination_register, uint32_t source_start,

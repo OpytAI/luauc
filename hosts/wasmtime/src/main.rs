@@ -432,8 +432,8 @@ fn run_inputs(engine: &Engine, artifact: &[u8], arguments: &[String]) -> Result<
 }
 
 fn compile_run(arguments: &[String]) -> Result<()> {
-    if arguments.len() < 8 || (arguments.len() - 6) % 2 != 0 {
-        bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <proto_identity.luau> <number> <text> [<number> <text> ...]");
+    if arguments.len() < 9 || (arguments.len() - 7) % 2 != 0 {
+        bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <proto_identity.luau> <userdata_hooks.luau> <number> <text> [<number> <text> ...]");
     }
     let compiler = fs::read(&arguments[0]).context("read compiler")?;
     let profile = fs::read(&arguments[1]).context("read profile")?;
@@ -461,6 +461,12 @@ fn compile_run(arguments: &[String]) -> Result<()> {
                 target_function_id: 0,
             }],
         },
+        SourceModule {
+            name: b"userdata_hooks".to_vec(),
+            source_name: b"@userdata_hooks.luau".to_vec(),
+            source: fs::read(&arguments[6]).context("read userdata hooks source")?,
+            inline_plans: vec![],
+        },
     ];
     let engine = Engine::default();
     let compiler_module = Module::from_binary(&engine, &compiler)?;
@@ -473,7 +479,7 @@ fn compile_run(arguments: &[String]) -> Result<()> {
         bail!("Wasmtime compiler output is nondeterministic");
     }
     println!("artifact={}", hex(&digest(&artifact)));
-    run_inputs(&engine, &artifact, &arguments[6..])
+    run_inputs(&engine, &artifact, &arguments[7..])
 }
 
 fn main() -> Result<()> {
@@ -485,6 +491,6 @@ fn main() -> Result<()> {
             let artifact = fs::read(&arguments[1]).context("read artifact")?;
             run_inputs(&engine, &artifact, &arguments[2..])
         }
-        _ => bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <proto_identity.luau> <number> <text>... | run <artifact.wasm> <number> <text>..."),
+        _ => bail!("usage: luauc-embed-wasmtime compile-run <compiler.wasm> <profile> <pack.wasm> <lib.luau> <main.luau> <proto_identity.luau> <userdata_hooks.luau> <number> <text>... | run <artifact.wasm> <number> <text>..."),
     }
 }

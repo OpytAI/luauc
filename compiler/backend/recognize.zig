@@ -12,8 +12,9 @@ const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
 const ir_cmd_setlist = abi.ir_cmd_setlist;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
-const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
-const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
+const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
+const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
+const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const lua_tag_table = abi.lua_tag_table;
 
 pub const PlanSlices = struct {
@@ -30,13 +31,6 @@ pub const TableAlloc = struct {
     node_count: u32,
     deferred_to_later_gc: bool,
     check_gc_id: ?u32,
-};
-
-pub const DupTable = struct {
-    start: u32,
-    finish: u32,
-    dest_reg: u32,
-    vm_const_id: u32,
 };
 
 pub const SetList = struct {
@@ -68,58 +62,22 @@ pub const DupClosure = struct {
     finish: u32,
 };
 
-pub const EnvUse = enum { newclosure_env, global_cluster, rematerialize_env };
-
-pub const EnvLoad = struct {
-    id: u32,
-    use: EnvUse,
-};
-
-pub const Import = struct {
-    id: u32,
-    dest: u32,
-    key_count: u32,
-};
-
-pub const Global = struct {
-    id: u32,
-    op: enum { get, set },
-    value_reg: u32,
-    key: u32,
-};
-
 pub const Facts = struct {
     allocator: std.mem.Allocator,
-    table_allocs: []TableAlloc,
-    dup_tables: []DupTable,
-    setlists: []SetList,
     plain_lens: []PlainLen,
     plain_len_index: []u32,
-    deferred_gc_owns: []bool,
     closures: []Closure,
     dupclosures: []DupClosure,
     closure_index: []u32,
     dup_capture_index: []u32,
-    env_loads: []EnvLoad,
-    env_load_index: []u32,
-    imports: []Import,
-    globals: []Global,
 
     pub fn deinit(self: *Facts) void {
-        self.allocator.free(self.table_allocs);
-        self.allocator.free(self.dup_tables);
-        self.allocator.free(self.setlists);
         self.allocator.free(self.plain_lens);
         self.allocator.free(self.plain_len_index);
-        self.allocator.free(self.deferred_gc_owns);
         self.allocator.free(self.closures);
         self.allocator.free(self.dupclosures);
         self.allocator.free(self.closure_index);
         self.allocator.free(self.dup_capture_index);
-        self.allocator.free(self.env_loads);
-        self.allocator.free(self.env_load_index);
-        self.allocator.free(self.imports);
-        self.allocator.free(self.globals);
         self.* = undefined;
     }
 
@@ -137,10 +95,6 @@ pub const Facts = struct {
         return self.plain_lens[index];
     }
 
-    pub fn deferredGcOwns(self: Facts, check_gc_id: u32) bool {
-        return check_gc_id < self.deferred_gc_owns.len and self.deferred_gc_owns[check_gc_id];
-    }
-
     pub fn closureContaining(self: Facts, instruction_id: u32) ?Closure {
         if (instruction_id >= self.closure_index.len)
             return null;
@@ -155,14 +109,6 @@ pub const Facts = struct {
             self.dup_capture_index[instruction_id] != snapshot_v1.no_id;
     }
 
-    pub fn envLoadAt(self: Facts, instruction_id: u32) ?EnvLoad {
-        if (instruction_id >= self.env_load_index.len)
-            return null;
-        const index = self.env_load_index[instruction_id];
-        if (index == snapshot_v1.no_id)
-            return null;
-        return self.env_loads[index];
-    }
 };
 
 pub fn recognize(
@@ -172,28 +118,16 @@ pub fn recognize(
     proto: snapshot_v1.Proto,
     slices: PlanSlices,
 ) Error!Facts {
-    var table_allocs: std.ArrayList(TableAlloc) = .empty;
-    defer table_allocs.deinit(allocator);
-    var dup_tables: std.ArrayList(DupTable) = .empty;
-    defer dup_tables.deinit(allocator);
-    var setlists: std.ArrayList(SetList) = .empty;
-    defer setlists.deinit(allocator);
     var plain_lens: std.ArrayList(PlainLen) = .empty;
     defer plain_lens.deinit(allocator);
     var closures: std.ArrayList(Closure) = .empty;
     defer closures.deinit(allocator);
     var dupclosures: std.ArrayList(DupClosure) = .empty;
     defer dupclosures.deinit(allocator);
-    var env_loads: std.ArrayList(EnvLoad) = .empty;
-    defer env_loads.deinit(allocator);
-    var imports: std.ArrayList(Import) = .empty;
-    defer imports.deinit(allocator);
-    var globals: std.ArrayList(Global) = .empty;
-    defer globals.deinit(allocator);
 
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
-        if (try tableAllocationAt(snapshot, function, proto, instruction_id)) |pattern| {
+        if (try tableAllocationAt(snapshot, function, proto, slices.instruction_blocks, instruction_id)) |pattern| {
             var alloc = TableAlloc{
                 .start = pattern.start,
                 .finish = pattern.finish,
@@ -204,7 +138,6 @@ pub fn recognize(
                 .check_gc_id = null,
             };
             try attachDeferredGc(snapshot, function, slices.instruction_blocks, &alloc);
-            try table_allocs.append(allocator, alloc);
             instruction_id = pattern.finish;
             continue;
         }
@@ -225,69 +158,24 @@ pub fn recognize(
                 .check_gc_id = null,
             };
             try attachDeferredGc(snapshot, function, slices.instruction_blocks, &alloc);
-            try table_allocs.append(allocator, alloc);
             continue;
         }
 
-        if (try dupTableAt(snapshot, function, proto, instruction_id)) |pattern| {
-            try dup_tables.append(allocator, .{
-                .start = pattern.start,
-                .finish = pattern.finish,
-                .dest_reg = pattern.destination,
-                .vm_const_id = pattern.constant_id,
-            });
+        if (try dupTableAt(snapshot, function, proto, slices.instruction_blocks, instruction_id)) |pattern| {
             instruction_id = pattern.finish;
             continue;
         }
 
         if (instruction.command == ir_cmd_setlist)
-            if (try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction)) |decoded|
-                try setlists.append(allocator, decoded);
+            _ = try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction);
 
         if (instruction.command == ir_cmd_table_len)
             if (try plainLenAt(snapshot, function, proto, slices, instruction_id, instruction)) |decoded|
                 try plain_lens.append(allocator, decoded);
 
         if (instruction.command == .newclosure)
-            if (try newClosureRangeAt(snapshot, function, proto, instruction_id)) |decoded|
+            if (try newClosureRangeAt(snapshot, function, proto, slices.instruction_blocks, instruction_id)) |decoded|
                 try closures.append(allocator, decoded);
-
-        if (instruction.command == .load_env)
-            try env_loads.append(allocator, .{
-                .id = instruction_id,
-                .use = envUseAt(snapshot, function, instruction_id),
-            });
-
-        if (instruction.command == .get_cached_import and instruction.operand_count == 4) {
-            const dest = try snapshot.irOperand(instruction, 0);
-            const import_operand = try snapshot.irOperand(instruction, 1);
-            if (dest.kind == .vm_reg and import_operand.kind == .vm_const and
-                import_operand.value < proto.vm_constant_count)
-            {
-                const import = try snapshot.vmConstant(proto, import_operand.value);
-                if (import.kind == .import and import.payload1 >= 1 and import.payload1 <= 3)
-                    try imports.append(allocator, .{
-                        .id = instruction_id,
-                        .dest = dest.value,
-                        .key_count = import.payload1,
-                    });
-            }
-        }
-
-        if ((instruction.command == abi.ir_cmd_fallback_getglobal or
-            instruction.command == abi.ir_cmd_fallback_setglobal) and
-            instruction.operand_count == 3)
-        {
-            const value = try snapshot.irOperand(instruction, 1);
-            const key = try snapshot.irOperand(instruction, 2);
-            if (value.kind == .vm_reg and key.kind == .vm_const)
-                try globals.append(allocator, .{
-                    .id = instruction_id,
-                    .op = if (instruction.command == abi.ir_cmd_fallback_getglobal) .get else .set,
-                    .value_reg = value.value,
-                    .key = key.value,
-                });
-        }
 
         if (instruction.command == .fallback_dupclosure) {
             const pattern = model.dupClosurePattern(snapshot, function, proto, instruction_id) catch |err| switch (err) {
@@ -311,24 +199,12 @@ pub fn recognize(
         }
     }
 
-    const table_alloc_slice = try table_allocs.toOwnedSlice(allocator);
-    errdefer allocator.free(table_alloc_slice);
-    const dup_table_slice = try dup_tables.toOwnedSlice(allocator);
-    errdefer allocator.free(dup_table_slice);
-    const setlist_slice = try setlists.toOwnedSlice(allocator);
-    errdefer allocator.free(setlist_slice);
     const plain_len_slice = try plain_lens.toOwnedSlice(allocator);
     errdefer allocator.free(plain_len_slice);
     const closure_slice = try closures.toOwnedSlice(allocator);
     errdefer allocator.free(closure_slice);
     const dupclosure_slice = try dupclosures.toOwnedSlice(allocator);
     errdefer allocator.free(dupclosure_slice);
-    const env_load_slice = try env_loads.toOwnedSlice(allocator);
-    errdefer allocator.free(env_load_slice);
-    const import_slice = try imports.toOwnedSlice(allocator);
-    errdefer allocator.free(import_slice);
-    const global_slice = try globals.toOwnedSlice(allocator);
-    errdefer allocator.free(global_slice);
 
     const plain_len_index = try allocator.alloc(u32, function.instruction_count);
     errdefer allocator.free(plain_len_index);
@@ -337,14 +213,6 @@ pub fn recognize(
         var cursor = fact.table_len_id;
         while (cursor <= fact.finish) : (cursor += 1)
             plain_len_index[cursor] = @intCast(index);
-    }
-
-    const deferred_gc_owns = try allocator.alloc(bool, function.instruction_count);
-    errdefer allocator.free(deferred_gc_owns);
-    @memset(deferred_gc_owns, false);
-    for (table_alloc_slice) |alloc| {
-        if (alloc.check_gc_id) |check_gc_id|
-            deferred_gc_owns[check_gc_id] = true;
     }
 
     const closure_index = try allocator.alloc(u32, function.instruction_count);
@@ -365,50 +233,22 @@ pub fn recognize(
             dup_capture_index[cursor] = @intCast(index);
     }
 
-    const env_load_index = try allocator.alloc(u32, function.instruction_count);
-    errdefer allocator.free(env_load_index);
-    @memset(env_load_index, snapshot_v1.no_id);
-    for (env_load_slice, 0..) |fact, index|
-        env_load_index[fact.id] = @intCast(index);
-
     return .{
         .allocator = allocator,
-        .table_allocs = table_alloc_slice,
-        .dup_tables = dup_table_slice,
-        .setlists = setlist_slice,
         .plain_lens = plain_len_slice,
         .plain_len_index = plain_len_index,
-        .deferred_gc_owns = deferred_gc_owns,
         .closures = closure_slice,
         .dupclosures = dupclosure_slice,
         .closure_index = closure_index,
         .dup_capture_index = dup_capture_index,
-        .env_loads = env_load_slice,
-        .env_load_index = env_load_index,
-        .imports = import_slice,
-        .globals = global_slice,
     };
-}
-
-fn envUseAt(
-    snapshot: snapshot_v1.Snapshot,
-    function: snapshot_v1.IrFunction,
-    instruction_id: u32,
-) EnvUse {
-    if (instruction_id + 1 >= function.instruction_count)
-        return .rematerialize_env;
-    const next = snapshot.irInstruction(function, instruction_id + 1) catch return .rematerialize_env;
-    if (next.command == .newclosure)
-        return .newclosure_env;
-    if (next.command == ir_cmd_get_slot_node_addr)
-        return .global_cluster;
-    return .rematerialize_env;
 }
 
 fn newClosureRangeAt(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
     proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
     newclosure_id: u32,
 ) Error!?Closure {
     if (newclosure_id < 2 or newclosure_id + 2 >= function.instruction_count)
@@ -438,24 +278,12 @@ fn newClosureRangeAt(
             if ((gc_marker.command == .check_gc or gc_marker.command == .nop) and gc_marker.operand_count == 0)
                 finish = cursor;
         }
-        requireSingleCompilableBlockRange(snapshot, function, newclosure_id - 2, finish) catch return null;
+        requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, newclosure_id - 2, finish) catch return null;
         return .{ .newclosure_id = newclosure_id, .start = newclosure_id - 2, .finish = finish };
     }
     var remaining = capture_count;
     while (remaining != 0 and cursor < function.instruction_count) {
-        var first = try snapshot.irInstruction(function, cursor);
-        while (first.command == .nop and cursor + 1 < function.instruction_count) {
-            cursor += 1;
-            first = try snapshot.irInstruction(function, cursor);
-        }
-        if (first.command == .load_tvalue) {
-            cursor += 3;
-        } else if (first.command == .findupval) {
-            cursor += 4;
-        } else if (first.command == .get_closure_upval_addr) {
-            const closure = try snapshot.irOperand(first, 0);
-            cursor += if (closure.kind == .instruction) @as(u32, 2) else 4;
-        } else return null;
+        cursor = (try skipInitializedCapture(snapshot, function, cursor)) orelse return null;
         remaining -= 1;
     }
     if (remaining != 0)
@@ -477,14 +305,73 @@ fn newClosureRangeAt(
     if (cursor == 0)
         return null;
     finish = cursor - 1;
-    requireSingleCompilableBlockRange(snapshot, function, newclosure_id - 2, finish) catch return null;
+    requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, newclosure_id - 2, finish) catch return null;
     return .{ .newclosure_id = newclosure_id, .start = newclosure_id - 2, .finish = finish };
+}
+
+fn skipInitializedCapture(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    start: u32,
+) Error!?u32 {
+    if (start >= function.instruction_count)
+        return null;
+    var cursor = start;
+    var first = try snapshot.irInstruction(function, cursor);
+    while (first.command == .nop) {
+        if (cursor + 1 >= function.instruction_count)
+            return null;
+        cursor += 1;
+        first = try snapshot.irInstruction(function, cursor);
+    }
+    if (first.command == .load_tvalue) {
+        if (cursor + 2 >= function.instruction_count)
+            return null;
+        const address = try snapshot.irInstruction(function, cursor + 1);
+        const store = try snapshot.irInstruction(function, cursor + 2);
+        if (address.command != .get_closure_upval_addr or store.command != .store_tvalue)
+            return null;
+        return cursor + 3;
+    }
+    if (first.command == .findupval) {
+        if (cursor + 3 >= function.instruction_count)
+            return null;
+        const address = try snapshot.irInstruction(function, cursor + 1);
+        const pointer_store = try snapshot.irInstruction(function, cursor + 2);
+        const tag_store = try snapshot.irInstruction(function, cursor + 3);
+        if (address.command != .get_closure_upval_addr or pointer_store.command != .store_pointer or
+            tag_store.command != .store_tag)
+            return null;
+        return cursor + 4;
+    }
+    if (first.command != .get_closure_upval_addr)
+        return null;
+    const closure = try snapshot.irOperand(first, 0);
+    if (closure.kind == .instruction) {
+        if (cursor + 1 >= function.instruction_count)
+            return null;
+        const store = try snapshot.irInstruction(function, cursor + 1);
+        if (store.command != .store_tvalue and store.command != .store_pointer and
+            store.command != .store_split_tvalue)
+            return null;
+        return cursor + 2;
+    }
+    if (cursor + 3 >= function.instruction_count)
+        return null;
+    const address = try snapshot.irInstruction(function, cursor + 1);
+    const load = try snapshot.irInstruction(function, cursor + 2);
+    const store = try snapshot.irInstruction(function, cursor + 3);
+    if (address.command != .get_closure_upval_addr or load.command != .load_tvalue or
+        store.command != .store_tvalue)
+        return null;
+    return cursor + 4;
 }
 
 pub fn tableAllocationAt(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
     proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
     start: u32,
 ) Error!?TableAllocationPattern {
     if (function.instruction_count < 3 or start > function.instruction_count - 3)
@@ -507,7 +394,7 @@ pub fn tableAllocationAt(
             finish = start + 3;
         }
     }
-    requireSingleCompilableBlockRange(snapshot, function, start, finish) catch return null;
+    requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, start, finish) catch return null;
     const destination = try snapshot.irOperand(store_pointer, 0);
     const pointer = try snapshot.irOperand(store_pointer, 1);
     const tag_destination = try snapshot.irOperand(store_tag, 0);
@@ -532,6 +419,7 @@ pub fn dupTableAt(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
     proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
     start: u32,
 ) Error!?DupTablePattern {
     const prefix = [_]snapshot_v1.IrCommand{
@@ -556,7 +444,7 @@ pub fn dupTableAt(
             assist = possible_gc.command == .check_gc;
         }
     }
-    requireSingleCompilableBlockRange(snapshot, function, start, finish) catch return null;
+    requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, start, finish) catch return null;
     if (load.operand_count != 1 or duplicate.operand_count != 1 or
         store_pointer.operand_count != 2 or store_tag.operand_count != 2)
         return null;
@@ -587,27 +475,17 @@ pub fn dupTableAt(
 
 pub fn isDeferredTableInitializationCommand(command: snapshot_v1.IrCommand) bool {
     return switch (command) {
-        .nop,
-        .substitute,
-        .mark_used,
-        .mark_dead,
-        .load_tag,
-        .load_pointer,
-        .load_int,
-        .load_int64,
-        .load_float,
-        .load_double,
-        .load_tvalue,
-        .store_tag,
-        .store_pointer,
-        .store_extra,
-        .store_int,
-        .store_int64,
-        .store_double,
-        .store_vector,
+        ir_cmd_setlist,
         .store_tvalue,
         .store_split_tvalue,
-        ir_cmd_new_table,
+        .store_tag,
+        .store_pointer,
+        .store_double,
+        .store_vector,
+        ir_cmd_get_slot_node_addr,
+        ir_cmd_check_slot_match,
+        ir_cmd_check_readonly,
+        ir_cmd_barrier_table_forward,
         => true,
         else => false,
     };
@@ -672,8 +550,8 @@ fn plainLenAt(
         return null;
     if (!checkNoMetatableDominates(snapshot, function, slices, table_len_id, pointer.value))
         return null;
-    const table_reg = (try tableRegForPointer(snapshot, function, proto, pointer.value)) orelse return null;
-    const store = try storeClusterAfterLen(snapshot, function, proto, table_len_id) orelse return null;
+    const table_reg = (try tableRegForPointer(snapshot, function, proto, slices.instruction_blocks, pointer.value)) orelse return null;
+    const store = try storeClusterAfterLen(snapshot, function, proto, slices.instruction_blocks, table_len_id) orelse return null;
     return .{
         .table_len_id = table_len_id,
         .finish = store.finish,
@@ -687,6 +565,7 @@ fn storeClusterAfterLen(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
     proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
     table_len_id: u32,
 ) Error!?struct { dest_reg: u32, finish: u32 } {
     if (table_len_id + 2 >= function.instruction_count)
@@ -712,7 +591,7 @@ fn storeClusterAfterLen(
                 finish = table_len_id + 3;
         }
     }
-    requireSingleCompilableBlockRange(snapshot, function, table_len_id, finish) catch return null;
+    requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, table_len_id, finish) catch return null;
     return .{ .dest_reg = dest_reg, .finish = finish };
 }
 
@@ -720,6 +599,7 @@ fn tableRegForPointer(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
     proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
     pointer_id: u32,
 ) Error!?u32 {
     const pointer = try snapshot.irInstruction(function, pointer_id);
@@ -730,12 +610,12 @@ fn tableRegForPointer(
         return source.value;
     }
     if (pointer.command == ir_cmd_new_table) {
-        if (try tableAllocationAt(snapshot, function, proto, pointer_id)) |pattern|
+        if (try tableAllocationAt(snapshot, function, proto, instruction_blocks, pointer_id)) |pattern|
             return pattern.destination;
         return null;
     }
     if (pointer.command == ir_cmd_dup_table and pointer_id != 0) {
-        if (try dupTableAt(snapshot, function, proto, pointer_id - 1)) |pattern| {
+        if (try dupTableAt(snapshot, function, proto, instruction_blocks, pointer_id - 1)) |pattern| {
             if (pattern.start + 1 == pointer_id)
                 return pattern.destination;
         }
@@ -791,17 +671,24 @@ fn attachDeferredGc(
         return;
     var cursor = alloc.finish + 1;
     var saw_initializer = false;
-    while (cursor < function.instruction_count) : (cursor += 1) {
+    while (cursor <= block.finish) : (cursor += 1) {
         const command = (try snapshot.irInstruction(function, cursor)).command;
         if (command == .check_gc) {
             alloc.check_gc_id = cursor;
             return;
         }
-        if (isDeferredTableInitializationCommand(command) or command == abi.ir_cmd_setlist)
+        if (command == ir_cmd_new_table or command == ir_cmd_dup_table)
+            break;
+        if (isDeferredTableInitializationCommand(command))
             saw_initializer = true;
     }
-    if (saw_initializer)
-        return Error.UnsupportedControlFlow;
+    if (!saw_initializer)
+        return;
+    while (cursor < function.instruction_count) : (cursor += 1) {
+        if ((try snapshot.irInstruction(function, cursor)).command == .check_gc)
+            return;
+    }
+    return Error.UnsupportedControlFlow;
 }
 
 fn inCompilableBlock(
@@ -822,20 +709,18 @@ fn inCompilableBlock(
 fn requireSingleCompilableBlockRange(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
+    instruction_blocks: []const u32,
     start: u32,
     finish: u32,
 ) Error!void {
-    var owner: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < function.block_count) : (block_id += 1) {
-        const block = try snapshot.irBlock(function, block_id);
-        if (block.isEmpty() or block.finish < start or block.start > finish)
-            continue;
-        if (owner != null or !block.kind.isCompilable() or block.start > start or block.finish < finish)
-            return Error.UnsupportedControlFlow;
-        owner = block_id;
-    }
-    if (owner == null)
+    if (start > finish or start >= instruction_blocks.len or finish >= instruction_blocks.len)
+        return Error.UnsupportedControlFlow;
+    const start_block = instruction_blocks[start];
+    const finish_block = instruction_blocks[finish];
+    if (start_block == snapshot_v1.no_id or start_block != finish_block)
+        return Error.UnsupportedControlFlow;
+    const block = try snapshot.irBlock(function, start_block);
+    if (block.isEmpty() or !block.kind.isCompilable() or block.start > start or block.finish < finish)
         return Error.UnsupportedControlFlow;
 }
 

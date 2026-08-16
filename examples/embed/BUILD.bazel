@@ -6,6 +6,7 @@ luauc_package(
         "lib": "//conformance/sources:embed_lib.luau",
         "main": "//conformance/sources:embed_main.luau",
         "proto_identity": "//conformance/sources:proto_identity.luau",
+        "userdata_hooks": "//conformance/sources:userdata_hooks.luau",
     },
     entry = "main",
     inline_plans = ["proto_identity:2:0:0"],

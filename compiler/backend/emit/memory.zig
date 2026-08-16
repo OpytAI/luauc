@@ -170,9 +170,19 @@ pub noinline fn emitCheckTag(self: anytype, instruction_value: snapshot_v1.IrIns
             // CHECK_TAG's conditional is nested inside the selected-block conditional.
             try self.body.branch(self.allocator, 2);
         },
-        .vm_exit => if (!try self.emitFornPreparation(instruction_value, failure.value) and
-            !try self.emitBuiltinTypeError(instruction_value, failure.value))
-            return Error.UnsupportedControlFlow,
+        .vm_exit => blk: {
+            if (failure.value < self.proto.code_count) {
+                if (try self.emitFornPreparation(instruction_value, failure.value) or
+                    try self.emitBuiltinTypeError(instruction_value, failure.value))
+                    break :blk;
+            }
+            const expected = try self.operand(instruction_value, 1);
+            if (expected.kind == .constant and
+                (try self.constant(expected.value)).tagValue() == lua_tag_userdata)
+                try self.emitStatusReturn(status_internal_error)
+            else
+                return Error.UnsupportedControlFlow;
+        },
         .undef => try self.emitStatusReturn(status_internal_error),
         else => return Error.InvalidOperandType,
     }
@@ -476,11 +486,23 @@ pub noinline fn emitBarrierObject(self: anytype, instruction_value: snapshot_v1.
 pub noinline fn emitBarrierTableBack(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 1);
     const table = try self.operand(instruction_value, 0);
-    const register = (try self.loadedPointerRegister(table)) orelse return Error.UnsupportedControlFlow;
-    try self.emitRegisterTagMismatch(register, lua_tag_table);
-    try self.emitInternalErrorIf();
-    try self.body.localGet(self.allocator, 0);
-    try self.emitPointerValue(table);
+    if (try self.loadedPointerRegister(table)) |register| {
+        try self.emitRegisterTagMismatch(register, lua_tag_table);
+        try self.emitInternalErrorIf();
+        try self.body.localGet(self.allocator, 0);
+        try self.emitPointerValue(table);
+    } else if (table.kind == .instruction) {
+        const dest_reg = if (try self.tableAllocationPatternAt(table.value)) |pattern|
+            pattern.destination
+        else if (table.value != 0) blk: {
+            const pattern = (try self.dupTablePatternAt(table.value - 1)) orelse
+                return Error.UnsupportedControlFlow;
+            break :blk pattern.destination;
+        } else return Error.UnsupportedControlFlow;
+        try self.body.localGet(self.allocator, 0);
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, dest_reg * tvalue_size);
+    } else return Error.UnsupportedControlFlow;
     try self.body.call(self.allocator, self.barrier_table_back orelse return Error.UnsupportedCommand);
 }
 pub fn requireLiveNode(
