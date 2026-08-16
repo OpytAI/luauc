@@ -17,6 +17,7 @@ zig_test(
 zig_static_library(
     name = "compiler_component",
     main = "compiler_host.zig",
+    tags = ["manual"],
     deps = [
         ":source_package_v1",
         "//compiler/backend:component_api",

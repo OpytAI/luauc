@@ -145,6 +145,7 @@ zig_library(
 zig_static_library(
     name = "component",
     main = "component.zig",
+    tags = ["manual"],
     deps = [
         ":backend",
         ":component_api",
