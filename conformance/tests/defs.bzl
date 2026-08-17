@@ -61,4 +61,5 @@ def family_js_test(name, entry_point, source_env_keys, extra_data = []):
         entry_point = entry_point,
         env = env,
         no_copy_to_bin = [WASM_LD],
+        visibility = ["//visibility:public"],
     )
