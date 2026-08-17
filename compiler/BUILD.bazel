@@ -1,10 +1,17 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
-load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure", "zig_configure_binary", "zig_library", "zig_static_library", "zig_test")
+
+js_library(
+    name = "compiler_build_digest_json",
+    srcs = ["compiler_build_digest.json"],
+    visibility = ["//visibility:public"],
+)
 
 zig_static_library(
     name = "compiler_component",
     main = "compiler_host.zig",
+    extra_srcs = ["compiler_build_digest.zig"],
     tags = ["manual"],
     deps = [
         "//compiler/backend:component_api",

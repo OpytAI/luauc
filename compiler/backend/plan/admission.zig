@@ -29,7 +29,6 @@ fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
     };
 }
 
-// Moved from compiler/backend/emit/control.zig:198
 pub noinline fn supportsArithmeticFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty() or block.finish - block.start != 2)
         return false;
@@ -63,7 +62,6 @@ pub noinline fn supportsArithmeticFallback(self: anytype, block: snapshot_v1.IrB
     return target.kind.isCompilable() and !target.isEmpty();
 }
 
-// Moved from compiler/backend/emit/control.zig:230
 pub noinline fn supportsComparisonFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty() or block.finish - block.start != 2)
         return false;
@@ -106,7 +104,6 @@ pub noinline fn supportsComparisonFallback(self: anytype, block: snapshot_v1.IrB
         false_block.kind.isCompilable() and !false_block.isEmpty();
 }
 
-// Moved from compiler/backend/emit/control.zig:271
 pub noinline fn supportsMaterializedComparisonFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty())
         return false;
@@ -161,7 +158,6 @@ pub noinline fn supportsMaterializedComparisonFallback(self: anytype, block: sna
     return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
 
-// Moved from compiler/backend/emit/control.zig:324
 pub noinline fn supportsLengthFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty() or block.finish - block.start != 2)
         return false;
@@ -181,7 +177,6 @@ pub noinline fn supportsLengthFallback(self: anytype, block: snapshot_v1.IrBlock
     return target.kind.isCompilable() and !target.isEmpty();
 }
 
-// Moved from compiler/backend/emit/control.zig:342
 pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     return (try supportsArithmeticFallback(self, block)) or (try supportsComparisonFallback(self, block)) or
         (try supportsMaterializedComparisonFallback(self, block)) or
@@ -193,7 +188,6 @@ pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Erro
         (try supportsNamecallFallback(self, block)) or (try supportsGeneralTableFallback(self, block));
 }
 
-// Moved from compiler/backend/emit/control.zig:352
 pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty() or block.finish != block.start + 1)
         return false;
@@ -216,7 +210,6 @@ pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlo
     return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
 
-// Moved from compiler/backend/emit/control.zig:373
 pub noinline fn ordinaryCallFallbackTarget(self: anytype, block: snapshot_v1.IrBlock) Error!?u32 {
     if (block.kind != .fallback or block.isEmpty() or block.finish < block.start + 3)
         return null;
@@ -263,76 +256,22 @@ pub noinline fn ordinaryCallFallbackTarget(self: anytype, block: snapshot_v1.IrB
     return if (found_import) target.value else null;
 }
 
-// Moved from compiler/backend/emit/control.zig:418
 pub noinline fn supportsOrdinaryCallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     return try ordinaryCallFallbackTarget(self, block) != null;
 }
 
-// Moved from compiler/backend/emit/control.zig:421
 pub noinline fn isOwnedSemanticTableFallbackBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty())
         return false;
-
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source = try self.snapshot.irBlock(self.function, source_block_id);
-        if (!source.kind.isCompilable() or source.isEmpty())
-            continue;
-
-        if (try self.stringTablePattern(source)) |pattern|
-            if (pattern.fallback == block_id)
-                return true;
-        if (try self.genericTablePattern(source)) |pattern| {
-            if (pattern.fallback == block_id)
-                return true;
-        }
-
-        var instruction_id = source.start;
-        while (instruction_id <= source.finish) : (instruction_id += 1) {
-            if (try self.literalFieldSetPatternAt(instruction_id)) |pattern| {
-                const match = try self.instruction(pattern.start + 1);
-                const fallback = try self.operand(match, 2);
-                if (fallback.kind == .block and fallback.value == block_id)
-                    return true;
-            }
-            if (try self.inlineStringSetPatternAt(instruction_id, source)) |operation|
-                if (operation.pattern.fallback == block_id)
-                    return true;
-            if (try self.inlineStringGetPatternAt(instruction_id, source)) |pattern|
-                if (pattern.fallback == block_id)
-                    return true;
-            if ((try self.instruction(instruction_id)).command != .load_tag)
-                continue;
-            if (try self.inlineGenericTableSetPatternAt(instruction_id)) |pattern|
-                if (pattern.pattern.fallback == block_id)
-                    return true;
-        }
-    }
-    return false;
+    return self.plan.ownsFallback(block_id);
 }
 
-// Moved from compiler/backend/emit/control.zig:464
 pub noinline fn isOwnedDynamicLengthFallbackBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty())
         return false;
-
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source = try self.snapshot.irBlock(self.function, source_block_id);
-        if (!source.kind.isCompilable() or source.isEmpty())
-            continue;
-        if (try self.dynamicLengthPattern(source)) |pattern|
-            if (pattern.fallback == block_id)
-                return true;
-    }
-    return false;
+    return self.plan.ownsFallback(block_id);
 }
 
-// Moved from compiler/backend/emit/control.zig:481
 pub noinline fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind == .linearized and self.function.entry_block != block_id and
         (self.plan.blockReferences(block_id) orelse return Error.UnsupportedControlFlow) == 0)
@@ -340,19 +279,10 @@ pub noinline fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: sna
     return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/control.zig:497
 pub noinline fn isBypassedXnextFastPreparationBlock(self: anytype, block_id: u32) Error!bool {
-    var source_id: u32 = 0;
-    while (source_id < self.function.block_count) : (source_id += 1) {
-        const source = try self.snapshot.irBlock(self.function, source_id);
-        const pattern = (try self.xnextFastPreparationPattern(source)) orelse continue;
-        if (pattern.fallback == block_id or pattern.publish == block_id)
-            return true;
-    }
-    return false;
+    return self.plan.ownsFallback(block_id);
 }
 
-// Moved from compiler/backend/emit/control.zig:507
 pub fn isFastcallFallbackBlock(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     var block_id: u32 = 0;
     while (block_id < self.function.block_count) : (block_id += 1) {
@@ -363,7 +293,6 @@ pub fn isFastcallFallbackBlock(self: anytype, block: snapshot_v1.IrBlock) Error!
     return false;
 }
 
-// Moved from compiler/backend/emit/iteration.zig:340
 pub noinline fn supportsGenericIterationFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     const fallback = (try self.genericIterationFallbackPattern(block)) orelse return false;
     var fallback_id: ?u32 = null;
@@ -390,7 +319,6 @@ pub noinline fn supportsGenericIterationFallback(self: anytype, block: snapshot_
     return false;
 }
 
-// Moved from compiler/backend/emit/iteration.zig:365
 pub noinline fn supportsSpecializedIpairsFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     const fallback = (try self.genericIterationFallbackPattern(block)) orelse return false;
     if (fallback.aux != 0x8000_0002)
@@ -484,226 +412,52 @@ pub noinline fn supportsSpecializedIpairsFallback(self: anytype, block: snapshot
     return false;
 }
 
-// Moved from compiler/backend/emit/iteration.zig:497
 pub noinline fn isBypassedSpecializedIpairsPublishBlock(self: anytype, block_id: u32) Error!bool {
-    var candidate_id: u32 = 0;
-    while (candidate_id < self.function.block_count) : (candidate_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, candidate_id);
-        if (try self.specializedIpairsPattern(candidate) == null)
-            continue;
-        const branch = try self.instruction(candidate.finish);
-        const publish = try self.operand(branch, 3);
-        if (publish.kind == .block and publish.value == block_id)
-            return true;
-    }
-    return false;
+    return self.plan.ownsFallback(block_id);
 }
 
-// Moved from compiler/backend/emit/iteration.zig:894
 pub noinline fn isBypassedStringLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .linearized or self.function.entry_block == block_id)
         return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.stringTablePattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
+    return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/iteration.zig:921
 pub noinline fn isBypassedGenericTableLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .linearized or self.function.entry_block == block_id)
         return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.genericTablePattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
+    return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/iteration.zig:948
 pub noinline fn isBypassedGlobalLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .linearized or self.function.entry_block == block_id)
         return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.globalPattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
+    return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/iteration.zig:975
 pub noinline fn isBypassedPowLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .linearized or self.function.entry_block == block_id)
         return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.powPattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
+    return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/iteration.zig:1002
 pub noinline fn isBypassedConstantArithmeticLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .linearized or self.function.entry_block == block_id)
         return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = (try self.constantArithmeticPattern(source_block)) orelse
-            (try self.constantPowPattern(source_block));
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
+    return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/iteration.zig:1030
 pub noinline fn isBypassedStringEqualityBlock(self: anytype, block_id: u32) Error!bool {
     if (self.function.entry_block == block_id)
         return false;
-    var owner: ?u32 = null;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const pattern = (try self.stringEqualityPattern(source_block)) orelse continue;
-        if (pattern.pointer_block == block_id) {
-            if (owner != null)
-                return false;
-            owner = source_block_id;
-        }
-    }
-    if (owner == null)
-        return false;
-    var incoming_count: u32 = 0;
-    source_block_id = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        if (source_block.isEmpty())
-            continue;
-        var instruction_id = source_block.start;
-        while (instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind == .block and operand_value.value == block_id) {
-                    if (source_block_id != owner.?)
-                        return false;
-                    incoming_count += 1;
-                }
-            }
-        }
-    }
-    return incoming_count == 1;
+    return self.plan.isPlannedBypass(block_id);
 }
 
-// Moved from compiler/backend/emit/namecall.zig:206
 pub noinline fn isBypassedPlainTableNamecallBlock(self: anytype, block_id: u32) Error!bool {
     if (self.function.entry_block == block_id)
         return false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        if (try self.plainTableNamecallPattern(source_block)) |pattern|
-            if (block_id == pattern.first_fast or block_id == pattern.second_fast or block_id == pattern.fallback)
-                return true;
-    }
-    return false;
+    return self.plan.ownsFallback(block_id);
 }
 
-// Moved from compiler/backend/emit/table_values.zig:23
 pub noinline fn supportsGeneralTableFallback(
     self: anytype,
     block: snapshot_v1.IrBlock,
@@ -733,7 +487,6 @@ pub noinline fn supportsGeneralTableFallback(
     return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
 
-// Moved from compiler/backend/lower/imports.zig:272
 pub fn isRequireImportInstruction(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,

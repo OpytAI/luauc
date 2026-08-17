@@ -46,3 +46,22 @@ comptime {
     if (@sizeOf(CompileResultV1) != size or @sizeOf(DiagnosticRecord) != diagnostic_record_size)
         @compileError("CompileResultV1 ABI layout drift");
 }
+
+test "CompileResultV1 offsets and diagnostic record size" {
+    const std = @import("std");
+    try std.testing.expectEqual(@as(usize, 320), @sizeOf(CompileResultV1));
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(DiagnosticRecord));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(CompileResultV1, "data"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(CompileResultV1, "status"));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(CompileResultV1, "request_id"));
+    try std.testing.expectEqual(@as(usize, 40), @offsetOf(CompileResultV1, "compiler_build_sha256"));
+    try std.testing.expectEqual(@as(usize, 232), @offsetOf(CompileResultV1, "artifact_sha256"));
+    try std.testing.expectEqual(@as(usize, 264), @offsetOf(CompileResultV1, "generated_function_count"));
+    try std.testing.expectEqual(@as(usize, 272), @offsetOf(CompileResultV1, "diagnostic_records_ptr"));
+    try std.testing.expectEqual(@as(usize, 276), @offsetOf(CompileResultV1, "diagnostic_records_count"));
+    try std.testing.expectEqual(@as(usize, 280), @offsetOf(CompileResultV1, "diagnostic_records_bytes"));
+    try std.testing.expectEqual(@as(u32, 0xffff_ffff), no_module);
+    const zero = CompileResultV1{};
+    try std.testing.expectEqual(@as(u32, 0), zero.reserved0);
+    try std.testing.expectEqual(@as(u32, 0), zero.reserved1);
+}

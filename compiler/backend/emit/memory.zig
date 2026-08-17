@@ -24,6 +24,8 @@ const ir_cmd_buffer_readf64 = abi.ir_cmd_buffer_readf64;
 const ir_cmd_buffer_writef64 = abi.ir_cmd_buffer_writef64;
 const ir_cmd_buffer_readi64 = abi.ir_cmd_buffer_readi64;
 const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
+const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
+const ir_cmd_check_userdata_tag = abi.ir_cmd_check_userdata_tag;
 const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const tvalue_size = abi.tvalue_size;
@@ -309,12 +311,89 @@ pub noinline fn emitUnalignedMemoryOp(self: anytype, opcode: u8) Error!void {
     try self.body.opcode(self.allocator, 0); // alignment exponent
     try self.body.opcode(self.allocator, 0); // offset
 }
+fn userdataReadWidth(command: snapshot_v1.IrCommand) ?u32 {
+    return if (command == ir_cmd_buffer_readi8 or command == ir_cmd_buffer_readu8)
+        1
+    else if (command == ir_cmd_buffer_readi16 or command == ir_cmd_buffer_readu16)
+        2
+    else if (command == ir_cmd_buffer_readi32 or command == ir_cmd_buffer_readf32)
+        4
+    else if (command == ir_cmd_buffer_readf64 or command == ir_cmd_buffer_readi64)
+        8
+    else
+        null;
+}
+
+const vec2_userdata_tag: u32 = 12;
+const vec2_byte_size: u32 = 8;
+
+fn plannedUserdataByteSize(self: anytype, pointer: snapshot_v1.IrOperand) Error!?u32 {
+    if (pointer.kind != .instruction or pointer.value >= self.function.instruction_count)
+        return null;
+    if (self.plan.clusterAt(pointer.value)) |cluster| {
+        if (cluster.kind == .userdata_alloc) {
+            const pattern = (try self.userdataAllocationPatternAt(cluster.at)) orelse return null;
+            return pattern.byte_size;
+        }
+    }
+    const produced = try self.instruction(pointer.value);
+    if (produced.command == ir_cmd_new_userdata and produced.operand_count == 2)
+        return self.uintConstant(try self.operand(produced, 0)) catch return null;
+    if (produced.command == ir_cmd_check_userdata_tag and produced.operand_count >= 2) {
+        const tag = self.uintConstant(try self.operand(produced, 1)) catch return null;
+        if (tag == vec2_userdata_tag)
+            return vec2_byte_size;
+        return plannedUserdataByteSize(self, try self.operand(produced, 0));
+    }
+    var instruction_id: u32 = 0;
+    while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
+        const candidate = try self.instruction(instruction_id);
+        if (candidate.command != ir_cmd_check_userdata_tag or candidate.operand_count < 2)
+            continue;
+        const source = try self.operand(candidate, 0);
+        if (source.kind != pointer.kind or source.value != pointer.value)
+            continue;
+        const tag = self.uintConstant(try self.operand(candidate, 1)) catch continue;
+        if (tag == vec2_userdata_tag)
+            return vec2_byte_size;
+    }
+    return null;
+}
+
+fn userdataPointerChecked(self: anytype, pointer: snapshot_v1.IrOperand) Error!bool {
+    if (pointer.kind != .instruction)
+        return false;
+    if (self.plan.clusterAt(pointer.value)) |cluster| {
+        if (cluster.kind == .userdata_alloc)
+            return true;
+    }
+    const produced = try self.instruction(pointer.value);
+    if (produced.command == ir_cmd_new_userdata or produced.command == ir_cmd_check_userdata_tag)
+        return true;
+    var instruction_id: u32 = 0;
+    while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
+        const candidate = try self.instruction(instruction_id);
+        if (candidate.command != ir_cmd_check_userdata_tag or candidate.operand_count < 1)
+            continue;
+        const source = try self.operand(candidate, 0);
+        if (source.kind == pointer.kind and source.value == pointer.value)
+            return true;
+    }
+    return false;
+}
+
 pub noinline fn emitBufferRead(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 3);
     const tag = try self.operand(instruction_value, 2);
     if (tag.kind == .constant and (try self.constant(tag.value)).tagValue() == lua_tag_userdata) {
         const pointer = try self.operand(instruction_value, 0);
         const offset = try self.uintConstant(try self.operand(instruction_value, 1));
+        const width = userdataReadWidth(instruction_value.command) orelse return Error.UnsupportedCommand;
+        if (!try userdataPointerChecked(self, pointer))
+            return Error.UnsupportedControlFlow;
+        const byte_size = (try plannedUserdataByteSize(self, pointer)) orelse return Error.UnsupportedControlFlow;
+        if (offset > byte_size or width > byte_size - offset)
+            return Error.UnsupportedControlFlow;
         try self.emitPointerValue(pointer);
         const data_offset = std.math.add(u32, userdata_data_offset, offset) catch return Error.ResourceLimit;
         try self.body.i32Const(self.allocator, @intCast(data_offset));

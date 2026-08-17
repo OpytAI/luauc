@@ -115,6 +115,35 @@ fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
     }
 }
 
+fn coveringIntegerCreate(self: anytype, instruction_id: u32) Error!?model.IntegerCreatePattern {
+    var distance: u32 = 0;
+    while (distance <= 6 and distance <= instruction_id) : (distance += 1) {
+        if (try self.integerCreatePatternAt(instruction_id - distance)) |pattern| {
+            if (instruction_id <= pattern.finish)
+                return pattern;
+        }
+    }
+    return null;
+}
+
+fn coveringTypeName(self: anytype, instruction_id: u32) Error!?model.TypeNamePattern {
+    const command = (try self.instruction(instruction_id)).command;
+    if (command == ir_cmd_get_type or command == ir_cmd_get_typeof)
+        return self.typeNamePattern(instruction_id, command == ir_cmd_get_typeof);
+    var distance: u32 = 1;
+    while (distance <= 4 and distance <= instruction_id) : (distance += 1) {
+        const start = instruction_id - distance;
+        const start_command = (try self.instruction(start)).command;
+        if (start_command == ir_cmd_get_type or start_command == ir_cmd_get_typeof) {
+            if (try self.typeNamePattern(start, start_command == ir_cmd_get_typeof)) |pattern| {
+                if (instruction_id <= pattern.finish)
+                    return pattern;
+            }
+        }
+    }
+    return null;
+}
+
 fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
     const instruction_value = try self.instruction(instruction_id);
     if (self.plan.clusterAt(instruction_id)) |cluster| {
@@ -128,13 +157,27 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         }
         return false;
     }
+    if (try coveringIntegerCreate(self, instruction_id)) |pattern| {
+        if (instruction_id == pattern.check)
+            try self.emitIntegerCreate(pattern);
+        return false;
+    }
+    if (try self.linearizedPowPattern(instruction_id, try self.snapshot.irBlock(self.function, self.plan.instructionBlock(instruction_id) orelse return Error.UnsupportedControlFlow))) |pattern| {
+        try self.emitSavedPcLocation(pattern.marker);
+        try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
+        return false;
+    }
+    if (try coveringTypeName(self, instruction_id)) |pattern| {
+        const command = instruction_value.command;
+        if (command == ir_cmd_get_type or command == ir_cmd_get_typeof)
+            try self.emitTypeName(pattern);
+        return false;
+    }
     switch (instruction_value.command) {
         .nop, .substitute, .mark_used, .mark_dead => return false,
         .load_env => {
-            if (instruction_id + 1 < self.function.instruction_count and
-                (try self.instruction(instruction_id + 1)).command == .newclosure)
-            {
-                _ = try self.newClosurePattern(instruction_id + 1);
+            if (self.plan.closureContaining(instruction_id) != null) {
+                // Planned newclosure consumes LOAD_ENV.
             } else {
                 try self.emitLoadEnv(instruction_id);
             }
@@ -478,14 +521,16 @@ pub noinline fn emitInstructionRange(self: anytype, start: u32, finish: u32, blo
 }
 
 fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snapshot_v1.IrBlock, progress: *u32) Error!bool {
-    const dynamic_length = try self.dynamicLengthPattern(block);
-    const semantic_array = try self.semanticArrayOperation(block);
     var terminated = false;
     var instruction_id = start;
     while (instruction_id <= finish) : (instruction_id += 1) {
         progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
+        if (self.plan.clusterAt(instruction_id)) |_| {
+            terminated = try self.emitInstruction(instruction_id, block.kind);
+            continue;
+        }
         if (try self.integerCreatePatternAt(instruction_id)) |pattern| {
             try self.emitIntegerCreate(pattern);
             instruction_id = pattern.finish;
@@ -546,7 +591,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             instruction_id = pattern.finish;
             continue;
         }
-        if (dynamic_length) |pattern| {
+        if (try self.dynamicLengthPattern(block)) |pattern| {
             if (instruction_id == pattern.start) {
                 try self.emitDynamicLength(pattern);
                 try self.body.branch(self.allocator, 1);
@@ -555,7 +600,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 continue;
             }
         }
-        if (semantic_array) |operation| {
+        if (try self.semanticArrayOperation(block)) |operation| {
             if (instruction_id == operation.pattern.start) {
                 try self.emitArrayOperation(operation.pattern, operation.kind);
                 try self.body.branch(self.allocator, 1);

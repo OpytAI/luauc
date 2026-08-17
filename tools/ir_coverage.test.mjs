@@ -77,6 +77,7 @@ const generated = await generateIrCoverage({
   corpus: pathOf("LUAUC_IR_LEDGER_CORPUS"),
   fixture: pathOf("LUAUC_GENERAL_ARMS_FIXTURE"),
   dispatch: pathOf("LUAUC_DISPATCH_ZIG"),
+  compilerDigest: pathOf("LUAUC_COMPILER_BUILD_DIGEST"),
 }, {
   resolveSource: (entry) => runfile(entry.path, entry.path),
   hookUnitMarkSatisfied,

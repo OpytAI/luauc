@@ -31,6 +31,11 @@ zig_library(
     visibility = ["//visibility:public"],
 )
 
+zig_test(
+    name = "compiler_result_v1_test",
+    main = "compiler_result_v1.zig",
+)
+
 zig_library(
     name = "runtime_profile_v1",
     main = "runtime_profile_v1.zig",

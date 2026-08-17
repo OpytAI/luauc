@@ -360,9 +360,8 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
     if (status != LUA_OK) {
         char diagnostic[128];
         const int top = lua_gettop(thread);
-        const char *yielded = status != LUA_OK && top > 0 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
-        const char *failure = status == LUA_OK ? "compiled entry did not yield at the GC boundary"
-                                               : yielded;
+        const char *yielded = top > 0 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
+        const char *failure = yielded;
         if (!failure) {
             const int value_type = top == 0 ? LUA_TNONE : lua_type(thread, -1);
             const int length = snprintf(diagnostic, sizeof(diagnostic),
@@ -373,8 +372,6 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
             if (yielded_size >= sizeof(diagnostic))
                 yielded_size = sizeof(diagnostic) - 1;
         }
-        else if (status == LUA_OK)
-            yielded_size = sizeof("compiled entry did not yield at the GC boundary") - 1;
         if (yielded_size <= request->output_capacity) {
             memcpy((void *)(uintptr_t)request->output_pointer, failure, yielded_size);
             result->output_size = (uint32_t)yielded_size;

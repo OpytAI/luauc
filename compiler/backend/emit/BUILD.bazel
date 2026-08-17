@@ -20,7 +20,6 @@ backend_emit_library(name = "builtin_patterns")
 backend_emit_library(
     name = "calls",
     deps = [
-        "//compiler/backend/lower:imports",
         "//compiler/backend/plan:admission",
     ],
 )

@@ -5,9 +5,9 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "3f02ade9eb7b4be0be91a75d111b86d02dd8408c061395f0bd9c1f9ecacd2fbe",
   "input_sha256": {
-    "profile": "e3fc237f38760cdb1380564543deebe9f93fe6be741c3413418b17dbc702c034",
+    "profile": "f8bd04fdcdcebbd1b1354ec71493e2fca1f0fe965e226ccc2e09390fad1a8a3c",
     "policy": "104b913c96ac04872962606d28066428105870360b7493064be20cfdae056faf",
-    "pack": "e562444a166f27c50bfaf06eaa1560a35c9dddbbb2a67341b0671a101c53611f"
+    "pack": "30876e1671d90acf9e3836407aeac40602c550a5477c77eca0c75e7471fc7fac"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
@@ -19,7 +19,7 @@
     "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
     "object_contract_sha256": "daa259f21f18f79ff67a819272ade020c5aba56d9966c9388ace758b1c8bf662",
-    "pack_build_sha256": "0ae581e45bcb64387d92a43b86649880bd6b35cd6d862ec0b5e452a187f9f315",
+    "pack_build_sha256": "ef0f9036d386cf6df2f03ca5e440a79904aa019d9cbe4e54b146f926feeb4678",
     "license_inventory_sha256": "62db69aaae1bfdcf018c8a83254e4aeb91f1e42d8882e8b4cd224bda6045659c"
   },
   "host_imports": [
@@ -316,5 +316,5 @@
       }
     ]
   },
-  "canonical_hash": "c3759944613fcff9f62d6d0c41411f171418100a279751a7766fb56c10685db7"
+  "canonical_hash": "9f62473e367ab50d75b82eb23763efc86c1c8e9bb7bac8cf4608416344ab377e"
 }

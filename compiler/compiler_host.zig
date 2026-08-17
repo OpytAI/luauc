@@ -5,6 +5,7 @@ const runtime_profile = @import("luauc_runtime_profile_v1");
 const source_package = @import("luauc_source_package_v1");
 const compiler_result = @import("luauc_compiler_result_v1");
 const snapshot_v1 = @import("frontend_snapshot_v1");
+const compiler_build = @import("compiler_build_digest.zig");
 
 extern fn __wasm_call_ctors() void;
 
@@ -188,8 +189,35 @@ fn clearResult(result: *CompileResult) void {
     result.* = .{};
 }
 
+fn publishDiagnosticRecord(result: *CompileResult, status: u32, module_id: u32, ir_command: u32) void {
+    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_bytes != 0) {
+        const prior: [*]u8 = @ptrFromInt(result.diagnostic_records_ptr);
+        allocator.free(prior[0..result.diagnostic_records_bytes]);
+        result.diagnostic_records_ptr = 0;
+        result.diagnostic_records_count = 0;
+        result.diagnostic_records_bytes = 0;
+    }
+    const record = allocator.create(compiler_result.DiagnosticRecord) catch return;
+    record.* = .{
+        .code = status,
+        .module_id = module_id,
+        .source_start = 0,
+        .source_end = 0,
+        .ir_command = ir_command,
+        .reserved = 0,
+    };
+    result.diagnostic_records_ptr = @intCast(@intFromPtr(record));
+    result.diagnostic_records_count = 1;
+    result.diagnostic_records_bytes = compiler_result.diagnostic_record_size;
+}
+
 fn publishDiagnostic(result: *CompileResult, status: u32, message: []const u8) u32 {
+    return publishDiagnosticFor(result, status, compiler_result.no_module, 0, message);
+}
+
+fn publishDiagnosticFor(result: *CompileResult, status: u32, module_id: u32, ir_command: u32, message: []const u8) u32 {
     result.status = status;
+    publishDiagnosticRecord(result, status, module_id, ir_command);
     if (message.len == 0 or message.len > std.math.maxInt(u32)) return status;
     const owned = allocator.dupe(u8, message) catch {
         result.status = status_resource_limit;
@@ -198,6 +226,21 @@ fn publishDiagnostic(result: *CompileResult, status: u32, message: []const u8) u
     result.diagnostic = @intCast(@intFromPtr(owned.ptr));
     result.diagnostic_size = @intCast(owned.len);
     return status;
+}
+
+fn featureCount(mask: u32) u32 {
+    return @popCount(mask);
+}
+
+fn snapshotCompileUsage(bytes: []const u8) !struct { functions: u32, instructions: u32 } {
+    const snapshot = try snapshot_v1.parse(bytes, snapshot_v1.production_identity);
+    var instructions: u32 = 0;
+    var function_id: u32 = 0;
+    while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
+        const function = try snapshot.irFunction(function_id);
+        instructions = std.math.add(u32, instructions, function.instruction_count) catch return error.ResourceLimit;
+    }
+    return .{ .functions = snapshot.header.ir_function_count, .instructions = instructions };
 }
 
 fn publishError(result: *CompileResult, status: u32, err: anyerror) u32 {
@@ -271,16 +314,23 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
         slot.pack_sha256,
     ) catch |err| return publishError(result, if (err == error.ResourceLimit) status_resource_limit else status_invalid_request, err);
     result.request_id = package.request_id;
-    result.compiler_build_sha256 = snapshot_v1.production_identity.frontend_build.?;
+    result.compiler_build_sha256 = compiler_build.compiler_build_sha256;
     result.luau_pin_sha256 = snapshot_v1.production_identity.luau_pin.?;
     result.runtime_profile_sha256 = slot.profile_sha256;
     result.runtime_pack_sha256 = slot.pack_sha256;
     result.manifest_sha256 = package.manifest_sha256;
 
+    if (profile.import_count > package.allowed_import_ceiling)
+        return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+    if (featureCount(profile.feature_mask) > package.feature_ceiling)
+        return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+
     const frontend_results = allocator.alloc(FrontendResult, package.module_count) catch return publishDiagnostic(result, status_resource_limit, "frontend result allocation failed");
     defer allocator.free(frontend_results);
     @memset(frontend_results, .{});
     var compiled_count: usize = 0;
+    var compile_functions: u32 = 0;
+    var compile_instructions: u32 = 0;
     defer for (frontend_results[0..compiled_count]) |*frontend_result| luauc_frontend_snapshot_v1_free(frontend_result);
     for (0..package.module_count) |index| {
         const module = package.module(@intCast(index)) catch |err| return publishError(result, status_invalid_request, err);
@@ -298,11 +348,20 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
         };
         compiled_count += 1;
         if (frontend_result.size > package.compile_budget_bytes)
-            return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+            return publishDiagnosticFor(result, status_resource_limit, @intCast(index), 0, "ResourceLimit");
         if (frontend_status != 0 or frontend_result.status != 0 or frontend_result.data == null or frontend_result.size == 0) {
             const diagnostic = if (frontend_result.diagnostic) |pointer| pointer[0..frontend_result.diagnostic_size] else "frontend compilation failed";
-            return publishDiagnostic(result, status_frontend_failure, diagnostic);
+            return publishDiagnosticFor(result, status_frontend_failure, @intCast(index), 0, diagnostic);
         }
+        const usage = snapshotCompileUsage(frontend_result.data.?[0..frontend_result.size]) catch
+            return publishDiagnosticFor(result, status_frontend_failure, @intCast(index), 0, "invalid frontend snapshot");
+        compile_functions = std.math.add(u32, compile_functions, usage.functions) catch
+            return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+        compile_instructions = std.math.add(u32, compile_instructions, usage.instructions) catch
+            return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+        if (compile_functions > package.compile_budget_functions or
+            compile_instructions > package.compile_budget_instructions)
+            return publishDiagnosticFor(result, status_resource_limit, @intCast(index), 0, "ResourceLimit");
     }
     const snapshot_package = buildSnapshotPackage(package, frontend_results) catch |err| return publishError(result, status_resource_limit, err);
     defer allocator.free(snapshot_package);
@@ -327,15 +386,19 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     const object_pointer: [*]const u8 = @ptrFromInt(backend_result.data);
     const object = object_pointer[0..backend_result.size];
     const linked = linker.link(allocator, slot.pack.?, object, profile, .{}, .{
-        .compiler_build_sha256 = snapshot_v1.production_identity.frontend_build.?,
+        .compiler_build_sha256 = compiler_build.compiler_build_sha256,
         .package_manifest_sha256 = package.manifest_sha256,
     }) catch |err| return publishError(result, switch (err) {
         error.OutOfMemory, error.ResourceLimit, error.ArenaOverflow, error.TableOverflow => status_resource_limit,
         else => status_link_failure,
     }, err);
-    if (linked.bytes.len > std.math.maxInt(u32)) {
+    if (linked.bytes.len > std.math.maxInt(u32) or linked.bytes.len > package.compile_budget_bytes) {
         allocator.free(linked.bytes);
-        return publishDiagnostic(result, status_resource_limit, "artifact exceeds wasm32 result limits");
+        return publishDiagnostic(result, status_resource_limit, "artifact exceeds compile budget");
+    }
+    if (linked.report.generated_function_count > package.compile_budget_functions) {
+        allocator.free(linked.bytes);
+        return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
     }
     result.data = @intCast(@intFromPtr(linked.bytes.ptr));
     result.size = @intCast(linked.bytes.len);
@@ -348,7 +411,8 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     result.resource_usage_arena_used = linked.report.generated_data_bytes;
     result.resource_usage_table_entries = linked.report.final_table_size;
     result.resource_usage_output_bytes = result.size;
-    result.resource_usage_compile_functions = package.module_count;
+    result.resource_usage_compile_instructions = compile_instructions;
+    result.resource_usage_compile_functions = compile_functions;
     result.resource_usage_compile_bytes = request_size;
     return status_ok;
 }

@@ -6,7 +6,15 @@ const abi = @import("luauc_backend_runtime_abi");
 const Error = model.Error;
 const TableAllocationPattern = model.TableAllocationPattern;
 const DupTablePattern = model.DupTablePattern;
+const UserdataAllocationPattern = model.UserdataAllocationPattern;
 const ir_cmd_new_table = abi.ir_cmd_new_table;
+const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
+const ir_cmd_buffer_writei8 = abi.ir_cmd_buffer_writei8;
+const ir_cmd_buffer_writei16 = abi.ir_cmd_buffer_writei16;
+const ir_cmd_buffer_writei32 = abi.ir_cmd_buffer_writei32;
+const ir_cmd_buffer_writef32 = abi.ir_cmd_buffer_writef32;
+const ir_cmd_buffer_writef64 = abi.ir_cmd_buffer_writef64;
+const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
 const ir_cmd_dup_table = abi.ir_cmd_dup_table;
 const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
@@ -16,6 +24,8 @@ const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
 const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
 const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const lua_tag_table = abi.lua_tag_table;
+const lua_tag_userdata = abi.lua_tag_userdata;
+const lua_utag_limit = abi.lua_utag_limit;
 
 pub const PlanSlices = struct {
     table_pointer_provenance: []const bool,
@@ -438,6 +448,80 @@ pub fn tableAllocationAt(
         .array_count = try uintOperand(snapshot, function, try snapshot.irOperand(allocation, 0)),
         .node_count = try uintOperand(snapshot, function, try snapshot.irOperand(allocation, 1)),
     };
+}
+
+fn userdataWriteWidth(command: snapshot_v1.IrCommand) ?u32 {
+    return if (command == ir_cmd_buffer_writei8)
+        1
+    else if (command == ir_cmd_buffer_writei16)
+        2
+    else if (command == ir_cmd_buffer_writei32 or command == ir_cmd_buffer_writef32)
+        4
+    else if (command == ir_cmd_buffer_writef64 or command == ir_cmd_buffer_writei64)
+        8
+    else
+        null;
+}
+
+pub fn userdataAllocationAt(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
+    start: u32,
+) Error!?UserdataAllocationPattern {
+    if (start + 3 >= function.instruction_count)
+        return null;
+    const check_gc = try snapshot.irInstruction(function, start);
+    const allocation = try snapshot.irInstruction(function, start + 1);
+    if (check_gc.command != .check_gc or check_gc.operand_count != 0 or
+        allocation.command != ir_cmd_new_userdata or allocation.operand_count != 2)
+        return null;
+    const byte_size = uintOperand(snapshot, function, try snapshot.irOperand(allocation, 0)) catch return null;
+    const user_tag = uintOperand(snapshot, function, try snapshot.irOperand(allocation, 1)) catch return null;
+    if (user_tag >= lua_utag_limit)
+        return null;
+    var cursor = start + 2;
+    while (cursor < function.instruction_count) : (cursor += 1) {
+        const candidate = try snapshot.irInstruction(function, cursor);
+        if (userdataWriteWidth(candidate.command)) |width| {
+            if (candidate.operand_count != 4)
+                return null;
+            const pointer = try snapshot.irOperand(candidate, 0);
+            const offset = uintOperand(snapshot, function, try snapshot.irOperand(candidate, 1)) catch return null;
+            const tag = try snapshot.irOperand(candidate, 3);
+            if (pointer.kind != .instruction or pointer.value != start + 1 or
+                tag.kind != .constant or (try snapshot.irConstant(function, tag.value)).tagValue() != lua_tag_userdata or
+                offset > byte_size or width > byte_size - offset)
+                return null;
+            continue;
+        }
+        if (candidate.command != .store_pointer or candidate.operand_count != 2 or
+            cursor + 1 >= function.instruction_count)
+            return null;
+        const store_tag = try snapshot.irInstruction(function, cursor + 1);
+        if (store_tag.command != .store_tag or store_tag.operand_count != 2)
+            return null;
+        const destination = try snapshot.irOperand(candidate, 0);
+        const pointer = try snapshot.irOperand(candidate, 1);
+        const tag_destination = try snapshot.irOperand(store_tag, 0);
+        const tag = try snapshot.irOperand(store_tag, 1);
+        if (destination.kind != .vm_reg or destination.value >= proto.max_stack_size or
+            pointer.kind != .instruction or pointer.value != start + 1 or
+            tag_destination.kind != .vm_reg or tag_destination.value != destination.value or
+            tag.kind != .constant or (try snapshot.irConstant(function, tag.value)).tagValue() != lua_tag_userdata)
+            return null;
+        requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, start, cursor + 1) catch return null;
+        return .{
+            .start = start,
+            .allocation = start + 1,
+            .finish = cursor + 1,
+            .destination = destination.value,
+            .byte_size = byte_size,
+            .user_tag = user_tag,
+        };
+    }
+    return null;
 }
 
 pub fn dupTableAt(

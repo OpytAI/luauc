@@ -1332,17 +1332,26 @@ pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruct
 fn tableLenDestination(self: anytype, table_len_id: u32) Error!?u32 {
     if (self.plan.plainLenAt(table_len_id)) |fact|
         return fact.dest_reg;
-    if (table_len_id + 2 >= self.function.instruction_count)
+    if (table_len_id + 1 >= self.function.instruction_count)
         return null;
     const convert = try self.instruction(table_len_id + 1);
-    const store = try self.instruction(table_len_id + 2);
-    if (convert.command != .int_to_num or convert.operand_count != 1 or
-        store.command != .store_double or store.operand_count != 2)
+    if (convert.command != .int_to_num or convert.operand_count != 1)
         return null;
     const converted = try self.operand(convert, 0);
-    const stored = try self.operand(store, 1);
-    if (converted.kind != .instruction or converted.value != table_len_id or
-        stored.kind != .instruction or stored.value != table_len_id + 1)
+    if (converted.kind != .instruction or converted.value != table_len_id)
         return null;
-    return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+    if (table_len_id + 2 >= self.function.instruction_count)
+        return null;
+    const store = try self.instruction(table_len_id + 2);
+    if (store.command == .store_double and store.operand_count == 2) {
+        const stored = try self.operand(store, 1);
+        if (stored.kind == .instruction and stored.value == table_len_id + 1)
+            return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+    }
+    if (store.command == .store_tvalue and store.operand_count == 2) {
+        const stored = try self.operand(store, 1);
+        if (stored.kind == .instruction and stored.value == table_len_id + 1)
+            return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+    }
+    return null;
 }

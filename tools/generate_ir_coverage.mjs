@@ -22,6 +22,7 @@ import {
   walkSnapshot,
 } from "./ir_ledger.mjs";
 import { generateGeneralArms } from "./generate_general_arms.mjs";
+import { generateCompilerBuildDigest } from "./generate_compiler_build_digest.mjs";
 
 const WORKSPACE = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -86,17 +87,53 @@ const NATURAL_SOURCES = new Set([
   "natural_buffer",
 ]);
 
+const FAMILY_TESTS = Object.freeze({
+  buffer_scalar_matrix: "//conformance/tests:buffers_test",
+  captured_call: "//conformance/tests:calls_test",
+  compiled_call: "//conformance/tests:calls_test",
+  dynamic_array_table: "//conformance/tests:tables_test",
+  dynamic_hash_table: "//conformance/tests:tables_test",
+  dynamic_string: "//conformance/tests:operators_test",
+  fast_builtins: "//conformance/tests:builtins_test",
+  forwarded_capture: "//conformance/tests:closures_test",
+  generic_iteration: "//conformance/tests:iteration_test",
+  generic_table: "//conformance/tests:tables_test",
+  global_state: "//conformance/tests:operators_test",
+  mixed_table: "//conformance/tests:tables_test",
+  multi_result_call: "//conformance/tests:calls_test",
+  reference_capture: "//conformance/tests:closures_test",
+  recursive_call: "//conformance/tests:calls_test",
+  silent_return: "//conformance/tests:scalar_test",
+  slow_add: "//conformance/tests:operators_test",
+  table_clone_append: "//conformance/tests:tables_test",
+  table_namecall: "//conformance/tests:namecall_test",
+  yield_call: "//conformance/tests:calls_test",
+  embed_lib: "//conformance/tests:frontend_to_wasm_test",
+  proto_identity: "//conformance/tests:proto_identity_test",
+  userdata_hooks: "//conformance/tests:userdata_test",
+  numeric_loop: "//conformance/tests:natural_sources_test",
+  natural_integer: "//conformance/tests:natural_sources_test",
+  natural_bit32: "//conformance/tests:natural_sources_test",
+  natural_buffer: "//conformance/tests:natural_sources_test",
+});
+
 function existingTests(sourceIds) {
   const tests = [];
-  if (sourceIds.some((id) => FRONTEND_TO_WASM_SOURCES.has(id))) {
-    tests.push("//compiler/backend:frontend_to_wasm_test");
+  const seen = new Set();
+  for (const id of sourceIds) {
+    const label = FAMILY_TESTS[id];
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      tests.push(label);
+    }
   }
   if (sourceIds.some((id) => PARITY_SOURCES.has(id))) {
-    tests.push("//hosts/js:embed_test");
-    tests.push("//hosts/wasmtime:parity_test");
-  }
-  if (sourceIds.some((id) => NATURAL_SOURCES.has(id))) {
-    tests.push("//conformance/tests:natural_sources_test");
+    for (const label of ["//hosts/js:embed_test", "//hosts/wasmtime:parity_test"]) {
+      if (!seen.has(label)) {
+        seen.add(label);
+        tests.push(label);
+      }
+    }
   }
   return tests;
 }
@@ -114,6 +151,10 @@ function executedGates(sourceIds, options) {
 function classify(row, state, spec, generalArm, options) {
   const census = [...state.census_sources];
   if (census.length === 0) {
+    // Isolated Hold is unpublished; BARRIER_OBJ stays partial until PR 14 emits it.
+    if (spec.evidence?.kind === "isolated_hold_strip") {
+      return { status: "partial", reachability: "published_hook" };
+    }
     return {
       status: "frontend_unreachable",
       reachability: "none",
@@ -284,11 +325,14 @@ export async function generateIrCoverage(paths, options = {}) {
     status: seenBlock.has(kind.value) ? "admitted" : "unimplemented",
   }));
 
+  const compilerBuildDigest = paths.compilerDigest
+    ? loadJson(paths.compilerDigest).sha256
+    : generateCompilerBuildDigest(WORKSPACE).hex;
   const document = {
     schema_version: 2,
     generator_version: LEDGER_GENERATOR_VERSION,
     pin: PIN,
-    compiler_build_digest: contractDigest,
+    compiler_build_digest: compilerBuildDigest,
     luau_pin_digest: pinDigest,
     frontend_contract_digest: contractDigest,
     input_sha256: irEnumDigest,

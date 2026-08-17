@@ -3,7 +3,6 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
-const import_plan = @import("luauc_backend_imports");
 const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;

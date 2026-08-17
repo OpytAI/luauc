@@ -442,6 +442,15 @@ pub const FunctionPlan = struct {
         const cluster_index = try allocator.alloc(u32, instruction_count);
         errdefer allocator.free(cluster_index);
         @memset(cluster_index, snapshot_v1.no_id);
+        const userdata_clusters = try stampUserdataClusters(
+            allocator,
+            snapshot,
+            function,
+            proto,
+            instruction_blocks,
+            cluster_index,
+        );
+        errdefer if (userdata_clusters.len != 0) allocator.free(userdata_clusters);
 
         return .{
             .allocator = allocator,
@@ -461,7 +470,7 @@ pub const FunctionPlan = struct {
             .facts = facts,
             .dominators = dominators,
             .cluster_index = cluster_index,
-            .clusters = &.{},
+            .clusters = userdata_clusters,
             .continuation_sites = &.{},
             .block_index = .{},
             .call_facts = .{},
@@ -496,6 +505,14 @@ pub const FunctionPlan = struct {
         self.* = undefined;
     }
 
+    pub fn dupTableAt(self: FunctionPlan, start: u32) ?model.DupTablePattern {
+        for (self.facts.dup_tables) |pattern| {
+            if (pattern.start == start)
+                return pattern;
+        }
+        return null;
+    }
+
     pub fn tableAllocCovering(self: FunctionPlan, instruction_id: u32) ?recognize.TableAlloc {
         for (self.facts.table_allocs) |alloc| {
             if (instruction_id >= alloc.start and instruction_id <= alloc.finish)
@@ -516,8 +533,11 @@ pub const FunctionPlan = struct {
     pub fn indexClusters(self: *FunctionPlan, ctx: anytype) Error!void {
         var clusters: std.ArrayList(Cluster) = .empty;
         errdefer clusters.deinit(self.allocator);
+        try clusters.appendSlice(self.allocator, self.clusters);
         var instruction_id: u32 = 0;
         while (instruction_id < self.cluster_index.len) : (instruction_id += 1) {
+            if (self.cluster_index[instruction_id] != snapshot_v1.no_id)
+                continue;
             const matched = (try matchInstructionCluster(ctx, instruction_id)) orelse continue;
             if (clusters.items.len != 0) {
                 const last = clusters.items[clusters.items.len - 1];
@@ -531,7 +551,10 @@ pub const FunctionPlan = struct {
             self.cluster_index[instruction_id] = @intCast(clusters.items.len);
             try clusters.append(self.allocator, matched);
         }
+        const previous = self.clusters;
         self.clusters = try clusters.toOwnedSlice(self.allocator);
+        if (previous.len != 0)
+            self.allocator.free(previous);
     }
 
     pub fn indexBlocks(self: *FunctionPlan, ctx: anytype) Error!void {
@@ -547,6 +570,16 @@ pub const FunctionPlan = struct {
 
     pub fn isPlannedBypass(self: FunctionPlan, block_id: u32) bool {
         return self.block_index.isBypassed(block_id);
+    }
+
+    pub fn ownsFallback(self: FunctionPlan, block_id: u32) bool {
+        if (self.block_index.isBypassed(block_id))
+            return true;
+        for (self.block_index.facts) |fact| {
+            if (fact.fallback == block_id or fact.extra0 == block_id or fact.extra1 == block_id)
+                return true;
+        }
+        return false;
     }
 
     pub fn plainLenAt(self: FunctionPlan, instruction_id: u32) ?recognize.PlainLen {
@@ -1109,6 +1142,43 @@ fn fillEdges(
     return values;
 }
 
+fn stampUserdataClusters(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    instruction_blocks: []const u32,
+    cluster_index: []u32,
+) Error![]FunctionPlan.Cluster {
+    var clusters: std.ArrayList(FunctionPlan.Cluster) = .empty;
+    errdefer clusters.deinit(allocator);
+    var instruction_id: u32 = 0;
+    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        if ((try snapshot.irInstruction(function, instruction_id)).command != .check_gc)
+            continue;
+        const pattern = (try recognize.userdataAllocationAt(
+            snapshot,
+            function,
+            proto,
+            instruction_blocks,
+            instruction_id,
+        )) orelse continue;
+        const cluster = FunctionPlan.Cluster{
+            .kind = .userdata_alloc,
+            .start = pattern.start,
+            .at = pattern.start,
+            .finish = pattern.finish,
+        };
+        const index: u32 = @intCast(clusters.items.len);
+        try clusters.append(allocator, cluster);
+        var covered = pattern.start;
+        while (covered <= pattern.finish) : (covered += 1)
+            cluster_index[covered] = index;
+        instruction_id = pattern.finish;
+    }
+    return clusters.toOwnedSlice(allocator);
+}
+
 /// §3.2 winner: first covering *At matcher in HEAD emitInstructionInner order.
 pub fn matchInstructionCluster(ctx: anytype, instruction_id: u32) Error!?FunctionPlan.Cluster {
     {
@@ -1184,21 +1254,15 @@ pub fn matchInstructionCluster(ctx: anytype, instruction_id: u32) Error!?Functio
                         };
         }
     }
-    {
-        var cursor = instruction_id + 1;
-        while (cursor != 0) {
-            cursor -= 1;
-            if ((try ctx.instruction(cursor)).command != .check_gc)
-                continue;
-            if (try ctx.userdataAllocationPatternAt(cursor)) |pattern|
-                if (instruction_id <= pattern.finish)
-                    return .{
-                        .kind = .userdata_alloc,
-                        .start = pattern.start,
-                        .at = pattern.start,
-                        .finish = pattern.finish,
-                    };
-        }
+    if ((try ctx.instruction(instruction_id)).command == .check_gc) {
+        if (try ctx.userdataAllocationPatternAt(instruction_id)) |pattern|
+            if (instruction_id <= pattern.finish)
+                return .{
+                    .kind = .userdata_alloc,
+                    .start = pattern.start,
+                    .at = pattern.start,
+                    .finish = pattern.finish,
+                };
     }
     {
         var distance: u32 = 0;

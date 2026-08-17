@@ -5,8 +5,8 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "3f02ade9eb7b4be0be91a75d111b86d02dd8408c061395f0bd9c1f9ecacd2fbe",
   "input_sha256": {
-    "compiler": "dbfc9dcd6e10c151cdea599f7e6a24eca4aceb17f57fbf122e18a3d25a95307d",
-    "pack": "e562444a166f27c50bfaf06eaa1560a35c9dddbbb2a67341b0671a101c53611f",
+    "compiler": "b156065317df4baa48566e16ff1beb2412387ac3b1254cd9e5b2654d7d0316bb",
+    "pack": "30876e1671d90acf9e3836407aeac40602c550a5477c77eca0c75e7471fc7fac",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "permitted": [
@@ -35,7 +35,7 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "dbfc9dcd6e10c151cdea599f7e6a24eca4aceb17f57fbf122e18a3d25a95307d",
+      "sha256": "b156065317df4baa48566e16ff1beb2412387ac3b1254cd9e5b2654d7d0316bb",
       "export_names": [
         "luauc_v1_alloc",
         "luauc_v1_compile",
@@ -47,7 +47,7 @@
         "memory"
       ],
       "import_names": [],
-      "function_count": 3203,
+      "function_count": 3227,
       "memory_min": 1024,
       "features": [
         "bulk-memory",
@@ -61,7 +61,7 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "e562444a166f27c50bfaf06eaa1560a35c9dddbbb2a67341b0671a101c53611f",
+      "sha256": "30876e1671d90acf9e3836407aeac40602c550a5477c77eca0c75e7471fc7fac",
       "export_names": [
         "__stack_pointer",
         "_start",
@@ -181,5 +181,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "11708e66f9eba4675b99d4cfff3ae024c693f2ce3d5dda2b35fc179b8a386bc3"
+  "canonical_hash": "2e497a21703a8ccb4129ee0802c6b1e557796be012a58dcbeade8b17e7b172df"
 }

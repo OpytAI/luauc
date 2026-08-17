@@ -51,7 +51,7 @@ bazel run //:embed-wasmtime -- run /tmp/program.wasm 7 beta
 Both print the pinned-interpreter transcript:
 
 ```text
-result=7|beta|635|beta:8:2/1/11:missing
+result=7|beta|641|beta:8:2/1/11:missing
 ```
 
 The example exercises static modules, closures and calls, protected errors, tables, strings,

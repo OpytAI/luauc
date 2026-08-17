@@ -86,10 +86,12 @@ js_test(
     name = "ir_coverage_test",
     size = "large",
     data = [
+        "generate_compiler_build_digest.mjs",
         "generate_general_arms.mjs",
         "generate_ir_coverage.mjs",
         "ir_coverage.test.mjs",
         "ir_ledger.mjs",
+        "//compiler:compiler_build_digest_json",
         "//compiler/backend:backend_wasm",
         "//conformance/sources:ir_ledger_luau",
         "//compiler/backend/emit:dispatch_zig",
@@ -122,6 +124,7 @@ js_test(
         "LUAUC_IR_COMMAND_FORMS": "$(rlocationpath //conformance/maps:ir_command_forms_json)",
         "LUAUC_IR_COVERAGE": "$(rlocationpath //conformance/maps:ir_coverage_json)",
         "LUAUC_IR_LEDGER_CORPUS": "$(rlocationpath //conformance/maps:ir_ledger_corpus_json)",
+        "LUAUC_COMPILER_BUILD_DIGEST": "$(rlocationpath //compiler:compiler_build_digest_json)",
     },
 )
 

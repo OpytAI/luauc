@@ -4,7 +4,6 @@ const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const recognize = @import("luauc_backend_recognize");
-
 const Error = model.Error;
 const TableAllocationPattern = model.TableAllocationPattern;
 const DupTablePattern = model.DupTablePattern;
@@ -13,6 +12,7 @@ const ConstantTruthyFallbackPattern = model.ConstantTruthyFallbackPattern;
 const LiteralFieldSetPattern = model.LiteralFieldSetPattern;
 const TableInsertAppendPattern = model.TableInsertAppendPattern;
 const UserdataAllocationPattern = model.UserdataAllocationPattern;
+const ir_cmd_setlist = abi.ir_cmd_setlist;
 const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const ir_cmd_new_table = abi.ir_cmd_new_table;
@@ -46,7 +46,21 @@ pub noinline fn tableAllocationPatternAt(self: anytype, start: u32) Error!?Table
     return recognize.tableAllocationAt(self.snapshot, self.function, self.proto, self.plan.instruction_blocks, start);
 }
 pub fn isDeferredTableInitializationCommand(_: anytype, command: snapshot_v1.IrCommand) bool {
-    return recognize.isDeferredTableInitializationCommand(command);
+    return switch (command) {
+        ir_cmd_setlist,
+        .store_tvalue,
+        .store_split_tvalue,
+        .store_tag,
+        .store_pointer,
+        .store_double,
+        .store_vector,
+        ir_cmd_get_slot_node_addr,
+        ir_cmd_check_slot_match,
+        ir_cmd_check_readonly,
+        ir_cmd_barrier_table_forward,
+        => true,
+        else => false,
+    };
 }
 pub fn userdataWriteWidth(_: anytype, command: snapshot_v1.IrCommand) ?u32 {
     return if (command == ir_cmd_buffer_writei8)
