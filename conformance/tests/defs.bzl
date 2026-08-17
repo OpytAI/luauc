@@ -42,6 +42,10 @@ SOURCE_ENV = {
     "LUAUC_TABLE_NAMECALL_SOURCE": "//conformance/sources:table_namecall",
     "LUAUC_USERDATA_HOOKS_SOURCE": "//conformance/sources:userdata_hooks",
     "LUAUC_YIELD_CALL_SOURCE": "//conformance/sources:yield_call",
+    "LUAUC_NUMERIC_LOOP_SOURCE": "//conformance/sources:numeric_loop",
+    "LUAUC_NATURAL_INTEGER_SOURCE": "//conformance/sources:natural_integer",
+    "LUAUC_NATURAL_BIT32_SOURCE": "//conformance/sources:natural_bit32",
+    "LUAUC_NATURAL_BUFFER_SOURCE": "//conformance/sources:natural_buffer",
 }
 
 def family_js_test(name, entry_point, source_env_keys, extra_data = []):

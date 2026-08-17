@@ -151,6 +151,30 @@
       "path": "conformance/sources/userdata_hooks.luau",
       "bazel_data": "//conformance/sources:userdata_hooks",
       "hook": true
+    },
+    {
+      "source": "numeric_loop",
+      "path": "conformance/sources/numeric_loop.luau",
+      "bazel_data": "//conformance/sources:numeric_loop",
+      "hook": false
+    },
+    {
+      "source": "natural_integer",
+      "path": "conformance/sources/natural_integer.luau",
+      "bazel_data": "//conformance/sources:natural_integer",
+      "hook": false
+    },
+    {
+      "source": "natural_bit32",
+      "path": "conformance/sources/natural_bit32.luau",
+      "bazel_data": "//conformance/sources:natural_bit32",
+      "hook": false
+    },
+    {
+      "source": "natural_buffer",
+      "path": "conformance/sources/natural_buffer.luau",
+      "bazel_data": "//conformance/sources:natural_buffer",
+      "hook": false
     }
   ]
 }

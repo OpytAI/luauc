@@ -13,6 +13,7 @@
     "//conformance/tests:iteration_test",
     "//conformance/tests:malformed_graph_test",
     "//conformance/tests:namecall_test",
+    "//conformance/tests:natural_sources_test",
     "//conformance/tests:operators_test",
     "//conformance/tests:proto_identity_test",
     "//conformance/tests:scalar_test",

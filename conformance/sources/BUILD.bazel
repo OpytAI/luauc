@@ -21,6 +21,10 @@ _LEDGER_LUAU = [
     "table_clone_append.luau",
     "table_namecall.luau",
     "yield_call.luau",
+    "numeric_loop.luau",
+    "natural_integer.luau",
+    "natural_bit32.luau",
+    "natural_buffer.luau",
 ]
 
 _PRODUCT_LUAU = [

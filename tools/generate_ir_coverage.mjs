@@ -79,6 +79,13 @@ function intersectSorted(sets) {
   return [...current].sort();
 }
 
+const NATURAL_SOURCES = new Set([
+  "numeric_loop",
+  "natural_integer",
+  "natural_bit32",
+  "natural_buffer",
+]);
+
 function existingTests(sourceIds) {
   const tests = [];
   if (sourceIds.some((id) => FRONTEND_TO_WASM_SOURCES.has(id))) {
@@ -87,6 +94,9 @@ function existingTests(sourceIds) {
   if (sourceIds.some((id) => PARITY_SOURCES.has(id))) {
     tests.push("//hosts/js:embed_test");
     tests.push("//hosts/wasmtime:parity_test");
+  }
+  if (sourceIds.some((id) => NATURAL_SOURCES.has(id))) {
+    tests.push("//conformance/tests:natural_sources_test");
   }
   return tests;
 }

@@ -100,6 +100,17 @@ family_js_test(
 )
 
 family_js_test(
+    name = "natural_sources_test",
+    entry_point = "natural_sources.test.mjs",
+    source_env_keys = [
+        "LUAUC_NUMERIC_LOOP_SOURCE",
+        "LUAUC_NATURAL_INTEGER_SOURCE",
+        "LUAUC_NATURAL_BIT32_SOURCE",
+        "LUAUC_NATURAL_BUFFER_SOURCE",
+    ],
+)
+
+family_js_test(
     name = "coverage_test",
     entry_point = "coverage.test.mjs",
     source_env_keys = [],

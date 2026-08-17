@@ -1,0 +1,10 @@
+return function(seed)
+    local n = integer.create(seed)
+    local two = integer.create(2)
+    local three = integer.create(3)
+    local summed = integer.add(n, two)
+    local shifted = integer.lshift(summed, three)
+    local masked = integer.band(shifted, integer.create(255))
+    local quotient = integer.idiv(masked, two)
+    return integer.tonumber(quotient) + integer.tonumber(integer.sub(n, two))
+end
