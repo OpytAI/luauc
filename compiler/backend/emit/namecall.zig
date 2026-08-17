@@ -203,18 +203,6 @@ pub noinline fn plainTableNamecallPattern(self: anytype, block: snapshot_v1.IrBl
         .rejoin = first_rejoin.value,
     };
 }
-pub noinline fn isBypassedPlainTableNamecallBlock(self: anytype, block_id: u32) Error!bool {
-    if (self.function.entry_block == block_id)
-        return false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        if (try self.plainTableNamecallPattern(source_block)) |pattern|
-            if (block_id == pattern.first_fast or block_id == pattern.second_fast or block_id == pattern.fallback)
-                return true;
-    }
-    return false;
-}
 pub noinline fn emitPlainTableNamecallBlock(
     self: anytype,
     block_id: u32,

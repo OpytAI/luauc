@@ -24,3 +24,15 @@ zig_library(
         "//compiler/model:runtime_abi",
     ],
 )
+
+zig_library(
+    name = "admission",
+    main = "admission.zig",
+    import_name = "luauc_backend_admission",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)

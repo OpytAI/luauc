@@ -19,17 +19,29 @@ backend_emit_library(
 backend_emit_library(name = "builtin_patterns")
 backend_emit_library(
     name = "calls",
-    deps = ["//compiler/backend/lower:imports"],
+    deps = [
+        "//compiler/backend/lower:imports",
+        "//compiler/backend/plan:admission",
+    ],
 )
 backend_emit_library(name = "closures")
 backend_emit_library(name = "control")
-backend_emit_library(name = "core")
+backend_emit_library(
+    name = "core",
+    deps = ["//compiler/backend/plan:admission"],
+)
 backend_emit_library(
     name = "dispatch",
-    deps = ["//compiler/model:diagnostics"],
+    deps = [
+        "//compiler/model:diagnostics",
+        "//compiler/backend/plan:admission",
+    ],
 )
 backend_emit_library(name = "iteration")
-backend_emit_library(name = "memory")
+backend_emit_library(
+    name = "memory",
+    deps = ["//compiler/backend/plan:admission"],
+)
 backend_emit_library(name = "namecall")
 backend_emit_library(name = "operators")
 backend_emit_library(name = "scalar")

@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const admission = @import("luauc_backend_admission");
 
 const Error = model.Error;
 const IntegerCreatePattern = model.IntegerCreatePattern;
@@ -63,7 +64,7 @@ pub noinline fn emitCheckDivInt64(self: anytype, instruction_value: snapshot_v1.
     switch (failure.kind) {
         .block => {
             const target_block = try self.snapshot.irBlock(self.function, failure.value);
-            if (target_block.kind == .fallback and !try self.supportsFallback(target_block))
+            if (target_block.kind == .fallback and !try admission.supportsFallback(self, target_block))
                 return Error.UnsupportedControlFlow;
             const target = if (target_block.kind == .fallback)
                 failure.value
@@ -159,7 +160,7 @@ pub noinline fn emitCheckTag(self: anytype, instruction_value: snapshot_v1.IrIns
     switch (failure.kind) {
         .block => {
             const target_block = try self.snapshot.irBlock(self.function, failure.value);
-            if (target_block.kind == .fallback and !try self.supportsFallback(target_block))
+            if (target_block.kind == .fallback and !try admission.supportsFallback(self, target_block))
                 return Error.UnsupportedControlFlow;
             const target = if (target_block.kind == .fallback)
                 failure.value
@@ -678,7 +679,7 @@ pub noinline fn emitGuardFailure(self: anytype, failure: snapshot_v1.IrOperand) 
     switch (failure.kind) {
         .block => {
             const target_block = try self.snapshot.irBlock(self.function, failure.value);
-            if (target_block.kind == .fallback and !try self.supportsFallback(target_block))
+            if (target_block.kind == .fallback and !try admission.supportsFallback(self, target_block))
                 return Error.UnsupportedControlFlow;
             const target = if (target_block.kind == .fallback)
                 failure.value

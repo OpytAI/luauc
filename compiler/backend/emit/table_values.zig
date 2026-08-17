@@ -20,34 +20,6 @@ fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
     };
 }
 
-pub noinline fn supportsGeneralTableFallback(
-    self: anytype,
-    block: snapshot_v1.IrBlock,
-) Error!bool {
-    if (block.kind != .fallback or block.isEmpty() or block.finish != block.start + 2)
-        return false;
-    const marker = try self.instruction(block.start);
-    const semantic = try self.instruction(block.start + 1);
-    const jump = try self.instruction(block.finish);
-    if (marker.command != .set_savedpc or marker.operand_count != 1 or
-        (semantic.command != abi.ir_cmd_get_table and semantic.command != abi.ir_cmd_set_table) or
-        semantic.operand_count != 3 or jump.command != .jump or jump.operand_count != 1)
-        return false;
-    _ = self.savedPc(marker) catch return false;
-    _ = self.vmRegisterIndex(try self.operand(semantic, 0)) catch return false;
-    _ = self.vmRegisterIndex(try self.operand(semantic, 1)) catch return false;
-    const key = try self.operand(semantic, 2);
-    if (key.kind == .constant) {
-        _ = (immediateNumber(self, key) catch return false) orelse return false;
-    } else {
-        _ = self.valueOperandEncoding(key) catch return false;
-    }
-    const target = try self.operand(jump, 0);
-    if (target.kind != .block or target.value >= self.function.block_count)
-        return false;
-    const target_block = try self.snapshot.irBlock(self.function, target.value);
-    return target_block.kind.isCompilable() and !target_block.isEmpty();
-}
 
 pub noinline fn emitTryNumberToIndex(
     self: anytype,

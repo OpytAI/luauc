@@ -4,6 +4,7 @@ const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const import_plan = @import("luauc_backend_imports");
+const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const Error = model.Error;
@@ -445,7 +446,7 @@ pub fn staticRequireTarget(self: anytype, start: u32, block: snapshot_v1.IrBlock
         store_path.command != .store_tvalue or interrupt.command != .interrupt or
         saved_pc.command != .set_savedpc or call.command != .call)
         return null;
-    if (!try import_plan.isRequireImportInstruction(self.snapshot, self.function, self.proto, get_import))
+    if (!try admission.isRequireImportInstruction(self.snapshot, self.function, self.proto, get_import))
         return null;
     if (has_marker and first.command == .nop) {
         var prefix = block.start;

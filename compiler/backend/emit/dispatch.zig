@@ -4,6 +4,7 @@ const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const diagnostics = @import("luauc_backend_diagnostics");
+const admission = @import("luauc_backend_admission");
 
 const Error = model.Error;
 const CallContinuation = model.CallContinuation;
@@ -584,7 +585,7 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         return self.emitDynamicLengthBlock(block_id, block, pattern);
     if (try self.semanticArrayOperation(block)) |operation|
         return self.emitArrayOperationBlock(block_id, block, operation.pattern, operation.kind);
-    if (block.kind == .fallback and !try self.supportsFallback(block))
+    if (block.kind == .fallback and !try admission.supportsFallback(self, block))
         return Error.UnsupportedControlFlow;
 
     return emitDispatchBlock(self, block_id, block);

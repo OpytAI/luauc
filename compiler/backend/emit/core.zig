@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const admission = @import("luauc_backend_admission");
 
 const Error = model.Error;
 const ValueSlot = model.ValueSlot;
@@ -889,7 +890,7 @@ pub fn requireDispatchTarget(self: anytype, operand_value: snapshot_v1.IrOperand
     const target = try self.snapshot.irBlock(self.function, operand_value.value);
     if (target.isEmpty() or
         (!target.kind.isCompilable() and
-            (target.kind != .fallback or !try self.supportsFallback(target))))
+            (target.kind != .fallback or !try admission.supportsFallback(self, target))))
         return Error.UnsupportedControlFlow;
     return operand_value.value;
 }

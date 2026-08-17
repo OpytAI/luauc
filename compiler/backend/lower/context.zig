@@ -18,6 +18,7 @@ const closures = @import("luauc_backend_emit_closures");
 const control = @import("luauc_backend_emit_control");
 const calls = @import("luauc_backend_emit_calls");
 const dispatch = @import("luauc_backend_emit_dispatch");
+const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const ValueSlot = model.ValueSlot;
@@ -295,7 +296,7 @@ pub const Context = struct {
     pub const emitTableLayoutGuard = table_values.emitTableLayoutGuard;
     pub const emitForwardTableBarrier = table_values.emitForwardTableBarrier;
     pub const emitGeneralTableOperation = table_values.emitGeneralTableOperation;
-    pub const supportsGeneralTableFallback = table_values.supportsGeneralTableFallback;
+    pub const supportsGeneralTableFallback = admission.supportsGeneralTableFallback;
 
     // allocations
     pub const tableAllocationPatternAt = allocations.tableAllocationPatternAt;
@@ -326,7 +327,7 @@ pub const Context = struct {
     // namecall
     pub const blockReferenceCount = namecall.blockReferenceCount;
     pub const plainTableNamecallPattern = namecall.plainTableNamecallPattern;
-    pub const isBypassedPlainTableNamecallBlock = namecall.isBypassedPlainTableNamecallBlock;
+    pub const isBypassedPlainTableNamecallBlock = admission.isBypassedPlainTableNamecallBlock;
     pub const emitPlainTableNamecallBlock = namecall.emitPlainTableNamecallBlock;
     pub const emitFallbackNamecall = namecall.emitFallbackNamecall;
     pub const emitPlainTableNamecallOperation = namecall.emitPlainTableNamecallOperation;
@@ -416,10 +417,10 @@ pub const Context = struct {
     pub const xnextFastPreparationPattern = iteration.xnextFastPreparationPattern;
     pub const emitXnextFastPreparationBlock = iteration.emitXnextFastPreparationBlock;
     pub const emitXnextPreparationBlock = iteration.emitXnextPreparationBlock;
-    pub const supportsGenericIterationFallback = iteration.supportsGenericIterationFallback;
-    pub const supportsSpecializedIpairsFallback = iteration.supportsSpecializedIpairsFallback;
+    pub const supportsGenericIterationFallback = admission.supportsGenericIterationFallback;
+    pub const supportsSpecializedIpairsFallback = admission.supportsSpecializedIpairsFallback;
     pub const specializedIpairsPattern = iteration.specializedIpairsPattern;
-    pub const isBypassedSpecializedIpairsPublishBlock = iteration.isBypassedSpecializedIpairsPublishBlock;
+    pub const isBypassedSpecializedIpairsPublishBlock = admission.isBypassedSpecializedIpairsPublishBlock;
     pub const emitGenericIterationCall = iteration.emitGenericIterationCall;
     pub const emitGenericIterationFinish = iteration.emitGenericIterationFinish;
     pub const emitGenericIterationFallbackCall = iteration.emitGenericIterationFallbackCall;
@@ -437,12 +438,12 @@ pub const Context = struct {
     pub const emitGenericTableDirectAttempt = iteration.emitGenericTableDirectAttempt;
     pub const emitGenericTableOperationBlock = iteration.emitGenericTableOperationBlock;
     pub const emitInlineGenericTableSet = iteration.emitInlineGenericTableSet;
-    pub const isBypassedStringLinearizedBlock = iteration.isBypassedStringLinearizedBlock;
-    pub const isBypassedGenericTableLinearizedBlock = iteration.isBypassedGenericTableLinearizedBlock;
-    pub const isBypassedGlobalLinearizedBlock = iteration.isBypassedGlobalLinearizedBlock;
-    pub const isBypassedPowLinearizedBlock = iteration.isBypassedPowLinearizedBlock;
-    pub const isBypassedConstantArithmeticLinearizedBlock = iteration.isBypassedConstantArithmeticLinearizedBlock;
-    pub const isBypassedStringEqualityBlock = iteration.isBypassedStringEqualityBlock;
+    pub const isBypassedStringLinearizedBlock = admission.isBypassedStringLinearizedBlock;
+    pub const isBypassedGenericTableLinearizedBlock = admission.isBypassedGenericTableLinearizedBlock;
+    pub const isBypassedGlobalLinearizedBlock = admission.isBypassedGlobalLinearizedBlock;
+    pub const isBypassedPowLinearizedBlock = admission.isBypassedPowLinearizedBlock;
+    pub const isBypassedConstantArithmeticLinearizedBlock = admission.isBypassedConstantArithmeticLinearizedBlock;
+    pub const isBypassedStringEqualityBlock = admission.isBypassedStringEqualityBlock;
 
     // control
     pub const sourceLine = control.sourceLine;
@@ -455,19 +456,23 @@ pub const Context = struct {
     pub const emitCompareAny = control.emitCompareAny;
     pub const stringEqualityPattern = control.stringEqualityPattern;
     pub const emitStringEqualityBlock = control.emitStringEqualityBlock;
-    pub const supportsArithmeticFallback = control.supportsArithmeticFallback;
-    pub const supportsComparisonFallback = control.supportsComparisonFallback;
-    pub const supportsMaterializedComparisonFallback = control.supportsMaterializedComparisonFallback;
-    pub const supportsLengthFallback = control.supportsLengthFallback;
-    pub const supportsFallback = control.supportsFallback;
-    pub const supportsNamecallFallback = control.supportsNamecallFallback;
-    pub const supportsOrdinaryCallFallback = control.supportsOrdinaryCallFallback;
-    pub const ordinaryCallFallbackTarget = control.ordinaryCallFallbackTarget;
-    pub const isOwnedSemanticTableFallbackBlock = control.isOwnedSemanticTableFallbackBlock;
-    pub const isOwnedDynamicLengthFallbackBlock = control.isOwnedDynamicLengthFallbackBlock;
-    pub const isBypassedEmissionBlock = control.isBypassedEmissionBlock;
-    pub const isBypassedXnextFastPreparationBlock = control.isBypassedXnextFastPreparationBlock;
-    pub const isFastcallFallbackBlock = control.isFastcallFallbackBlock;
+    pub const supportsArithmeticFallback = admission.supportsArithmeticFallback;
+    pub const supportsComparisonFallback = admission.supportsComparisonFallback;
+    pub const supportsMaterializedComparisonFallback = admission.supportsMaterializedComparisonFallback;
+    pub const supportsLengthFallback = admission.supportsLengthFallback;
+    pub fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) model.Error!bool {
+        return admission.supportsFallback(self, block);
+    }
+    pub const supportsNamecallFallback = admission.supportsNamecallFallback;
+    pub const supportsOrdinaryCallFallback = admission.supportsOrdinaryCallFallback;
+    pub const ordinaryCallFallbackTarget = admission.ordinaryCallFallbackTarget;
+    pub const isOwnedSemanticTableFallbackBlock = admission.isOwnedSemanticTableFallbackBlock;
+    pub const isOwnedDynamicLengthFallbackBlock = admission.isOwnedDynamicLengthFallbackBlock;
+    pub fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) model.Error!bool {
+        return admission.isBypassedEmissionBlock(self, block_id, block);
+    }
+    pub const isBypassedXnextFastPreparationBlock = admission.isBypassedXnextFastPreparationBlock;
+    pub const isFastcallFallbackBlock = admission.isFastcallFallbackBlock;
     pub const emitInterrupt = control.emitInterrupt;
     pub const emitCoverage = control.emitCoverage;
     pub const emitJump = control.emitJump;

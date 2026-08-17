@@ -269,32 +269,6 @@ pub const RuntimeImports = struct {
     generated_type: u32,
 };
 
-pub fn isRequireImportInstruction(
-    snapshot: snapshot_v1.Snapshot,
-    function: snapshot_v1.IrFunction,
-    proto: snapshot_v1.Proto,
-    instruction_value: snapshot_v1.IrInstruction,
-) Error!bool {
-    if (instruction_value.command != .get_cached_import or instruction_value.operand_count != 4)
-        return false;
-    const import_operand = try snapshot.irOperand(instruction_value, 1);
-    const descriptor_operand = try snapshot.irOperand(instruction_value, 2);
-    if (import_operand.kind != .vm_const or descriptor_operand.kind != .constant)
-        return false;
-    const import = try snapshot.vmConstant(proto, import_operand.value);
-    if (import.kind != .import or import.payload1 != 1)
-        return false;
-    const item = try snapshot.vmConstantItem(import.payload0);
-    if (item.value != snapshot_v1.no_id)
-        return false;
-    const name_constant = try snapshot.vmConstant(proto, item.key);
-    if (name_constant.kind != .string or !std.mem.eql(u8, try snapshot.string(name_constant.payload0), "require"))
-        return false;
-    const descriptor = try snapshot.irConstant(function, descriptor_operand.value);
-    const encoded = descriptor.importValue() orelse return false;
-    const expected = (@as(u32, 1) << 30) | (item.key << 20);
-    return encoded == expected;
-}
 
 fn isStaticRequireCall(snapshot: snapshot_v1.Snapshot, function: snapshot_v1.IrFunction, instruction_id: u32) Error!bool {
     if (instruction_id < 5)
@@ -309,7 +283,12 @@ fn isStaticRequireCall(snapshot: snapshot_v1.Snapshot, function: snapshot_v1.IrF
         (try snapshot.irInstruction(function, get_id + 3)).command != .interrupt or
         (try snapshot.irInstruction(function, get_id + 4)).command != .set_savedpc)
         return false;
-    return isRequireImportInstruction(snapshot, function, try snapshot.proto(function.proto_id), get_import);
+    return @import("luauc_backend_admission").isRequireImportInstruction(
+        snapshot,
+        function,
+        try snapshot.proto(function.proto_id),
+        get_import,
+    );
 }
 
 pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_package: bool, needs: *ImportNeeds) Error!void {

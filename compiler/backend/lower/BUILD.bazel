@@ -7,6 +7,7 @@ zig_library(
     import_name = "luauc_backend_imports",
     visibility = ["//visibility:public"],
     deps = [
+        "//compiler/backend/plan:admission",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:model",
         "//compiler/model:runtime_abi",
@@ -20,6 +21,7 @@ zig_library(
     import_name = "luauc_backend_context",
     visibility = ["//compiler/backend:__subpackages__"],
     deps = [
+        "//compiler/backend/plan:admission",
         "//compiler/backend/emit:allocations",
         "//compiler/backend/emit:builtin_patterns",
         "//compiler/backend/emit:calls",
@@ -50,6 +52,7 @@ zig_library(
     visibility = ["//compiler/backend:__subpackages__"],
     deps = [
         ":context",
+        "//compiler/backend/plan:admission",
         "//compiler/backend/plan:plan",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:diagnostics",
@@ -67,6 +70,7 @@ zig_library(
         ":context",
         ":continuations",
         ":imports",
+        "//compiler/backend/plan:admission",
         "//compiler/backend/plan:plan",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:diagnostics",

@@ -9,6 +9,7 @@ const Context = @import("luauc_backend_context").Context;
 const continuations = @import("luauc_backend_continuations");
 const runtime_imports = @import("luauc_backend_imports");
 const diagnostics = @import("luauc_backend_diagnostics");
+const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const Error = model.Error;
@@ -256,7 +257,7 @@ fn lowerFunction(
     var block_id: u32 = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        if (block.kind == .fallback and try context.supportsArithmeticFallback(block)) {
+        if (block.kind == .fallback and try admission.supportsArithmeticFallback(context, block)) {
             if (context.do_arith == null)
                 return Error.UnsupportedCommand;
         } else if (block.kind == .fallback and
@@ -293,7 +294,7 @@ fn lowerFunction(
         const bypassed = if (block.kind == .fallback and try context.supportsOrdinaryCallFallback(block))
             false
         else
-            context.isBypassedEmissionBlock(block_id, block) catch |err| {
+            admission.isBypassedEmissionBlock(context, block_id, block) catch |err| {
                 diagnostics.recordBlock(@errorName(err), block_id);
                 return err;
             };
@@ -302,7 +303,7 @@ fn lowerFunction(
                 diagnostics.recordBlock(@errorName(err), block_id);
                 return err;
             }
-        else if (block.kind == .fallback and !bypassed and try context.supportsFallback(block))
+        else if (block.kind == .fallback and !bypassed and try admission.supportsFallback(context, block))
             context.emitBlock(block_id, block) catch |err| {
                 diagnostics.recordBlock(@errorName(err), block_id);
                 return err;

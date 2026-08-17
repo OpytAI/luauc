@@ -4,6 +4,7 @@ const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const Context = @import("luauc_backend_context").Context;
 const diagnostics = @import("luauc_backend_diagnostics");
+const admission = @import("luauc_backend_admission");
 
 const Error = model.Error;
 const ValueShape = model.ValueShape;
@@ -86,7 +87,7 @@ pub fn validateContinuationRegion(
         // generated dispatch arm and therefore terminates at the function's fail-closed internal
         // status. Do not follow its raw optimizer edges into blocks that generated code cannot reach.
         if (!block.kind.isCompilable() and
-            (block.kind != .fallback or !try context.supportsFallback(block)))
+            (block.kind != .fallback or !try admission.supportsFallback(context, block)))
             continue;
 
         reachable_blocks[block_id] = true;
@@ -242,8 +243,8 @@ pub fn validateGenericIterationContinuationRegion(
             return false;
         }
         if (block.kind == .fallback and
-            !try context.isBypassedEmissionBlock(block_id, block) and
-            !try context.supportsFallback(block))
+            !try admission.isBypassedEmissionBlock(context, block_id, block) and
+            !try admission.supportsFallback(context, block))
         {
             diagnostics.recordBlock(@errorName(Error.UnsupportedControlFlow), block_id);
             return false;
@@ -320,7 +321,7 @@ pub fn collectCallContinuations(allocator: std.mem.Allocator, context: Context) 
         if (block.isEmpty() or (!block.kind.isCompilable() and block.kind != .fallback))
             continue;
         const ordinary_fallback_target = try context.ordinaryCallFallbackTarget(block);
-        if (ordinary_fallback_target == null and try context.isBypassedEmissionBlock(block_id, block))
+        if (ordinary_fallback_target == null and try admission.isBypassedEmissionBlock(context, block_id, block))
             continue;
         var instruction_id = block.start;
         while (instruction_id <= block.finish) : (instruction_id += 1) {
