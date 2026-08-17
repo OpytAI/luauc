@@ -438,7 +438,7 @@ pub noinline fn emitCheckUserdataTag(self: anytype, instruction_value: snapshot_
         try self.emitRegisterTagMismatch(register, lua_tag_userdata);
         try self.emitGuardFailure(failure);
     } else if (pointer.kind != .instruction or
-        try self.userdataAllocationPatternContaining(pointer.value) == null)
+        (self.plan.clusterAt(pointer.value) orelse return Error.UnsupportedControlFlow).kind != .userdata_alloc)
         return Error.UnsupportedControlFlow;
 
     try self.body.localGet(self.allocator, 0);
@@ -476,7 +476,7 @@ pub noinline fn emitBarrierObject(self: anytype, instruction_value: snapshot_v1.
         try self.body.opcode(self.allocator, 0x72); // i32.or
         try self.emitInternalErrorIf();
     } else if (owner.kind != .instruction or
-        try self.userdataAllocationPatternContaining(owner.value) == null)
+        (self.plan.clusterAt(owner.value) orelse return Error.UnsupportedControlFlow).kind != .userdata_alloc)
         return Error.UnsupportedControlFlow;
 
     try self.body.localGet(self.allocator, 0);

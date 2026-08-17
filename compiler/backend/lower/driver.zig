@@ -4,6 +4,7 @@ const static_package_v1 = @import("luauc_backend_static_package_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const FunctionPlan = @import("luauc_backend_plan").FunctionPlan;
+const continuation_plan = @import("luauc_backend_continuation_plan");
 const abi = @import("luauc_backend_runtime_abi");
 const Context = @import("luauc_backend_context").Context;
 const continuations = @import("luauc_backend_continuations");
@@ -58,6 +59,7 @@ fn lowerFunction(
         return err;
     };
     defer plan.deinit();
+    try continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan);
 
     const slots = try allocator.alloc(ValueSlot, function.instruction_count);
     defer allocator.free(slots);
@@ -227,6 +229,10 @@ fn lowerFunction(
         .call_continuations = &.{},
         .continuation_indices = &.{},
         .string_keys = string_keys,
+    };
+    plan.indexClusters(context) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "cluster index");
+        return err;
     };
     context.classifyBuiltinNumberLoads() catch |err| {
         diagnostics.recordPhase(@errorName(err), "value classification");

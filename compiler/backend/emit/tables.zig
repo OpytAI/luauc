@@ -390,16 +390,6 @@ pub noinline fn inlineGenericTableSetPatternAt(self: anytype, start: u32) Error!
         };
     }
 }
-pub noinline fn inlineGenericTableSetPatternContaining(self: anytype, instruction_id: u32) Error!?InlineGenericTablePattern {
-    var distance: u32 = 0;
-    while (distance < 15 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if ((try self.instruction(start)).command == .load_tag)
-            if (try self.inlineGenericTableSetPatternAt(start)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn semanticTableReloadPatternAt(self: anytype, start: u32) Error!?SemanticTableReloadPattern {
     if (start + 1 >= self.function.instruction_count)
         return null;
@@ -436,14 +426,6 @@ pub noinline fn semanticTableReloadPatternAt(self: anytype, start: u32) Error!?S
             .table = owner.table,
             .key = .{ .string = .{ .value = owner.key, .pc = owner.pc } },
         };
-    return null;
-}
-pub noinline fn semanticTableReloadPatternContaining(self: anytype, instruction_id: u32) Error!?SemanticTableReloadPattern {
-    if (try self.semanticTableReloadPatternAt(instruction_id)) |pattern|
-        return pattern;
-    if (instruction_id != 0)
-        if (try self.semanticTableReloadPatternAt(instruction_id - 1)) |pattern|
-            if (pattern.finish == instruction_id) return pattern;
     return null;
 }
 pub noinline fn emitSemanticTableReload(self: anytype, pattern: SemanticTableReloadPattern) Error!void {
@@ -630,7 +612,8 @@ pub noinline fn genericTableSetPattern(self: anytype, block: snapshot_v1.IrBlock
             (try self.operand(readonly, 1)).kind != .block or (try self.operand(readonly, 1)).value != fallback_target.value)
             return null;
     } else {
-        const allocation = (try self.tableAllocationPatternContaining(pointer_id)) orelse return null;
+        const covering = self.plan.tableAllocCovering(pointer_id) orelse return null;
+        const allocation = (try self.tableAllocationPatternAt(covering.start)) orelse return null;
         if (allocation.start != pointer_id or allocation.destination >= self.proto.max_stack_size)
             return null;
         table = allocation.destination;
@@ -899,16 +882,6 @@ pub noinline fn inlineConstantTableGetPatternAt(self: anytype, start: u32) Error
         .finish = finish,
     };
 }
-pub noinline fn inlineConstantTableGetPatternContaining(self: anytype, instruction_id: u32) Error!?InlineConstantTableGetPattern {
-    var distance: u32 = 0;
-    while (distance < 8 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if ((try self.instruction(start)).command == .load_tag)
-            if (try self.inlineConstantTableGetPatternAt(start)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn genericTablePattern(self: anytype, block: snapshot_v1.IrBlock) Error!?GenericTablePattern {
     if (try self.genericTableSetPattern(block)) |pattern|
         return pattern;
@@ -1133,15 +1106,6 @@ pub noinline fn inlineArrayGetPatternAt(self: anytype, start: u32) Error!?Inline
         .table = table,
         .index = std.math.add(u32, zero_based, 1) catch return null,
     };
-}
-pub noinline fn inlineArrayGetPatternContaining(self: anytype, instruction_id: u32) Error!?InlineArrayGetPattern {
-    var distance: u32 = 0;
-    while (distance < 3 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if (try self.inlineArrayGetPatternAt(start)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
 }
 pub noinline fn emitInlineArrayGet(self: anytype, pattern: InlineArrayGetPattern) Error!void {
     try self.body.localGet(self.allocator, 0);

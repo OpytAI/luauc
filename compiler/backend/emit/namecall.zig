@@ -259,16 +259,6 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }
-pub noinline fn tableAllocationPatternContaining(self: anytype, instruction_id: u32) Error!?TableAllocationPattern {
-    var back: u32 = 0;
-    while (back <= 3 and back <= instruction_id) : (back += 1) {
-        if (try self.tableAllocationPatternAt(instruction_id - back)) |pattern| {
-            if (instruction_id <= pattern.finish)
-                return pattern;
-        }
-    }
-    return null;
-}
 pub noinline fn emitTableAllocation(self: anytype, pattern: TableAllocationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
@@ -394,16 +384,6 @@ pub noinline fn concatPatternAt(self: anytype, start: u32) Error!?ConcatPattern 
     if (loaded_source != source or stored.kind != .instruction or stored.value != start + 2)
         return null;
     return .{ .start = start, .finish = finish, .destination = destination, .source = source, .count = count };
-}
-pub noinline fn concatPatternContaining(self: anytype, instruction_id: u32) Error!?ConcatPattern {
-    var distance: u32 = 0;
-    while (distance < 5 and distance <= instruction_id) : (distance += 1) {
-        if (try self.concatPatternAt(instruction_id - distance)) |pattern| {
-            if (instruction_id <= pattern.finish)
-                return pattern;
-        }
-    }
-    return null;
 }
 pub noinline fn emitConcat(self: anytype, pattern: ConcatPattern) Error!void {
     try self.emitSavedPcLocation(try self.instruction(pattern.start));

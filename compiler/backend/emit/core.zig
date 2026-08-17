@@ -117,10 +117,13 @@ pub fn initializedClosureValueCapture(self: anytype, address_id: u32, store_id: 
         const source = try self.operand(store, 1);
         if (destination.kind != .instruction or destination.value != address_id or source.kind != .instruction)
             return Error.InvalidOperandType;
-        if (try self.concatPatternContaining(source.value)) |concat| {
-            if (source.value != concat.start + 2)
-                return Error.InvalidOperandType;
-            return .{ .kind = .value, .source = concat.destination };
+        if (self.plan.clusterAt(source.value)) |cluster| {
+            if (cluster.kind == .concat) {
+                const concat = (try self.concatPatternAt(cluster.at)) orelse return Error.InvalidOperandType;
+                if (source.value != concat.start + 2)
+                    return Error.InvalidOperandType;
+                return .{ .kind = .value, .source = concat.destination };
+            }
         }
         if (try self.loadedTValueRegister(source.value)) |source_register|
             return .{ .kind = .value, .source = source_register };
@@ -405,18 +408,6 @@ pub fn initializedCapture(self: anytype, wanted: u32, capture_ir_start: u32) Err
         cursor += if (capture.kind == .value) 3 else 4;
     }
     unreachable;
-}
-pub noinline fn newClosurePatternContaining(self: anytype, instruction_id: u32) Error!?NewClosurePattern {
-    const fact = self.plan.closureContaining(instruction_id) orelse return null;
-    return self.newClosurePattern(fact.newclosure_id) catch |err| switch (err) {
-        Error.UnsupportedControlFlow,
-        Error.InvalidOperandCount,
-        Error.InvalidOperandType,
-        Error.InvalidInstructionResult,
-        Error.InvalidBlockTermination,
-        => null,
-        else => err,
-    };
 }
 pub fn isDupClosureCapture(self: anytype, instruction_id: u32) Error!bool {
     return self.plan.dupClosureCaptureContaining(instruction_id);

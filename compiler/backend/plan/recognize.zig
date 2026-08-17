@@ -70,6 +70,9 @@ pub const Facts = struct {
     dupclosures: []DupClosure,
     closure_index: []u32,
     dup_capture_index: []u32,
+    table_allocs: []TableAlloc,
+    dup_tables: []DupTablePattern,
+    setlists: []SetList,
 
     pub fn deinit(self: *Facts) void {
         self.allocator.free(self.plain_lens);
@@ -78,6 +81,9 @@ pub const Facts = struct {
         self.allocator.free(self.dupclosures);
         self.allocator.free(self.closure_index);
         self.allocator.free(self.dup_capture_index);
+        self.allocator.free(self.table_allocs);
+        self.allocator.free(self.dup_tables);
+        self.allocator.free(self.setlists);
         self.* = undefined;
     }
 
@@ -124,6 +130,12 @@ pub fn recognize(
     defer closures.deinit(allocator);
     var dupclosures: std.ArrayList(DupClosure) = .empty;
     defer dupclosures.deinit(allocator);
+    var table_allocs: std.ArrayList(TableAlloc) = .empty;
+    defer table_allocs.deinit(allocator);
+    var dup_tables: std.ArrayList(DupTablePattern) = .empty;
+    defer dup_tables.deinit(allocator);
+    var setlists: std.ArrayList(SetList) = .empty;
+    defer setlists.deinit(allocator);
 
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
@@ -138,6 +150,7 @@ pub fn recognize(
                 .check_gc_id = null,
             };
             try attachDeferredGc(snapshot, function, slices.instruction_blocks, &alloc);
+            try table_allocs.append(allocator, alloc);
             instruction_id = pattern.finish;
             continue;
         }
@@ -158,16 +171,19 @@ pub fn recognize(
                 .check_gc_id = null,
             };
             try attachDeferredGc(snapshot, function, slices.instruction_blocks, &alloc);
+            try table_allocs.append(allocator, alloc);
             continue;
         }
 
         if (try dupTableAt(snapshot, function, proto, slices.instruction_blocks, instruction_id)) |pattern| {
+            try dup_tables.append(allocator, pattern);
             instruction_id = pattern.finish;
             continue;
         }
 
         if (instruction.command == ir_cmd_setlist)
-            _ = try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction);
+            if (try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction)) |decoded|
+                try setlists.append(allocator, decoded);
 
         if (instruction.command == ir_cmd_table_len)
             if (try plainLenAt(snapshot, function, proto, slices, instruction_id, instruction)) |decoded|
@@ -205,6 +221,12 @@ pub fn recognize(
     errdefer allocator.free(closure_slice);
     const dupclosure_slice = try dupclosures.toOwnedSlice(allocator);
     errdefer allocator.free(dupclosure_slice);
+    const table_alloc_slice = try table_allocs.toOwnedSlice(allocator);
+    errdefer allocator.free(table_alloc_slice);
+    const dup_table_slice = try dup_tables.toOwnedSlice(allocator);
+    errdefer allocator.free(dup_table_slice);
+    const setlist_slice = try setlists.toOwnedSlice(allocator);
+    errdefer allocator.free(setlist_slice);
 
     const plain_len_index = try allocator.alloc(u32, function.instruction_count);
     errdefer allocator.free(plain_len_index);
@@ -241,6 +263,9 @@ pub fn recognize(
         .dupclosures = dupclosure_slice,
         .closure_index = closure_index,
         .dup_capture_index = dup_capture_index,
+        .table_allocs = table_alloc_slice,
+        .dup_tables = dup_table_slice,
+        .setlists = setlist_slice,
     };
 }
 

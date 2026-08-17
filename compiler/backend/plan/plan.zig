@@ -66,6 +66,33 @@ pub const FunctionPlan = struct {
     guarded_buffer_operations: []bool,
     resume_safe_blocks: []bool,
     facts: recognize.Facts,
+    dominators: Dominators,
+    cluster_index: []u32,
+    clusters: []Cluster,
+    continuation_sites: []u32,
+
+    pub const ClusterKind = enum {
+        constant_truthy,
+        inline_const_table_get,
+        inline_array_get,
+        semantic_table_reload,
+        inline_generic_table_set,
+        userdata_alloc,
+        literal_field_set,
+        constant_load,
+        dup_table,
+        table_insert_append,
+        plain_len,
+        concat,
+        table_alloc,
+    };
+
+    pub const Cluster = struct {
+        kind: ClusterKind,
+        start: u32,
+        at: u32,
+        finish: u32,
+    };
 
     pub const RegionDominators = struct {
         allocator: std.mem.Allocator,
@@ -331,9 +358,11 @@ pub const FunctionPlan = struct {
             predecessor_offsets,
             predecessors,
         );
-        defer allocator.free(dominators.immediate);
-        defer allocator.free(dominators.enter);
-        defer allocator.free(dominators.exit);
+        errdefer {
+            allocator.free(dominators.immediate);
+            allocator.free(dominators.enter);
+            allocator.free(dominators.exit);
+        }
         const resume_safe_blocks = try allocator.alloc(bool, block_count);
         errdefer allocator.free(resume_safe_blocks);
         @memset(resume_safe_blocks, true);
@@ -406,6 +435,10 @@ pub const FunctionPlan = struct {
         );
         errdefer facts.deinit();
 
+        const cluster_index = try allocator.alloc(u32, instruction_count);
+        errdefer allocator.free(cluster_index);
+        @memset(cluster_index, snapshot_v1.no_id);
+
         return .{
             .allocator = allocator,
             .instruction_blocks = instruction_blocks,
@@ -422,6 +455,10 @@ pub const FunctionPlan = struct {
             .guarded_buffer_operations = guarded_buffer_operations,
             .resume_safe_blocks = resume_safe_blocks,
             .facts = facts,
+            .dominators = dominators,
+            .cluster_index = cluster_index,
+            .clusters = &.{},
+            .continuation_sites = &.{},
         };
     }
 
@@ -439,8 +476,54 @@ pub const FunctionPlan = struct {
         self.allocator.free(self.array_address_guards);
         self.allocator.free(self.guarded_buffer_operations);
         self.allocator.free(self.resume_safe_blocks);
+        self.allocator.free(self.dominators.immediate);
+        self.allocator.free(self.dominators.enter);
+        self.allocator.free(self.dominators.exit);
+        self.allocator.free(self.cluster_index);
+        if (self.clusters.len != 0)
+            self.allocator.free(self.clusters);
+        if (self.continuation_sites.len != 0)
+            self.allocator.free(self.continuation_sites);
         self.facts.deinit();
         self.* = undefined;
+    }
+
+    pub fn tableAllocCovering(self: FunctionPlan, instruction_id: u32) ?recognize.TableAlloc {
+        for (self.facts.table_allocs) |alloc| {
+            if (instruction_id >= alloc.start and instruction_id <= alloc.finish)
+                return alloc;
+        }
+        return null;
+    }
+
+    pub fn clusterAt(self: FunctionPlan, instruction_id: u32) ?Cluster {
+        if (instruction_id >= self.cluster_index.len)
+            return null;
+        const index = self.cluster_index[instruction_id];
+        if (index == snapshot_v1.no_id)
+            return null;
+        return self.clusters[index];
+    }
+
+    pub fn indexClusters(self: *FunctionPlan, ctx: anytype) Error!void {
+        var clusters: std.ArrayList(Cluster) = .empty;
+        errdefer clusters.deinit(self.allocator);
+        var instruction_id: u32 = 0;
+        while (instruction_id < self.cluster_index.len) : (instruction_id += 1) {
+            const matched = (try matchInstructionCluster(ctx, instruction_id)) orelse continue;
+            if (clusters.items.len != 0) {
+                const last = clusters.items[clusters.items.len - 1];
+                if (last.kind == matched.kind and last.start == matched.start and
+                    last.at == matched.at and last.finish == matched.finish)
+                {
+                    self.cluster_index[instruction_id] = @intCast(clusters.items.len - 1);
+                    continue;
+                }
+            }
+            self.cluster_index[instruction_id] = @intCast(clusters.items.len);
+            try clusters.append(self.allocator, matched);
+        }
+        self.clusters = try clusters.toOwnedSlice(self.allocator);
     }
 
     pub fn plainLenAt(self: FunctionPlan, instruction_id: u32) ?recognize.PlainLen {
@@ -1001,6 +1084,206 @@ fn fillEdges(
         cursors[source] += 1;
     }
     return values;
+}
+
+/// §3.2 winner: first covering *At matcher in HEAD emitInstructionInner order.
+pub fn matchInstructionCluster(ctx: anytype, instruction_id: u32) Error!?FunctionPlan.Cluster {
+    {
+        var distance: u32 = 0;
+        while (distance < 3 and distance <= instruction_id) : (distance += 1) {
+            if (try ctx.constantTruthyFallbackPatternAt(instruction_id - distance)) |pattern| {
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .constant_truthy,
+                        .start = pattern.start,
+                        .at = pattern.start,
+                        .finish = pattern.finish,
+                    };
+            }
+        }
+    }
+    {
+        var distance: u32 = 0;
+        while (distance < 8 and distance <= instruction_id) : (distance += 1) {
+            const start = instruction_id - distance;
+            if ((try ctx.instruction(start)).command == .load_tag)
+                if (try ctx.inlineConstantTableGetPatternAt(start)) |pattern|
+                    if (instruction_id <= pattern.finish)
+                        return .{
+                            .kind = .inline_const_table_get,
+                            .start = pattern.pattern.start,
+                            .at = pattern.pattern.start,
+                            .finish = pattern.finish,
+                        };
+        }
+    }
+    {
+        var distance: u32 = 0;
+        while (distance < 3 and distance <= instruction_id) : (distance += 1) {
+            if (try ctx.inlineArrayGetPatternAt(instruction_id - distance)) |pattern|
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .inline_array_get,
+                        .start = pattern.start,
+                        .at = pattern.start,
+                        .finish = pattern.finish,
+                    };
+        }
+    }
+    if (try ctx.semanticTableReloadPatternAt(instruction_id)) |pattern|
+        return .{
+            .kind = .semantic_table_reload,
+            .start = pattern.start,
+            .at = pattern.start,
+            .finish = pattern.finish,
+        };
+    if (instruction_id != 0)
+        if (try ctx.semanticTableReloadPatternAt(instruction_id - 1)) |pattern|
+            if (pattern.finish == instruction_id)
+                return .{
+                    .kind = .semantic_table_reload,
+                    .start = pattern.start,
+                    .at = pattern.start,
+                    .finish = pattern.finish,
+                };
+    {
+        var distance: u32 = 0;
+        while (distance < 15 and distance <= instruction_id) : (distance += 1) {
+            const start = instruction_id - distance;
+            if ((try ctx.instruction(start)).command == .load_tag)
+                if (try ctx.inlineGenericTableSetPatternAt(start)) |pattern|
+                    if (instruction_id <= pattern.finish)
+                        return .{
+                            .kind = .inline_generic_table_set,
+                            .start = pattern.pattern.start,
+                            .at = pattern.pattern.start,
+                            .finish = pattern.finish,
+                        };
+        }
+    }
+    {
+        var cursor = instruction_id + 1;
+        while (cursor != 0) {
+            cursor -= 1;
+            if ((try ctx.instruction(cursor)).command != .check_gc)
+                continue;
+            if (try ctx.userdataAllocationPatternAt(cursor)) |pattern|
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .userdata_alloc,
+                        .start = pattern.start,
+                        .at = pattern.start,
+                        .finish = pattern.finish,
+                    };
+        }
+    }
+    {
+        var distance: u32 = 0;
+        while (distance < 7 and distance <= instruction_id) : (distance += 1) {
+            const start = instruction_id - distance;
+            if ((try ctx.instruction(start)).command == abi.ir_cmd_get_slot_node_addr)
+                if (try ctx.literalFieldSetPatternAt(start)) |pattern|
+                    if (instruction_id <= pattern.finish)
+                        return .{
+                            .kind = .literal_field_set,
+                            .start = pattern.start,
+                            .at = pattern.start,
+                            .finish = pattern.finish,
+                        };
+        }
+    }
+    if (try ctx.constantLoadPatternAt(instruction_id)) |pattern|
+        return .{
+            .kind = .constant_load,
+            .start = pattern.start,
+            .at = pattern.start,
+            .finish = pattern.finish,
+        };
+    if (instruction_id != 0)
+        if (try ctx.constantLoadPatternAt(instruction_id - 1)) |pattern|
+            if (pattern.finish == instruction_id)
+                return .{
+                    .kind = .constant_load,
+                    .start = pattern.start,
+                    .at = pattern.start,
+                    .finish = pattern.finish,
+                };
+    {
+        var distance: u32 = 0;
+        while (distance < 5 and distance <= instruction_id) : (distance += 1) {
+            if (try ctx.dupTablePatternAt(instruction_id - distance)) |pattern|
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .dup_table,
+                        .start = pattern.start,
+                        .at = pattern.start,
+                        .finish = pattern.finish,
+                    };
+        }
+    }
+    if ((try ctx.instruction(instruction_id)).command == abi.ir_cmd_check_readonly and
+        instruction_id + 1 < ctx.function.instruction_count)
+    {
+        if (try ctx.tableInsertAppendPatternAt(instruction_id + 1)) |pattern|
+            if (pattern.start == instruction_id)
+                return .{
+                    .kind = .table_insert_append,
+                    .start = pattern.start,
+                    .at = instruction_id + 1,
+                    .finish = pattern.finish,
+                };
+    }
+    {
+        var distance: u32 = 0;
+        while (distance < 7 and distance <= instruction_id) : (distance += 1) {
+            const candidate = instruction_id - distance;
+            if ((try ctx.instruction(candidate)).command == abi.ir_cmd_table_len)
+                if (try ctx.tableInsertAppendPatternAt(candidate)) |pattern|
+                    if (instruction_id <= pattern.finish)
+                        return .{
+                            .kind = .table_insert_append,
+                            .start = pattern.start,
+                            .at = candidate,
+                            .finish = pattern.finish,
+                        };
+        }
+    }
+    if (ctx.plan.plainLenContaining(instruction_id)) |pattern|
+        return .{
+            .kind = .plain_len,
+            .start = pattern.table_len_id,
+            .at = pattern.table_len_id,
+            .finish = pattern.finish,
+        };
+    {
+        var distance: u32 = 0;
+        while (distance < 5 and distance <= instruction_id) : (distance += 1) {
+            if (try ctx.concatPatternAt(instruction_id - distance)) |pattern| {
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .concat,
+                        .start = pattern.start,
+                        .at = pattern.start,
+                        .finish = pattern.finish,
+                    };
+            }
+        }
+    }
+    {
+        var back: u32 = 0;
+        while (back <= 3 and back <= instruction_id) : (back += 1) {
+            if (try ctx.tableAllocationPatternAt(instruction_id - back)) |pattern| {
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .table_alloc,
+                        .start = pattern.start,
+                        .at = pattern.start,
+                        .finish = pattern.finish,
+                    };
+            }
+        }
+    }
+    return null;
 }
 
 const Dominators = struct {

@@ -1,4 +1,4 @@
-load("@rules_zig//zig:defs.bzl", "zig_library")
+load("@rules_zig//zig:defs.bzl", "zig_library", "zig_test")
 
 zig_library(
     name = "recognize",
@@ -21,6 +21,31 @@ zig_library(
         ":recognize",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "continuation_plan",
+    main = "continuation_plan.zig",
+    import_name = "luauc_backend_continuation_plan",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":admission",
+        ":plan",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_test(
+    name = "plan_winner_test",
+    main = "plan_winner.test.zig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":plan",
+        "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:runtime_abi",
     ],
 )

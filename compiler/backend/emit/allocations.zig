@@ -115,18 +115,6 @@ pub noinline fn userdataAllocationPatternAt(self: anytype, start: u32) Error!?Us
     }
     return null;
 }
-pub noinline fn userdataAllocationPatternContaining(self: anytype, instruction_id: u32) Error!?UserdataAllocationPattern {
-    var cursor = instruction_id + 1;
-    while (cursor != 0) {
-        cursor -= 1;
-        const candidate = try self.instruction(cursor);
-        if (candidate.command != .check_gc)
-            continue;
-        if (try self.userdataAllocationPatternAt(cursor)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub fn materializedConstantTag(_: anytype, kind: snapshot_v1.VmConstantKind) ?u8 {
     return switch (kind) {
         .nil => @intCast(lua_tag_nil),
@@ -170,14 +158,6 @@ pub noinline fn constantLoadPatternAt(self: anytype, start: u32) Error!?Constant
         .constant_id = constant_operand.value,
     };
 }
-pub noinline fn constantLoadPatternContaining(self: anytype, instruction_id: u32) Error!?ConstantLoadPattern {
-    if (try self.constantLoadPatternAt(instruction_id)) |pattern|
-        return pattern;
-    if (instruction_id != 0)
-        if (try self.constantLoadPatternAt(instruction_id - 1)) |pattern|
-            if (pattern.finish == instruction_id) return pattern;
-    return null;
-}
 pub noinline fn emitConstantLoad(self: anytype, pattern: ConstantLoadPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
@@ -220,14 +200,6 @@ pub noinline fn constantTruthyFallbackPatternAt(self: anytype, start: u32) Error
         .true_value = true_value,
     };
 }
-pub noinline fn constantTruthyFallbackPatternContaining(self: anytype, instruction_id: u32) Error!?ConstantTruthyFallbackPattern {
-    var distance: u32 = 0;
-    while (distance < 3 and distance <= instruction_id) : (distance += 1) {
-        if (try self.constantTruthyFallbackPatternAt(instruction_id - distance)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruthyFallbackPattern) Error!void {
     try self.emitTValueTruthy(pattern.true_value);
     try self.body.ifVoid(self.allocator);
@@ -251,14 +223,6 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
 }
 pub noinline fn dupTablePatternAt(self: anytype, start: u32) Error!?DupTablePattern {
     return recognize.dupTableAt(self.snapshot, self.function, self.proto, self.plan.instruction_blocks, start);
-}
-pub noinline fn dupTablePatternContaining(self: anytype, instruction_id: u32) Error!?DupTablePattern {
-    var distance: u32 = 0;
-    while (distance < 5 and distance <= instruction_id) : (distance += 1) {
-        if (try self.dupTablePatternAt(instruction_id - distance)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
 }
 pub noinline fn emitDupTable(self: anytype, pattern: DupTablePattern) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -578,16 +542,6 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         return null;
     return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_destination.value, .key = key };
 }
-pub noinline fn literalFieldSetPatternContaining(self: anytype, instruction_id: u32) Error!?LiteralFieldSetPattern {
-    var distance: u32 = 0;
-    while (distance < 7 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if ((try self.instruction(start)).command == ir_cmd_get_slot_node_addr)
-            if (try self.literalFieldSetPatternAt(start)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn guardedLiteralFieldSetPatternAt(self: anytype, start: u32) Error!?LiteralFieldSetPattern {
     if (start + 3 >= self.function.instruction_count)
         return null;
@@ -756,20 +710,6 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
         .source = source,
         .constant_number = constant_number,
     };
-}
-pub noinline fn tableInsertAppendPatternContaining(self: anytype, instruction_id: u32) Error!?TableInsertAppendPattern {
-    if ((try self.instruction(instruction_id)).command == ir_cmd_check_readonly and
-        instruction_id + 1 < self.function.instruction_count)
-        if (try self.tableInsertAppendPatternAt(instruction_id + 1)) |pattern|
-            if (pattern.start == instruction_id) return pattern;
-    var distance: u32 = 0;
-    while (distance < 7 and distance <= instruction_id) : (distance += 1) {
-        const candidate = instruction_id - distance;
-        if ((try self.instruction(candidate)).command == ir_cmd_table_len)
-            if (try self.tableInsertAppendPatternAt(candidate)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
 }
 pub noinline fn emitTableInsertAppend(self: anytype, pattern: TableInsertAppendPattern) Error!void {
     if (pattern.constant_number) |value| {

@@ -704,7 +704,8 @@ pub noinline fn stringSetPattern(self: anytype, block: snapshot_v1.IrBlock) Erro
             return null;
         table = (try self.dupTableRegisterForPointer(pointer_operand.value)) orelse return null;
     } else {
-        const allocation = (try self.tableAllocationPatternContaining(pointer_operand.value)) orelse return null;
+        const covering = self.plan.tableAllocCovering(pointer_operand.value) orelse return null;
+        const allocation = (try self.tableAllocationPatternAt(covering.start)) orelse return null;
         if (allocation.start != pointer_operand.value or allocation.node_count != 4)
             return null;
         table = allocation.destination;
@@ -1066,7 +1067,8 @@ pub noinline fn inlineOwnedStringSetPatternAt(self: anytype, start: u32, block: 
     } else blk: {
         if (ownership.operand_count != 0)
             return null;
-        const allocation = (try self.tableAllocationPatternContaining(pointer.value)) orelse return null;
+        const covering = self.plan.tableAllocCovering(pointer.value) orelse return null;
+        const allocation = (try self.tableAllocationPatternAt(covering.start)) orelse return null;
         if (allocation.start != pointer.value)
             return null;
         break :blk allocation.destination;

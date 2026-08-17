@@ -65,70 +65,60 @@ pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: 
     };
 }
 
+fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
+    switch (cluster.kind) {
+        .constant_truthy => try self.emitConstantTruthyFallback(
+            (try self.constantTruthyFallbackPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .inline_const_table_get => try self.emitGenericTableFallbackCall(
+            ((try self.inlineConstantTableGetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow).pattern,
+        ),
+        .inline_array_get => try self.emitInlineArrayGet(
+            (try self.inlineArrayGetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .semantic_table_reload => try self.emitSemanticTableReload(
+            (try self.semanticTableReloadPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .inline_generic_table_set => try self.emitInlineGenericTableSet(
+            ((try self.inlineGenericTableSetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow).pattern,
+        ),
+        .userdata_alloc => {},
+        .literal_field_set => try self.emitLiteralFieldSet(
+            (try self.literalFieldSetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .constant_load => try self.emitConstantLoad(
+            (try self.constantLoadPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .dup_table => try self.emitDupTable(
+            (try self.dupTablePatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .table_insert_append => try self.emitTableInsertAppend(
+            (try self.tableInsertAppendPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .plain_len => {
+            const fact = self.plan.plainLenAt(cluster.at) orelse return Error.UnsupportedControlFlow;
+            try self.emitPlainTableLen(fact.dest_reg, fact.table_reg);
+        },
+        .concat => try self.emitConcat(
+            (try self.concatPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .table_alloc => try self.emitTableAllocation(
+            (try self.tableAllocationPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+    }
+}
+
 fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
     const instruction_value = try self.instruction(instruction_id);
-    if (try self.constantTruthyFallbackPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitConstantTruthyFallback(pattern);
-        return false;
-    }
-    if (try self.inlineConstantTableGetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitGenericTableFallbackCall(pattern.pattern);
-        return false;
-    }
-    if (try self.inlineArrayGetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitInlineArrayGet(pattern);
-        return false;
-    }
-    if (try self.semanticTableReloadPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitSemanticTableReload(pattern);
-        return false;
-    }
-    if (try self.inlineGenericTableSetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitInlineGenericTableSet(pattern.pattern);
-        return false;
-    }
-    if (try self.userdataAllocationPatternContaining(instruction_id)) |pattern| {
-        try self.emitUserdataAllocationInstruction(instruction_id, instruction_value, pattern);
-        return false;
-    }
-    if (try self.literalFieldSetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitLiteralFieldSet(pattern);
-        return false;
-    }
-    if (try self.constantLoadPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitConstantLoad(pattern);
-        return false;
-    }
-    if (try self.dupTablePatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitDupTable(pattern);
-        return false;
-    }
-    if (try self.tableInsertAppendPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitTableInsertAppend(pattern);
-        return false;
-    }
-    if (self.plan.plainLenContaining(instruction_id)) |cluster| {
-        if (instruction_id == cluster.finish)
-            try self.emitPlainTableLen(cluster.dest_reg, cluster.table_reg);
-        return false;
-    }
-    if (try self.concatPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitConcat(pattern);
-        return false;
-    }
-    if (try self.tableAllocationPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitTableAllocation(pattern);
+    if (self.plan.clusterAt(instruction_id)) |cluster| {
+        switch (cluster.kind) {
+            .userdata_alloc => {
+                const pattern = (try self.userdataAllocationPatternAt(cluster.at)) orelse
+                    return Error.UnsupportedControlFlow;
+                try self.emitUserdataAllocationInstruction(instruction_id, instruction_value, pattern);
+            },
+            else => if (instruction_id == cluster.finish) try emitPlannedCluster(self, cluster),
+        }
         return false;
     }
     switch (instruction_value.command) {
