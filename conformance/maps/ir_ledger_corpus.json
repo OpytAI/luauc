@@ -187,6 +187,18 @@
       "path": "conformance/sources/natural_buffer.luau",
       "bazel_data": "//conformance/sources:natural_buffer",
       "hook": false
+    },
+    {
+      "source": "call_graph",
+      "path": "conformance/sources/call_graph.luau",
+      "bazel_data": "//conformance/sources:call_graph",
+      "hook": false
+    },
+    {
+      "source": "table_churn",
+      "path": "conformance/sources/table_churn.luau",
+      "bazel_data": "//conformance/sources:table_churn",
+      "hook": false
     }
   ]
 }

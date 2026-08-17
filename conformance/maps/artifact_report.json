@@ -3,10 +3,10 @@
   "generator_version": "luauc-artifact-report-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "65331dc7d2821c6ec8df07225183590a5dae4a0be2ddd97b1cecf6c6391d698b",
+  "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
   "input_sha256": {
-    "luauc.wasm": "45916ed891290ab9240ac057deed266567d07f606bf79225bce8c188c2f06ebe",
-    "embed_v1.pack.wasm": "0816a53305a8e0e484cf01145aa57c16c4f03f85c3612afb7a06a0c86b368369",
+    "luauc.wasm": "f4c5ea667fc6356996ea88918ba5e46c6983194f242a153ed8c074f5788332f8",
+    "embed_v1.pack.wasm": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c",
     "scalar_fixture.wasm": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "gates": [
@@ -18,8 +18,8 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "45916ed891290ab9240ac057deed266567d07f606bf79225bce8c188c2f06ebe",
-      "size": 1633872,
+      "sha256": "f4c5ea667fc6356996ea88918ba5e46c6983194f242a153ed8c074f5788332f8",
+      "size": 1634550,
       "imports": [],
       "exports": [
         "luauc_v1_alloc",
@@ -31,7 +31,7 @@
         "luauc_v1_result_free",
         "memory"
       ],
-      "function_count": 3244,
+      "function_count": 3250,
       "memory_min": 1024,
       "helpers": [],
       "features": [
@@ -45,8 +45,8 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "0816a53305a8e0e484cf01145aa57c16c4f03f85c3612afb7a06a0c86b368369",
-      "size": 261991,
+      "sha256": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c",
+      "size": 262107,
       "imports": [
         "luauc_embed_v1.protected_call",
         "luauc_embed_v1.set_throw"
@@ -189,5 +189,5 @@
       ]
     }
   ],
-  "canonical_hash": "a48b3d8598df7dcf35f0cb07a3afeec8fa98e46c2a2648961ec67a1c5ab9242a"
+  "canonical_hash": "815a646515983c1aa7f44b5accdd251b37df82f3f4fb46fd65c76f2ec618194d"
 }

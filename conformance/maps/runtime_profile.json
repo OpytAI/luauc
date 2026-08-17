@@ -3,11 +3,11 @@
   "generator_version": "luauc-runtime-profile-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "65331dc7d2821c6ec8df07225183590a5dae4a0be2ddd97b1cecf6c6391d698b",
+  "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
   "input_sha256": {
-    "profile": "b8a5d1eb705faca2d47b893c8bbfee3b214a24bfddbdfe958711a9bbbf1094b7",
+    "profile": "58d90ca5e4ad0fbfad1320a29e974aa6f11116c5a4d37b6b890f92509e3e9647",
     "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",
-    "pack": "0816a53305a8e0e484cf01145aa57c16c4f03f85c3612afb7a06a0c86b368369"
+    "pack": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
@@ -19,7 +19,7 @@
     "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
     "object_contract_sha256": "cfdc8723b60c127b30f342fa4d52c4fd8520992b3bb57c6e74e51c32a927ae7b",
-    "pack_build_sha256": "169ffde40ed03d399377f377676639e28e8b5023565c2e615a1881e1d334be89",
+    "pack_build_sha256": "8c615393d5639fbf161c6061ff65a51c002eb89dc8e5f2d255c5df9ec4096fef",
     "license_inventory_sha256": "62db69aaae1bfdcf018c8a83254e4aeb91f1e42d8882e8b4cd224bda6045659c"
   },
   "host_imports": [
@@ -448,5 +448,5 @@
       }
     ]
   },
-  "canonical_hash": "2b374a44862d7c36e9c47ebd94eff6da11d82bf6ee749a0e05faf66e377b7993"
+  "canonical_hash": "08dfe9c80101b18007d21db6e65090f53dca86aa44cfef9b062c0038a57d3a53"
 }
