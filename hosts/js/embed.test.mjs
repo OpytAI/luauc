@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { compilePackage, coverage, createContext, destroyContext, instantiateArtifact, invoke } from "./host.mjs";
+import { oracleLines } from "./oracle.mjs";
 
 const runfile = (value) => value.startsWith("/") ? value : join(process.env.RUNFILES_DIR, value);
 const compiler = readFileSync(runfile(process.env.LUAUC_COMPILER_WASM));
@@ -21,19 +22,19 @@ const second = await compilePackage(compiler, profile, pack, modules, "main", { 
 if (Buffer.compare(first.artifact, second.artifact) !== 0) throw new Error("JavaScript host compile output is nondeterministic");
 const instance = instantiateArtifact(first.artifact);
 const context = createContext(instance);
+const inputs = [[1, "alpha"], [7, "beta"], [-4, "gamma"]];
+const expected = oracleLines(runfile(process.env.LUAUC_PINNED_INTERPRETER), [
+  runfile(process.env.LUAUC_EMBED_LIB),
+  runfile(process.env.LUAUC_EMBED_MAIN),
+  runfile(process.env.LUAUC_PROTO_IDENTITY),
+  runfile(process.env.LUAUC_USERDATA_HOOKS),
+], inputs);
 try {
-  for (const [number, text] of [[1, "alpha"], [7, "beta"], [-4, "gamma"]]) {
+  for (const [index, [number, text]] of inputs.entries()) {
     const result = invoke(instance, number, text, context);
-    const protoResult = number % 2 !== 0 ? number * 3 + text.length : number - text.length;
-    const operatorResult = number + 1 - 3 + Math.floor(number / 2) + 2 + 8 - number
-      + (number + number) + number * number + (-number) + 1 + 1 + (text.length * 2 + 1) + text.length * 2 + 3;
-    const iterationResult = 12 * number + 16;
-    const ksResult = (number + 1) + (number + 2);
-    const userdataResult = 1;
-    const expectedNumber = 32 * number + 175 + text.length + protoResult + operatorResult + iterationResult + ksResult + userdataResult;
-    const expectedText = `${text}:${number + 1}:2/1/11:missing`;
-    if (result.status || result.resultStatus || result.error || result.number !== expectedNumber || result.text !== expectedText)
-      throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${expectedNumber}/${expectedText}`);
+    const want = expected[index];
+    if (result.status || result.resultStatus || result.error || result.number !== want.number || result.text !== want.text)
+      throw new Error(`embed-v1 ${number}/${text} => ${JSON.stringify(result)}, expected ${want.number}/${want.text}`);
   }
   const records = coverage(instance, context);
   if (records.length < 10 || !records.some(({ hits }) => hits > 0) ||
