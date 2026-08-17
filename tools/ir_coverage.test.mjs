@@ -31,6 +31,45 @@ if (canonicalHashOf(generatedArms) !== canonicalHashOf(checkedArms)) {
   throw new Error("general_arms.json drifted from compiler/backend/emit/dispatch.zig");
 }
 
+function expectedHookMark(n) {
+  if (n === 0) return 0;
+  // Unit payload is f32; Mark promotes that lane to a Luau number.
+  return n + Math.fround(Math.sign(n) / Math.SQRT2);
+}
+
+function almostEqual(actual, expected) {
+  return Number.isFinite(actual) && Math.abs(actual - expected) <= 1e-12 * Math.max(1, Math.abs(expected));
+}
+
+const hookInputs = [[1, "alpha"], [7, "beta"], [-4, "gamma"]];
+const hookStdout = execFileSync(pathOf("LUAUC_PINNED_INTERPRETER"), [
+  "--hook-only",
+  pathOf("LUAUC_USERDATA_HOOKS"),
+], { encoding: "utf8" });
+const hookLines = hookStdout.trim().split("\n").filter((line) => line.startsWith("hook="));
+const hookNumbers = hookInputs.map(([number, text]) => {
+  const prefix = `hook=${number}|${text}|`;
+  const line = hookLines.find((entry) => entry.startsWith(prefix));
+  if (!line) throw new Error(`hook_unit_mark missing ${number}/${text} in ${JSON.stringify(hookLines)}`);
+  const value = Number(line.slice(prefix.length));
+  const expected = expectedHookMark(number);
+  if (!almostEqual(value, expected)) {
+    throw new Error(`hook_unit_mark ${number}/${text}: got ${value}, expected ${expected} (n + sign(n)/√2)`);
+  }
+  return value;
+});
+const zeroLine = hookLines.find((entry) => entry.startsWith("hook=0|zero|"));
+if (!zeroLine) throw new Error(`hook_unit_mark missing embed.vec2(0) in ${JSON.stringify(hookLines)}`);
+const zeroValue = Number(zeroLine.slice("hook=0|zero|".length));
+if (!almostEqual(zeroValue, 0)) {
+  throw new Error(`embed.vec2(0) Unit/Mark must be 0, got ${zeroValue}`);
+}
+const hookUnitMarkSatisfied = hookNumbers.length === hookInputs.length &&
+  hookNumbers.every((value, index) => almostEqual(value, expectedHookMark(hookInputs[index][0])));
+if (!hookUnitMarkSatisfied) {
+  throw new Error(`hook_unit_mark seeds failed: ${JSON.stringify(hookNumbers)}`);
+}
+
 const generated = await generateIrCoverage({
   frontend: pathOf("LUAUC_FRONTEND_WASM"),
   backend: pathOf("LUAUC_BACKEND_WASM"),
@@ -40,6 +79,8 @@ const generated = await generateIrCoverage({
   dispatch: pathOf("LUAUC_DISPATCH_ZIG"),
 }, {
   resolveSource: (entry) => runfile(entry.path, entry.path),
+  hookUnitMarkSatisfied,
+  isolatedStripSatisfied: false,
 });
 
 const temp = mkdtempSync(join(tmpdir(), "luauc-ir-coverage-"));
@@ -56,36 +97,112 @@ const intToNum = generated.document.commands.find((row) => row.command === "INT_
 const intToNumMayImportUserdata = (intToNum?.runtime_symbols ?? [])
   .some((symbol) => USERDATA_HELPERS.includes(symbol));
 
-const errors = validateCoverageMap(generated.document, {
+const coverageOptions = {
   allowLabels: allow.labels,
   existingGates: new Set([...QUALIFYING_GATES, "//hosts/js:embed_test", "//hosts/js:cli_test"]),
   intToNumMayImportUserdata,
-  hookUnitMarkSatisfied: false,
+  hookUnitMarkSatisfied,
   isolatedStripSatisfied: false,
-});
+};
+
+const errors = validateCoverageMap(generated.document, coverageOptions);
 if (errors.length) throw new Error(errors.join("\n"));
 
 if (generated.document.totals.implemented !== 0 && process.env.LUAUC_ALLOW_IMPLEMENTED !== "1") {
-  // Honesty lock: PR 1 must not invent implemented rows from over-approximated lowering.
+  throw new Error(
+    `honesty lock: generator reported implemented=${generated.document.totals.implemented}; ` +
+      "over-approximated lowering must not invent implemented rows",
+  );
 }
 
-const hookInputs = [[1, "alpha"], [7, "beta"], [-4, "gamma"]];
-const hookStdout = execFileSync(pathOf("LUAUC_PINNED_INTERPRETER"), [
-  pathOf("LUAUC_EMBED_LIB"),
-  pathOf("LUAUC_EMBED_MAIN"),
-  pathOf("LUAUC_PROTO_IDENTITY"),
-  pathOf("LUAUC_USERDATA_HOOKS"),
-], { encoding: "utf8" });
-const hookLines = hookStdout.trim().split("\n").filter((line) => line.startsWith("result="));
-const hookNumbers = hookInputs.map(([number, text]) => {
-  const prefix = `result=${number}|${text}|`;
-  const line = hookLines.find((entry) => entry.startsWith(prefix));
-  if (!line) throw new Error(`hook_unit_mark missing ${number}/${text} in ${JSON.stringify(hookLines)}`);
-  return Number(line.slice("result=".length).split("|")[2]);
-});
-const hookUnitMarkDistinct = new Set(hookNumbers).size === hookNumbers.length;
-if (!hookUnitMarkDistinct) {
-  throw new Error(`hook_unit_mark seeds are not distinct: ${JSON.stringify(hookNumbers)}`);
+function rehash(document) {
+  const withoutHash = { ...document };
+  delete withoutHash.canonical_hash;
+  return { ...document, canonical_hash: canonicalHashOf(withoutHash) };
+}
+
+function cloneDocument(document) {
+  return JSON.parse(JSON.stringify(document));
+}
+
+function expectValidateError(label, document, options, match) {
+  const errorsForCase = validateCoverageMap(document, options);
+  if (!errorsForCase.some((entry) => entry.includes(match))) {
+    throw new Error(`${label}: expected error containing ${JSON.stringify(match)}, got ${JSON.stringify(errorsForCase)}`);
+  }
+}
+
+{
+  const forgedImplemented = rehash(cloneDocument(generated.document));
+  const addNum = forgedImplemented.commands.find((row) => row.command === "ADD_NUM");
+  addNum.status = "implemented";
+  addNum.tests = [];
+  addNum.census_sources = ["slow_add"];
+  addNum.lowered_sources = ["slow_add"];
+  addNum.executed_gates = [];
+  addNum.general_arm = false;
+  forgedImplemented.totals.implemented += 1;
+  forgedImplemented.totals.partial -= 1;
+  expectValidateError("fake implemented", rehash(forgedImplemented), coverageOptions, "implemented row has tests: []");
+}
+
+{
+  const forgedLabel = rehash(cloneDocument(generated.document));
+  const addNum = forgedLabel.commands.find((row) => row.command === "ADD_NUM");
+  addNum.tests = ["//compiler/backend:does_not_exist_test"];
+  expectValidateError("unknown label", rehash(forgedLabel), coverageOptions, "unknown test label");
+}
+
+{
+  const forgedHook = rehash(cloneDocument(generated.document));
+  const row = forgedHook.commands.find((entry) => entry.command === "NEW_USERDATA");
+  row.status = "implemented";
+  row.tests = ["//tools:ir_coverage_test"];
+  row.census_sources = ["userdata_hooks"];
+  row.lowered_sources = ["userdata_hooks"];
+  row.executed_gates = ["//hosts/wasmtime:parity_test"];
+  row.general_arm = true;
+  row.evidence = { kind: "hook_unit_mark", require_distinct_unit_mark: true };
+  forgedHook.totals.implemented += 1;
+  forgedHook.totals.partial -= 1;
+  expectValidateError(
+    "unsatisfied hook lock",
+    rehash(forgedHook),
+    { ...coverageOptions, hookUnitMarkSatisfied: false },
+    "hook_unit_mark evidence lock is unsatisfied",
+  );
+}
+
+{
+  const forgedStrip = rehash(cloneDocument(generated.document));
+  const row = forgedStrip.commands.find((entry) => entry.command === "BARRIER_TABLE_BACK");
+  row.status = "implemented";
+  row.tests = ["//tools:ir_coverage_test"];
+  row.census_sources = ["userdata_hooks"];
+  row.lowered_sources = ["userdata_hooks"];
+  row.executed_gates = ["//hosts/wasmtime:parity_test"];
+  row.general_arm = true;
+  row.evidence = { kind: "isolated_store_strip", gate: "//hosts/wasmtime:barrier_parity_test" };
+  forgedStrip.totals.implemented += 1;
+  forgedStrip.totals.partial -= 1;
+  expectValidateError(
+    "unsatisfied isolated strip",
+    rehash(forgedStrip),
+    coverageOptions,
+    "isolated strip evidence lock is unsatisfied",
+  );
+}
+
+{
+  const forgedIntToNum = rehash(cloneDocument(generated.document));
+  const row = forgedIntToNum.commands.find((entry) => entry.command === "INT_TO_NUM");
+  row.runtime_symbols = [...(row.runtime_symbols ?? []), "luauc_runtime_v1_new_userdata"];
+  expectValidateError(
+    "INT_TO_NUM userdata helper",
+    rehash(forgedIntToNum),
+    { ...coverageOptions, intToNumMayImportUserdata: false },
+    "INT_TO_NUM.runtime_symbols contains a userdata helper",
+  );
 }
 
 for (const row of generated.document.commands) {
@@ -99,8 +216,12 @@ for (const row of generated.document.commands) {
       }
     }
   }
-  if (row.status === "implemented" && row.evidence?.kind === "hook_unit_mark" && !hookUnitMarkDistinct) {
-    throw new Error(`${row.command}: hook_unit_mark cannot be implemented without three distinct Unit/Mark numbers`);
+  if (row.status === "implemented" && row.evidence?.kind === "hook_unit_mark" && !hookUnitMarkSatisfied) {
+    throw new Error(`${row.command}: hook_unit_mark cannot be implemented without n + sign(n)/√2`);
+  }
+  if ((row.command === "NEW_USERDATA" || row.command === "CHECK_USERDATA_TAG") &&
+      row.status === "implemented") {
+    throw new Error(`${row.command}: stay partial until forms/gates allow implemented`);
   }
   if (row.status === "implemented" &&
       (row.evidence?.kind === "isolated_store_strip" || row.evidence?.kind === "isolated_hold_strip")) {

@@ -190,6 +190,29 @@ bool reportStackError(lua_State *state, const char *stage) {
     return false;
 }
 
+// Hook-only entry: userdata_hooks(seed: vec2) → seed:Mark + unit:Mark as a float.
+// Distinct from the four-module product, which adds embed_main's seed and truncates to int64.
+bool invokeHookOnly(lua_State *state, double input, const char *label) {
+    lua_getglobal(state, "embed");
+    lua_getfield(state, -1, "vec2");
+    lua_remove(state, -2);
+    lua_pushnumber(state, input);
+    if (lua_pcall(state, 1, 1, 0) != LUA_OK)
+        return reportStackError(state, "hook-only embed.vec2");
+
+    lua_pushvalue(state, 1);
+    lua_insert(state, -2);
+    if (lua_pcall(state, 1, 1, 0) != LUA_OK)
+        return reportStackError(state, "hook-only Unit/Mark");
+    if (!lua_isnumber(state, -1))
+        return reportStackError(state, "hook-only result is not a number");
+
+    const double number = lua_tonumber(state, -1);
+    printf("hook=%.17g|%s|%.17g\n", input, label, number);
+    lua_settop(state, 1);
+    return true;
+}
+
 bool invoke(lua_State *state, int64_t input, const char *label) {
     lua_State *thread = lua_newthread(state);
     lua_pushvalue(state, 1);
@@ -223,11 +246,41 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
 
 } // namespace
 
+int runHookOnly(const char *hooksPath) {
+    std::string userdataHooksSource = readFile(hooksPath);
+    if (userdataHooksSource.empty()) {
+        fprintf(stderr, "failed to read userdata_hooks source\n");
+        return 2;
+    }
+
+    lua_State *state = luaL_newstate();
+    if (!state)
+        return 2;
+    luaL_openlibs(state);
+    publishEmbedImport(state);
+    luaL_sandbox(state);
+    installWritableProxyGlobals(state);
+    if (!pushChunk(state, userdataHooksSource, "@userdata_hooks.luau") ||
+        lua_pcall(state, 0, 1, 0) != LUA_OK || !lua_isfunction(state, -1)) {
+        reportStackError(state, "load userdata hooks");
+        lua_close(state);
+        return 1;
+    }
+
+    const bool ok = invokeHookOnly(state, 1, "alpha") && invokeHookOnly(state, 7, "beta") &&
+                    invokeHookOnly(state, -4, "gamma") && invokeHookOnly(state, 0, "zero");
+    lua_close(state);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--hook-only") == 0)
+        return runHookOnly(argv[2]);
     if (argc != 5) {
         fprintf(stderr,
                 "usage: luauc-pinned-interpreter <lib.luau> <main.luau> <proto_identity.luau> "
-                "<userdata_hooks.luau>\n");
+                "<userdata_hooks.luau>\n"
+                "       luauc-pinned-interpreter --hook-only <userdata_hooks.luau>\n");
         return 2;
     }
     std::string libSource = readFile(argv[1]);

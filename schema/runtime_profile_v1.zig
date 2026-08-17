@@ -98,6 +98,12 @@ pub const Profile = struct {
         return .{ .name = try self.stringAt(readU32(record, 0), readU32(record, 4)), .role = try role(readU16(record, 8)), .kind = try kind(record[10]) };
     }
 
+    /// Generated-runtime helpers are imported from this module. Objects emit `"env"`;
+    /// the linker rewrites those module strings to this name before `findExport`.
+    pub fn generatedRuntimeModule(_: Profile) []const u8 {
+        return "env";
+    }
+
     pub fn bindingName(self: Profile, wanted: Role, wanted_kind: Kind) Error![]const u8 {
         var index: u32 = 0;
         while (index < self.binding_count) : (index += 1) {

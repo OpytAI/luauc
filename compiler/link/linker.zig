@@ -1025,7 +1025,15 @@ const Resolved = struct {
     }
 };
 
-fn resolve(allocator: std.mem.Allocator, pack: *const PackModel, object: *const ObjectModel, profile: runtime_profile.Profile, limits: Limits) Error!Resolved {
+fn rewriteObjectImportModules(object: *ObjectModel, generated_module: []const u8) void {
+    for (object.imports.items.items) |*item|
+        item.module = generated_module;
+    for (object.imports.functions.items) |*item|
+        item.module = generated_module;
+}
+
+fn resolve(allocator: std.mem.Allocator, pack: *const PackModel, object: *ObjectModel, profile: runtime_profile.Profile, limits: Limits) Error!Resolved {
+    rewriteObjectImportModules(object, profile.generatedRuntimeModule());
     const arena_base = try globalAddress(pack, profile.bindingName(.generated_data_arena, .global) catch return Error.MissingRuntimeArena);
     const capacity_address = try globalAddress(pack, profile.bindingName(.generated_data_capacity, .global) catch return Error.MissingRuntimeArena);
     const arena_capacity = try readMemoryU32(pack.data.items, capacity_address);
@@ -1433,9 +1441,48 @@ pub fn validateRuntimePack(allocator: std.mem.Allocator, runtime_pack: []const u
     defer pack.deinit();
 }
 
+const LinkV1 = struct {
+    compiler_build: [32]u8,
+    package_manifest: [32]u8,
+    profile: [32]u8,
+    pack: [32]u8,
+    object: [32]u8,
+    output: [32]u8,
+    arena_used: u32,
+    generated_function_count: u32,
+};
+
+fn parseLinkV1(payload: []const u8) Error!LinkV1 {
+    if (payload.len < 192)
+        return Error.InvalidFinalModule;
+    var result: LinkV1 = undefined;
+    @memcpy(&result.compiler_build, payload[0..32]);
+    @memcpy(&result.package_manifest, payload[32..64]);
+    @memcpy(&result.profile, payload[64..96]);
+    @memcpy(&result.pack, payload[96..128]);
+    @memcpy(&result.object, payload[128..160]);
+    @memcpy(&result.output, payload[160..192]);
+    var reader = Reader{ .bytes = payload[192..] };
+    result.arena_used = reader.readUleb32() catch return Error.InvalidFinalModule;
+    result.generated_function_count = reader.readUleb32() catch return Error.InvalidFinalModule;
+    if (!reader.done())
+        return Error.InvalidFinalModule;
+    return result;
+}
+
+fn encodeModuleWithLinkSection(allocator: std.mem.Allocator, payload: []const u8) Error![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    try output.appendSlice(allocator, &wasm_magic);
+    appendCustomSection(&output, allocator, "luauc.link.v1", payload) catch return Error.OutOfMemory;
+    return output.toOwnedSlice(allocator);
+}
+
 pub fn validateFinal(allocator: std.mem.Allocator, bytes: []const u8, profile: runtime_profile.Profile, limits: Limits) Error!void {
     var module = CoreModule.parse(allocator, bytes, limits) catch return Error.InvalidFinalModule;
     defer module.deinit();
+    const link_payload = module.custom("luauc.link.v1") orelse return Error.InvalidFinalModule;
+    _ = parseLinkV1(link_payload) catch return Error.InvalidFinalModule;
     inline for (.{ section.type_, section.import, section.function, section.table, section.memory, section.global, section.export_, section.element, section.code, section.data }) |id|
         if (module.payload(id) == null)
             return Error.InvalidFinalModule;
@@ -1476,14 +1523,6 @@ pub fn validateFinal(allocator: std.mem.Allocator, bytes: []const u8, profile: r
     }
     var data = parseData(allocator, module.payload(section.data).?, limits.max_data_segments) catch return Error.InvalidFinalModule;
     defer deinitData(allocator, &data);
-    const link_payload = module.custom("luauc.link.v1") orelse return Error.InvalidFinalModule;
-    if (link_payload.len < 192)
-        return Error.InvalidFinalModule;
-    var reader = Reader{ .bytes = link_payload[192..] };
-    _ = reader.readUleb32() catch return Error.InvalidFinalModule;
-    _ = reader.readUleb32() catch return Error.InvalidFinalModule;
-    if (!reader.done())
-        return Error.InvalidFinalModule;
 }
 
 test "rejects malformed modules and oversized inputs deterministically" {
@@ -1494,9 +1533,90 @@ test "rejects malformed modules and oversized inputs deterministically" {
     try std.testing.expectError(Error.ResourceLimit, CoreModule.parse(allocator, &wasm_magic, limits));
 }
 
-test "a three-digest link section is shorter than six digests" {
+fn dummyProfile() runtime_profile.Profile {
+    return .{
+        .bytes = &.{},
+        .feature_mask = 0,
+        .memory_minimum = 1,
+        .memory_maximum = 1,
+        .table_minimum = 1,
+        .table_maximum = 1,
+        .profile_id = "test",
+        .luau_pin_sha256 = .{0} ** 32,
+        .runtime_abi_sha256 = .{0} ** 32,
+        .object_contract_sha256 = .{0} ** 32,
+        .pack_build_sha256 = .{0} ** 32,
+        .license_inventory_sha256 = .{0} ** 32,
+        .string_offset = 0,
+        .string_size = 0,
+        .import_offset = 0,
+        .import_count = 0,
+        .export_offset = 0,
+        .export_count = 0,
+        .runtime_symbol_offset = 0,
+        .runtime_symbol_count = 0,
+        .binding_offset = 0,
+        .binding_count = 0,
+    };
+}
+
+test "parseLinkV1 binds six digests and two ulebs" {
+    var payload: [194]u8 = undefined;
+    @memset(&payload, 0);
+    payload[0] = 0x11;
+    payload[32] = 0x22;
+    payload[64] = 0x33;
+    payload[96] = 0x44;
+    payload[128] = 0x55;
+    payload[160] = 0x66;
+    payload[192] = 5;
+    payload[193] = 3;
+    const parsed = try parseLinkV1(&payload);
+    try std.testing.expectEqual(@as(u8, 0x11), parsed.compiler_build[0]);
+    try std.testing.expectEqual(@as(u8, 0x22), parsed.package_manifest[0]);
+    try std.testing.expectEqual(@as(u8, 0x33), parsed.profile[0]);
+    try std.testing.expectEqual(@as(u8, 0x44), parsed.pack[0]);
+    try std.testing.expectEqual(@as(u8, 0x55), parsed.object[0]);
+    try std.testing.expectEqual(@as(u8, 0x66), parsed.output[0]);
+    try std.testing.expectEqual(@as(u32, 5), parsed.arena_used);
+    try std.testing.expectEqual(@as(u32, 3), parsed.generated_function_count);
+}
+
+test "validateFinal rejects a historical three-digest luauc.link.v1 payload" {
+    const allocator = std.testing.allocator;
     const three_digest = [_]u8{1} ++ [_]u8{0xaa} ** 96 ++ [_]u8{ 1, 1 };
-    try std.testing.expect(three_digest.len < 192);
+    try std.testing.expectEqual(@as(usize, 99), three_digest.len);
+    try std.testing.expectError(Error.InvalidFinalModule, parseLinkV1(&three_digest));
+    const bytes = try encodeModuleWithLinkSection(allocator, &three_digest);
+    defer allocator.free(bytes);
+    try std.testing.expectError(Error.InvalidFinalModule, validateFinal(allocator, bytes, dummyProfile(), .{}));
+}
+
+test "generated-runtime import modules rewrite to the profile module" {
+    var object = ObjectModel{
+        .allocator = std.testing.allocator,
+        .module = undefined,
+        .types = undefined,
+        .imports = .{ .allocator = std.testing.allocator },
+        .function_types = .empty,
+        .bodies = .empty,
+        .data = .empty,
+        .linking = undefined,
+        .code_relocations = .empty,
+        .data_relocations = .empty,
+        .element_functions = .empty,
+    };
+    try object.imports.items.append(std.testing.allocator, .{
+        .module = "env",
+        .name = "luauc_runtime_v1_call",
+        .kind = external_kind.function,
+        .type_index = 0,
+    });
+    try object.imports.functions.append(std.testing.allocator, object.imports.items.items[0]);
+    defer object.imports.deinit();
+    rewriteObjectImportModules(&object, dummyProfile().generatedRuntimeModule());
+    try std.testing.expectEqualStrings("env", object.imports.functions.items[0].module);
+    try std.testing.expectEqualStrings("env", object.imports.items.items[0].module);
 }
 
 test "padded relocation encodings retain fixed width" {

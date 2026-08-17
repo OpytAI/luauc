@@ -9,6 +9,7 @@
     "aot_runtime_v1_h": "4306a122370d728da157ba7fdcc041321671db629b936ac138e0a30cbcd5a895",
     "embed_build": "8cb70543abce44632d4804dfe73c10c59fb74f8378eefba5c2aa109efdf9cfec"
   },
+  "generated_runtime_module": "env",
   "generated_runtime_symbols": [
     "luauc_runtime_v1_array_get",
     "luauc_runtime_v1_array_set",
@@ -174,7 +175,7 @@
     "name": "luauc_runtime_v1_program",
     "kind": "data",
     "match": "symbol_name",
-    "note": "Generated objects export this data symbol; the linker matches it by name, not as a pack function export."
+    "note": "Generated objects export this data symbol; the linker matches it by name, not as a pack function export. Object import modules are rewritten to generated_runtime_module before resolution."
   },
-  "canonical_hash": "f67dfeb3565d746cd25a94f4d4cdd382cb56bce33c1e04e56f3281189ffe9e86"
+  "canonical_hash": "1f5e2df9703fca84e88bbcde476763e4eb9cd9cbb1b0602cc768d5758782b057"
 }

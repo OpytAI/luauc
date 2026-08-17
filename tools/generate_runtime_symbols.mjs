@@ -66,6 +66,7 @@ export function generateRuntimeSymbols({ symbolsBzl, runtimeHeader, embedBuild }
       aot_runtime_v1_h: sha256Hex(headerText),
       embed_build: sha256Hex(buildText),
     },
+    generated_runtime_module: "env",
     generated_runtime_symbols: generated,
     header_symbols: header,
     pack_exports: packExports,
@@ -73,7 +74,7 @@ export function generateRuntimeSymbols({ symbolsBzl, runtimeHeader, embedBuild }
       name: "luauc_runtime_v1_program",
       kind: "data",
       match: "symbol_name",
-      note: "Generated objects export this data symbol; the linker matches it by name, not as a pack function export.",
+      note: "Generated objects export this data symbol; the linker matches it by name, not as a pack function export. Object import modules are rewritten to generated_runtime_module before resolution.",
     },
   });
   return document;

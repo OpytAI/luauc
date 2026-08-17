@@ -47,6 +47,9 @@ if (!symbols.generated_runtime_symbols.includes("luauc_runtime_v1_call")) {
 if (symbols.program_symbol.name !== "luauc_runtime_v1_program") {
   throw new Error("program symbol must stay a name-only data match");
 }
+if (symbols.generated_runtime_module !== "env") {
+  throw new Error(`generated_runtime_module must be env, got ${symbols.generated_runtime_module}`);
+}
 
 const profile = generateRuntimeProfile({
   profilePath: runfile(process.env.LUAUC_EMBED_PROFILE, "LUAUC_EMBED_PROFILE"),
