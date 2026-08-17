@@ -85,6 +85,7 @@ js_test(
 js_test(
     name = "ir_coverage_test",
     size = "large",
+    visibility = ["//visibility:public"],
     data = [
         "generate_compiler_build_digest.mjs",
         "generate_general_arms.mjs",
