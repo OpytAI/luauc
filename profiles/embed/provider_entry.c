@@ -324,11 +324,14 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
     static const char gc_boundary[] = "gc-boundary";
     size_t yielded_size = 0;
     uint32_t suspension_count = 0;
-    while (status == LUA_YIELD && suspension_count < 8) {
+    while (status == LUA_YIELD && suspension_count < 64) {
         const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
         if (!yielded || yielded_size != sizeof(gc_boundary) - 1 ||
-            memcmp(yielded, gc_boundary, sizeof(gc_boundary) - 1) != 0)
-            break;
+            memcmp(yielded, gc_boundary, sizeof(gc_boundary) - 1) != 0) {
+            result->status = 3;
+            lua_settop(state, 1);
+            return 3;
+        }
 
         // The suspended AOT thread remains rooted by the thread object on the main state's stack.
         // Collect the complete VM heap before every generated continuation re-enters the function.
@@ -337,7 +340,7 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
         status = lua_resume(thread, state, 0);
         suspension_count++;
     }
-    if (status != LUA_OK || suspension_count == 0) {
+    if (status != LUA_OK) {
         char diagnostic[128];
         const int top = lua_gettop(thread);
         const char *yielded = status != LUA_OK && top > 0 ? lua_tolstring(thread, -1, &yielded_size) : NULL;

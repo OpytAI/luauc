@@ -32,9 +32,12 @@ function release(item) { api.luauc_v1_dealloc(item.pointer, item.size); }
 const description = allocation(32);
 if (api.luauc_v1_describe(description.pointer) !== 0) throw new Error("compiler describe failed");
 const descriptionView = new DataView(api.memory.buffer, description.pointer, 32);
-if (descriptionView.getUint32(0, true) !== 1 || descriptionView.getUint32(8, true) !== 72 || descriptionView.getUint32(12, true) !== 208 || descriptionView.getUint32(16, true) !== 8)
+const compileResultSize = descriptionView.getUint32(12, true);
+if (descriptionView.getUint32(0, true) !== 1 || descriptionView.getUint32(8, true) !== 72 || compileResultSize !== 320 || descriptionView.getUint32(16, true) !== 8)
   throw new Error("compiler description drifted");
 release(description);
+
+const frontendContract = Buffer.from("3f02ade9eb7b4be0be91a75d111b86d02dd8408c061395f0bd9c1f9ecacd2fbe", "hex");
 
 function createContext(profile, pack, expectedStatus = 0) {
   const profileInput = allocation(profile), packInput = allocation(pack), result = allocation(72);
@@ -56,25 +59,51 @@ function canonicalRequest(source, profileDigest, packDigest, coverageLevel = 0) 
   const name = Buffer.from("main"), sourceName = Buffer.from("@main.luau"), content = Buffer.from(source), contentDigest = sha256(content);
   const sized = (bytes) => { const size = Buffer.alloc(4); size.writeUInt32LE(bytes.length); return Buffer.concat([size, bytes]); };
   const manifestHeader = Buffer.alloc(8); manifestHeader.writeUInt32LE(1, 0);
-  const manifestDigest = sha256(Buffer.concat([manifestHeader, sized(name), sized(sourceName), contentDigest]));
-  const total = 160 + 64 + name.length + sourceName.length + content.length;
+  const zeroPlans = Buffer.alloc(4);
+  const manifestDigest = sha256(Buffer.concat([manifestHeader, sized(name), sized(sourceName), contentDigest, zeroPlans]));
+  const total = 240 + 64 + name.length + sourceName.length + content.length;
   const request = Buffer.alloc(total);
   Buffer.from("LUAUCS1\0", "binary").copy(request, 0);
-  request.writeUInt16LE(1, 8); request.writeUInt16LE(160, 10); request.writeUInt32LE(total, 12);
+  request.writeUInt16LE(1, 8); request.writeUInt16LE(240, 10); request.writeUInt32LE(total, 12);
   request.writeUInt32LE(1, 16); request.writeUInt32LE(0, 20); request.writeUInt32LE(64, 24);
   request.writeUInt32LE(coverageLevel, 28);
+  request.writeUInt32LE(0, 176);
+  request.writeUInt32LE(32, 180);
+  request.writeUInt32LE(0, 184);
+  request.writeUInt32LE(1048576, 188);
+  request.writeUInt32LE(4096, 192);
+  request.writeUInt32LE(16777216, 196);
   const coverage = Buffer.alloc(4); coverage.writeUInt32LE(coverageLevel);
-  sha256(Buffer.concat([Buffer.from("luauc-source-request-v1\0"), coverage, profileDigest, packDigest, manifestDigest])).subarray(0, 16).copy(request, 32);
-  profileDigest.copy(request, 48); packDigest.copy(request, 80); manifestDigest.copy(request, 112);
-  let cursor = 224;
-  request.writeUInt32LE(cursor, 160); request.writeUInt32LE(name.length, 164); name.copy(request, cursor); cursor += name.length;
-  request.writeUInt32LE(cursor, 168); request.writeUInt32LE(sourceName.length, 172); sourceName.copy(request, cursor); cursor += sourceName.length;
-  request.writeUInt32LE(cursor, 176); request.writeUInt32LE(content.length, 180); content.copy(request, cursor); contentDigest.copy(request, 184);
+  const options = Buffer.alloc(32);
+  options.writeUInt32LE(0, 0);
+  options.writeUInt32LE(32, 4);
+  options.writeUInt32LE(0, 8);
+  options.writeUInt32LE(1048576, 12);
+  options.writeUInt32LE(4096, 16);
+  options.writeUInt32LE(16777216, 20);
+  sha256(Buffer.concat([
+    Buffer.from("luauc-source-request-v1\0"),
+    coverage,
+    frontendContract,
+    profileDigest,
+    packDigest,
+    manifestDigest,
+    options,
+    zeroPlans,
+  ])).subarray(0, 16).copy(request, 32);
+  frontendContract.copy(request, 48);
+  profileDigest.copy(request, 80);
+  packDigest.copy(request, 112);
+  manifestDigest.copy(request, 144);
+  let cursor = 304;
+  request.writeUInt32LE(cursor, 240); request.writeUInt32LE(name.length, 244); name.copy(request, cursor); cursor += name.length;
+  request.writeUInt32LE(cursor, 248); request.writeUInt32LE(sourceName.length, 252); sourceName.copy(request, cursor); cursor += sourceName.length;
+  request.writeUInt32LE(cursor, 256); request.writeUInt32LE(content.length, 260); content.copy(request, cursor); contentDigest.copy(request, 264);
   return request;
 }
 
 function compile(handle, request) {
-  const requestInput = allocation(request), result = allocation(208);
+  const requestInput = allocation(request), result = allocation(compileResultSize);
   try {
     new Uint8Array(api.memory.buffer, result.pointer, result.size).fill(0);
     const status = api.luauc_v1_compile(handle, requestInput.pointer, requestInput.size, result.pointer);
@@ -85,10 +114,10 @@ function compile(handle, request) {
       status, resultStatus: view.getUint32(16, true),
       artifact: dataPointer && dataSize ? Buffer.from(new Uint8Array(api.memory.buffer, dataPointer, dataSize)) : Buffer.alloc(0),
       diagnostic: diagnosticPointer && diagnosticSize ? new TextDecoder().decode(new Uint8Array(api.memory.buffer, diagnosticPointer, diagnosticSize)) : "",
-      profileDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 40, 32)),
-      packDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 72, 32)),
-      objectDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 136, 32)),
-      artifactDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 168, 32)),
+      profileDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 104, 32)),
+      packDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 136, 32)),
+      objectDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 200, 32)),
+      artifactDigest: Buffer.from(new Uint8Array(api.memory.buffer, result.pointer + 232, 32)),
     };
   } finally { api.luauc_v1_result_free(result.pointer); release(result); release(requestInput); }
 }
@@ -112,10 +141,12 @@ for (const item of profiles) {
   if (imports.length !== 2 || imports.some(({ module: namespace, kind }) => namespace !== item.module || kind !== "function"))
     throw new Error(`${item.id}: artifact import boundary drifted: ${JSON.stringify(imports)}`);
   const identity = WebAssembly.Module.customSections(module, "luauc.link.v1");
-  if (identity.length !== 1 || !Buffer.from(identity[0]).subarray(1, 33).equals(context.profileDigest) || !Buffer.from(identity[0]).subarray(33, 65).equals(context.packDigest))
+  if (identity.length !== 1 || identity[0].byteLength < 192 ||
+      !Buffer.from(identity[0]).subarray(64, 96).equals(context.profileDigest) ||
+      !Buffer.from(identity[0]).subarray(96, 128).equals(context.packDigest))
     throw new Error(`${item.id}: artifact linker identity mismatch`);
 
-  const badContent = Buffer.from(request); badContent[184] ^= 0xff;
+  const badContent = Buffer.from(request); badContent[264] ^= 0xff;
   const badRequestId = Buffer.from(request); badRequestId[32] ^= 0xff;
   const badCoverage = Buffer.from(request); badCoverage.writeUInt32LE(3, 28);
   for (const [label, malformed, diagnostic] of [

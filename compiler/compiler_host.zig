@@ -3,6 +3,8 @@ const backend_component = @import("luauc_backend_component_api");
 const linker = @import("luauc_linker");
 const runtime_profile = @import("luauc_runtime_profile_v1");
 const source_package = @import("luauc_source_package_v1");
+const compiler_result = @import("luauc_compiler_result_v1");
+const snapshot_v1 = @import("frontend_snapshot_v1");
 
 extern fn __wasm_call_ctors() void;
 
@@ -27,22 +29,7 @@ const ContextResult = extern struct {
     runtime_pack_sha256: [32]u8 = .{0} ** 32,
 };
 
-const CompileResult = extern struct {
-    data: u32 = 0,
-    size: u32 = 0,
-    diagnostic: u32 = 0,
-    diagnostic_size: u32 = 0,
-    status: u32 = 0,
-    reserved: u32 = 0,
-    request_id: [16]u8 = .{0} ** 16,
-    runtime_profile_sha256: [32]u8 = .{0} ** 32,
-    runtime_pack_sha256: [32]u8 = .{0} ** 32,
-    manifest_sha256: [32]u8 = .{0} ** 32,
-    generated_object_sha256: [32]u8 = .{0} ** 32,
-    artifact_sha256: [32]u8 = .{0} ** 32,
-    generated_function_count: u32 = 0,
-    generated_data_bytes: u32 = 0,
-};
+const CompileResult = compiler_result.CompileResultV1;
 
 const Description = extern struct {
     abi_version: u32 = 1,
@@ -56,7 +43,7 @@ const Description = extern struct {
 };
 
 comptime {
-    if (@sizeOf(FrontendResult) != 20 or @sizeOf(ContextResult) != 72 or @sizeOf(CompileResult) != 208 or @sizeOf(Description) != 32)
+    if (@sizeOf(FrontendResult) != 20 or @sizeOf(ContextResult) != 72 or @sizeOf(CompileResult) != 320 or @sizeOf(Description) != 32)
         @compileError("luauc compiler ABI layout drift");
 }
 
@@ -277,8 +264,15 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     const slot = contextFor(handle) orelse return publishDiagnostic(result, status_invalid_context, "InvalidContext");
     const profile = runtime_profile.parse(slot.profile.?) catch return publishDiagnostic(result, status_invalid_context, "InvalidStoredProfile");
     const request_bytes: [*]const u8 = @ptrFromInt(request_pointer);
-    const package = source_package.parse(request_bytes[0..request_size], slot.profile_sha256, slot.pack_sha256) catch |err| return publishError(result, if (err == error.ResourceLimit) status_resource_limit else status_invalid_request, err);
+    const package = source_package.parse(
+        request_bytes[0..request_size],
+        snapshot_v1.production_identity.frontend_build.?,
+        slot.profile_sha256,
+        slot.pack_sha256,
+    ) catch |err| return publishError(result, if (err == error.ResourceLimit) status_resource_limit else status_invalid_request, err);
     result.request_id = package.request_id;
+    result.compiler_build_sha256 = snapshot_v1.production_identity.frontend_build.?;
+    result.luau_pin_sha256 = snapshot_v1.production_identity.luau_pin.?;
     result.runtime_profile_sha256 = slot.profile_sha256;
     result.runtime_pack_sha256 = slot.pack_sha256;
     result.manifest_sha256 = package.manifest_sha256;
@@ -303,6 +297,8 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
             break :inlined luauc_frontend_snapshot_v1_compile_inlined(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, plans.ptr, module.inline_plan_count, frontend_result);
         };
         compiled_count += 1;
+        if (frontend_result.size > package.compile_budget_bytes)
+            return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
         if (frontend_status != 0 or frontend_result.status != 0 or frontend_result.data == null or frontend_result.size == 0) {
             const diagnostic = if (frontend_result.diagnostic) |pointer| pointer[0..frontend_result.diagnostic_size] else "frontend compilation failed";
             return publishDiagnostic(result, status_frontend_failure, diagnostic);
@@ -330,7 +326,10 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     }
     const object_pointer: [*]const u8 = @ptrFromInt(backend_result.data);
     const object = object_pointer[0..backend_result.size];
-    const linked = linker.link(allocator, slot.pack.?, object, profile, .{}) catch |err| return publishError(result, switch (err) {
+    const linked = linker.link(allocator, slot.pack.?, object, profile, .{}, .{
+        .compiler_build_sha256 = snapshot_v1.production_identity.frontend_build.?,
+        .package_manifest_sha256 = package.manifest_sha256,
+    }) catch |err| return publishError(result, switch (err) {
         error.OutOfMemory, error.ResourceLimit, error.ArenaOverflow, error.TableOverflow => status_resource_limit,
         else => status_link_failure,
     }, err);
@@ -344,6 +343,13 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     result.artifact_sha256 = linked.report.output_sha256;
     result.generated_function_count = linked.report.generated_function_count;
     result.generated_data_bytes = linked.report.generated_data_bytes;
+    result.import_count = profile.import_count;
+    result.export_count = profile.export_count;
+    result.resource_usage_arena_used = linked.report.generated_data_bytes;
+    result.resource_usage_table_entries = linked.report.final_table_size;
+    result.resource_usage_output_bytes = result.size;
+    result.resource_usage_compile_functions = package.module_count;
+    result.resource_usage_compile_bytes = request_size;
     return status_ok;
 }
 
@@ -357,6 +363,10 @@ pub export fn luauc_v1_result_free(result_pointer: u32) void {
     if (result.diagnostic != 0 and result.diagnostic_size != 0) {
         const bytes: [*]u8 = @ptrFromInt(result.diagnostic);
         allocator.free(bytes[0..result.diagnostic_size]);
+    }
+    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_bytes != 0) {
+        const bytes: [*]u8 = @ptrFromInt(result.diagnostic_records_ptr);
+        allocator.free(bytes[0..result.diagnostic_records_bytes]);
     }
     clearResult(result);
 }

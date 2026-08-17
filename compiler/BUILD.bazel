@@ -2,28 +2,17 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure", "zig_configure_binary", "zig_library", "zig_static_library", "zig_test")
 
-zig_library(
-    name = "source_package_v1",
-    main = "source_package_v1.zig",
-    import_name = "luauc_source_package_v1",
-    visibility = ["//visibility:public"],
-)
-
-zig_test(
-    name = "source_package_v1_test",
-    main = "source_package_v1.zig",
-)
-
 zig_static_library(
     name = "compiler_component",
     main = "compiler_host.zig",
     tags = ["manual"],
     deps = [
-        ":source_package_v1",
         "//compiler/backend:component_api",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/link:linker",
+        "//schema:compiler_result_v1",
         "//schema:runtime_profile_v1",
+        "//schema:source_package_v1",
     ],
 )
 

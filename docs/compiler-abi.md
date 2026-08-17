@@ -45,7 +45,9 @@ live contexts, maximum profile bytes, maximum pack bytes, and zero reserved. The
 | 8 | `u8 runtime_profile_sha256[32]` |
 | 40 | `u8 runtime_pack_sha256[32]` |
 
-## Compile result (208 bytes)
+## Compile result (320 bytes)
+
+`luauc_v1_describe` reports `compile_result_size = 320`. Hosts allocate from `describe`.
 
 | Offset | Field |
 | ---: | --- |
@@ -53,13 +55,18 @@ live contexts, maximum profile bytes, maximum pack bytes, and zero reserved. The
 | 8 | diagnostic pointer and size (`u32`, `u32`) |
 | 16 | status and zero reserved (`u32`, `u32`) |
 | 24 | request ID (16 bytes) |
-| 40 | runtime-profile SHA-256 |
-| 72 | runtime-pack SHA-256 |
-| 104 | package-manifest SHA-256 |
-| 136 | generated-object SHA-256 |
-| 168 | final-artifact SHA-256 |
-| 200 | generated function count (`u32`) |
-| 204 | generated data bytes (`u32`) |
+| 40 | compiler-build SHA-256 |
+| 72 | Luau-pin SHA-256 |
+| 104 | runtime-profile SHA-256 |
+| 136 | runtime-pack SHA-256 |
+| 168 | package-manifest SHA-256 |
+| 200 | generated-object SHA-256 |
+| 232 | final-artifact SHA-256 |
+| 264 | generated function count (`u32`) |
+| 268 | generated data bytes (`u32`) |
+| 272 | diagnostic records pointer/count/bytes |
+| 284 | final import and export counts |
+| 292 | resource usage (arena, table, output, compile counters) |
 
 `luauc_v1_result_free` releases artifact and diagnostic allocations and zeros the result. Call it
 exactly once for every initialized compile-result buffer, including failed compilations. Caller-owned

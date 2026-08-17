@@ -3,8 +3,12 @@ use sha2::{Digest, Sha256};
 use std::{env, fs};
 use wasmtime::{Caller, Engine, Extern, Instance, Linker, Memory, Module, Store};
 
-const SOURCE_HEADER_SIZE: usize = 160;
+const SOURCE_HEADER_SIZE: usize = 240;
 const SOURCE_RECORD_SIZE: usize = 64;
+const FRONTEND_CONTRACT: [u8; 32] = [
+    0x3f, 0x02, 0xad, 0xe9, 0xeb, 0x7b, 0x4b, 0xe0, 0xbe, 0x91, 0xa7, 0x5d, 0x11, 0x1b, 0x86, 0xd0,
+    0x2d, 0xd8, 0x40, 0x8c, 0x06, 0x13, 0x95, 0xf0, 0xbd, 0x9c, 0x1f, 0x9e, 0xca, 0xcd, 0x2f, 0xbe,
+];
 
 #[derive(Clone)]
 struct SourceModule {
@@ -75,8 +79,6 @@ fn source_request(
         .iter()
         .position(|module| module.name == entry_name)
         .ok_or_else(|| anyhow!("entry module is absent"))?;
-    let inline_plan_enabled = modules.iter().any(|module| !module.inline_plans.is_empty());
-
     let mut manifest = Vec::new();
     manifest.extend_from_slice(&(modules.len() as u32).to_le_bytes());
     manifest.extend_from_slice(&(entry_id as u32).to_le_bytes());
@@ -86,14 +88,12 @@ fn source_request(
         append_sized(&mut manifest, &module.name);
         append_sized(&mut manifest, &module.source_name);
         manifest.extend_from_slice(&content_digest);
-        if inline_plan_enabled {
-            manifest.extend_from_slice(&(module.inline_plans.len() as u32).to_le_bytes());
-            for plan in &module.inline_plans {
-                manifest.extend_from_slice(&plan.caller_function_id.to_le_bytes());
-                manifest.extend_from_slice(&plan.feedback_slot.to_le_bytes());
-                manifest.extend_from_slice(&plan.target_function_id.to_le_bytes());
-                manifest.extend_from_slice(&0u32.to_le_bytes());
-            }
+        manifest.extend_from_slice(&(module.inline_plans.len() as u32).to_le_bytes());
+        for plan in &module.inline_plans {
+            manifest.extend_from_slice(&plan.caller_function_id.to_le_bytes());
+            manifest.extend_from_slice(&plan.feedback_slot.to_le_bytes());
+            manifest.extend_from_slice(&plan.target_function_id.to_le_bytes());
+            manifest.extend_from_slice(&0u32.to_le_bytes());
         }
         content_digests.push(content_digest);
     }
@@ -118,23 +118,41 @@ fn source_request(
     put_u32(&mut request, 20, entry_id.try_into()?);
     put_u32(&mut request, 24, SOURCE_RECORD_SIZE as u32);
     put_u32(&mut request, 28, 0);
+    put_u32(&mut request, 176, 0);
+    put_u32(&mut request, 180, 32);
+    put_u32(&mut request, 184, 0);
+    put_u32(&mut request, 188, 1_048_576);
+    put_u32(&mut request, 192, 4096);
+    put_u32(&mut request, 196, 16_777_216);
     let mut request_identity = Sha256::new();
-    request_identity.update(if inline_plan_enabled {
-        b"luauc-source-request-v1-inline-plan\0".as_slice()
-    } else {
-        b"luauc-source-request-v1\0".as_slice()
-    });
+    request_identity.update(b"luauc-source-request-v1\0");
     request_identity.update(0u32.to_le_bytes());
+    request_identity.update(FRONTEND_CONTRACT);
     request_identity.update(profile_digest);
     request_identity.update(pack_digest);
     request_identity.update(manifest_digest);
-    request[32..48].copy_from_slice(&request_identity.finalize()[..16]);
-    request[48..80].copy_from_slice(profile_digest);
-    request[80..112].copy_from_slice(pack_digest);
-    request[112..144].copy_from_slice(&manifest_digest);
-    if inline_plan_enabled {
-        put_u32(&mut request, 144, 1);
+    request_identity.update(0u32.to_le_bytes());
+    request_identity.update(32u32.to_le_bytes());
+    request_identity.update(0u32.to_le_bytes());
+    request_identity.update(1_048_576u32.to_le_bytes());
+    request_identity.update(4096u32.to_le_bytes());
+    request_identity.update(16_777_216u32.to_le_bytes());
+    request_identity.update(0u32.to_le_bytes());
+    request_identity.update(0u32.to_le_bytes());
+    for module in &modules {
+        request_identity.update((module.inline_plans.len() as u32).to_le_bytes());
+        for plan in &module.inline_plans {
+            request_identity.update(plan.caller_function_id.to_le_bytes());
+            request_identity.update(plan.feedback_slot.to_le_bytes());
+            request_identity.update(plan.target_function_id.to_le_bytes());
+            request_identity.update(0u32.to_le_bytes());
+        }
     }
+    request[32..48].copy_from_slice(&request_identity.finalize()[..16]);
+    request[48..80].copy_from_slice(&FRONTEND_CONTRACT);
+    request[80..112].copy_from_slice(profile_digest);
+    request[112..144].copy_from_slice(pack_digest);
+    request[144..176].copy_from_slice(&manifest_digest);
 
     let mut cursor = SOURCE_HEADER_SIZE + SOURCE_RECORD_SIZE * modules.len();
     for (index, module) in modules.iter().enumerate() {
@@ -239,7 +257,16 @@ fn compile_package(
     let pack_digest: [u8; 32] = context_bytes[40..72].try_into().unwrap();
     let request = source_request(modules, b"main", &profile_digest, &pack_digest)?;
     let request_pointer = compiler_alloc(&mut store, memory, &alloc, &request)?;
-    let compile_result = compiler_alloc(&mut store, memory, &alloc, &[0; 208])?;
+    let describe = instance.get_typed_func::<u32, u32>(&mut store, "luauc_v1_describe")?;
+    let describe_pointer = compiler_alloc(&mut store, memory, &alloc, &[0; 32])?;
+    if describe.call(&mut store, describe_pointer)? != 0 {
+        bail!("compiler describe failed");
+    }
+    let mut describe_bytes = [0; 32];
+    memory.read(&store, describe_pointer as usize, &mut describe_bytes)?;
+    let compile_result_size = get_u32(&describe_bytes, 12) as usize;
+    dealloc.call(&mut store, (describe_pointer, 32))?;
+    let compile_result = compiler_alloc(&mut store, memory, &alloc, &vec![0; compile_result_size])?;
 
     let outcome = (|| -> Result<Vec<u8>> {
         let status = compile.call(
@@ -251,7 +278,7 @@ fn compile_package(
                 compile_result,
             ),
         )?;
-        let mut result = [0; 208];
+        let mut result = vec![0; compile_result_size];
         memory.read(&store, compile_result as usize, &mut result)?;
         if status != 0 || get_u32(&result, 16) != 0 {
             let diagnostic_pointer = get_u32(&result, 8);
@@ -270,9 +297,9 @@ fn compile_package(
         let size = get_u32(&result, 4);
         let mut artifact = vec![0; size as usize];
         memory.read(&store, pointer as usize, &mut artifact)?;
-        if result[40..72] != profile_digest
-            || result[72..104] != pack_digest
-            || result[168..200] != digest(&artifact)
+        if result[104..136] != profile_digest
+            || result[136..168] != pack_digest
+            || result[232..264] != digest(&artifact)
         {
             bail!("compiler result provenance does not bind the artifact");
         }
@@ -280,7 +307,7 @@ fn compile_package(
     })();
 
     result_free.call(&mut store, compile_result)?;
-    dealloc.call(&mut store, (compile_result, 208))?;
+    dealloc.call(&mut store, (compile_result, compile_result_size as u32))?;
     dealloc.call(&mut store, (request_pointer, request.len().try_into()?))?;
     if context_destroy.call(&mut store, handle)? != 0 {
         bail!("compiler context destroy failed");

@@ -3,7 +3,31 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_zig//zig:defs.bzl", "zig_library", "zig_test")
 
 exports_files(
-    ["frontend_snapshot_v1.h", "runtime_profile_v1.zig"],
+    [
+        "compiler_result_v1.zig",
+        "frontend_snapshot_v1.h",
+        "runtime_profile_v1.zig",
+        "source_package_v1.zig",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "source_package_v1",
+    main = "source_package_v1.zig",
+    import_name = "luauc_source_package_v1",
+    visibility = ["//visibility:public"],
+)
+
+zig_test(
+    name = "source_package_v1_test",
+    main = "source_package_v1.zig",
+)
+
+zig_library(
+    name = "compiler_result_v1",
+    main = "compiler_result_v1.zig",
+    import_name = "luauc_compiler_result_v1",
     visibility = ["//visibility:public"],
 )
 

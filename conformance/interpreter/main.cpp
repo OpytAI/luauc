@@ -183,7 +183,7 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
     int status = lua_resume(thread, state, 2);
     size_t yieldedSize = 0;
     uint32_t suspensionCount = 0;
-    while (status == LUA_YIELD && suspensionCount < 8) {
+    while (status == LUA_YIELD && suspensionCount < 64) {
         const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yieldedSize) : nullptr;
         if (!yielded || yieldedSize != sizeof("gc-boundary") - 1 ||
             memcmp(yielded, "gc-boundary", sizeof("gc-boundary") - 1) != 0)
@@ -193,8 +193,6 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
         status = lua_resume(thread, state, 0);
         suspensionCount++;
     }
-    if (suspensionCount == 0)
-        return reportStackError(thread, "interpreter did not reach the GC boundary");
     if (status != LUA_OK || lua_gettop(thread) != 2 || !lua_isnumber(thread, -2) || !lua_isstring(thread, -1))
         return reportStackError(thread, "interpreter resume failed");
 

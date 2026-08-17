@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
     try runtime_profile.validatePackManifest(runtime_pack, profile_bytes);
     const package_object = try std.Io.Dir.cwd().readFileAlloc(init.io, object_path, init.gpa, .limited(32 * 1024 * 1024));
     defer init.gpa.free(package_object);
-    const result = try linker.link(init.gpa, runtime_pack, package_object, profile, .{});
+    const result = try linker.link(init.gpa, runtime_pack, package_object, profile, .{}, .{});
     defer init.gpa.free(result.bytes);
     try std.Io.File.writeStreamingAll(.stdout(), init.io, result.bytes);
 }

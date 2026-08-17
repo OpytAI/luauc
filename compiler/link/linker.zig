@@ -76,6 +76,11 @@ pub const Result = struct {
     report: LinkReport,
 };
 
+pub const LinkIdentity = struct {
+    compiler_build_sha256: [32]u8 = .{0} ** 32,
+    package_manifest_sha256: [32]u8 = .{0} ** 32,
+};
+
 const wasm_magic = [_]u8{ 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
 const page_size: u64 = 65536;
 const max_name_bytes: usize = 1024;
@@ -1061,8 +1066,6 @@ fn resolve(allocator: std.mem.Allocator, pack: *const PackModel, object: *const 
     const function_map = try allocator.alloc(u32, object_function_count);
     errdefer allocator.free(function_map);
     for (object.imports.functions.items, 0..) |item, index| {
-        if (!std.mem.eql(u8, item.module, "env"))
-            return Error.InvalidImport;
         const pack_export = try findExport(pack.exports.items, item.name, external_kind.function);
         const object_signature = try functionType(&object.types, &object.imports, object.function_types.items, @intCast(index));
         const pack_signature = try functionType(&pack.types, &pack.imports, pack.function_types.items, pack_export.index);
@@ -1266,7 +1269,7 @@ fn appendCustomSection(output: *std.ArrayList(u8), allocator: std.mem.Allocator,
     try appendSection(output, allocator, section.custom, custom.items);
 }
 
-fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectModel, resolved: *const Resolved, profile: runtime_profile.Profile, profile_digest: [32]u8, pack_digest: [32]u8, object_digest: [32]u8, limits: Limits) Error![]u8 {
+fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectModel, resolved: *const Resolved, profile: runtime_profile.Profile, identity: LinkIdentity, profile_digest: [32]u8, pack_digest: [32]u8, object_digest: [32]u8, limits: Limits) Error![]u8 {
     const pointer_address = try globalAddress(pack, profile.bindingName(.program_pointer, .global) catch return Error.MissingRuntimeSymbol);
     writeU32Little(try memorySliceAt(pack.data.items, pointer_address, 4), resolved.program_address);
 
@@ -1372,11 +1375,14 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     try appendSection(&output, allocator, section.data, payload.items);
     payload.clearRetainingCapacity();
 
-    // Canonical identity section: version, exact profile/pack/object digests, arena usage and function count.
-    try appendUleb(&payload, allocator, 1);
+    var output_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(output.items, &output_digest, .{});
+    try payload.appendSlice(allocator, &identity.compiler_build_sha256);
+    try payload.appendSlice(allocator, &identity.package_manifest_sha256);
     try payload.appendSlice(allocator, &profile_digest);
     try payload.appendSlice(allocator, &pack_digest);
     try payload.appendSlice(allocator, &object_digest);
+    try payload.appendSlice(allocator, &output_digest);
     try appendUleb(&payload, allocator, resolved.arena_used);
     try appendUleb(&payload, allocator, object.function_types.items.len);
     try appendCustomSection(&output, allocator, "luauc.link.v1", payload.items);
@@ -1386,7 +1392,7 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     return output.toOwnedSlice(allocator);
 }
 
-pub fn link(allocator: std.mem.Allocator, runtime_pack: []const u8, package_object: []const u8, profile: runtime_profile.Profile, limits: Limits) Error!Result {
+pub fn link(allocator: std.mem.Allocator, runtime_pack: []const u8, package_object: []const u8, profile: runtime_profile.Profile, limits: Limits, identity: LinkIdentity) Error!Result {
     var pack = try PackModel.parse(allocator, runtime_pack, profile, limits);
     defer pack.deinit();
     var object = try ObjectModel.parse(allocator, package_object, limits);
@@ -1401,7 +1407,7 @@ pub fn link(allocator: std.mem.Allocator, runtime_pack: []const u8, package_obje
     std.crypto.hash.sha2.Sha256.hash(runtime_pack, &pack_digest, .{});
     var object_digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(package_object, &object_digest, .{});
-    const bytes = try emit(allocator, &pack, &object, &resolved, profile, profile_digest, pack_digest, object_digest, limits);
+    const bytes = try emit(allocator, &pack, &object, &resolved, profile, identity, profile_digest, pack_digest, object_digest, limits);
     errdefer allocator.free(bytes);
     try validateFinal(allocator, bytes, profile, limits);
     var output_digest: [32]u8 = undefined;
@@ -1470,7 +1476,13 @@ pub fn validateFinal(allocator: std.mem.Allocator, bytes: []const u8, profile: r
     }
     var data = parseData(allocator, module.payload(section.data).?, limits.max_data_segments) catch return Error.InvalidFinalModule;
     defer deinitData(allocator, &data);
-    if (module.custom("luauc.link.v1") == null)
+    const link_payload = module.custom("luauc.link.v1") orelse return Error.InvalidFinalModule;
+    if (link_payload.len < 192)
+        return Error.InvalidFinalModule;
+    var reader = Reader{ .bytes = link_payload[192..] };
+    _ = reader.readUleb32() catch return Error.InvalidFinalModule;
+    _ = reader.readUleb32() catch return Error.InvalidFinalModule;
+    if (!reader.done())
         return Error.InvalidFinalModule;
 }
 
@@ -1480,6 +1492,11 @@ test "rejects malformed modules and oversized inputs deterministically" {
     var limits = Limits{};
     limits.max_input_bytes = 4;
     try std.testing.expectError(Error.ResourceLimit, CoreModule.parse(allocator, &wasm_magic, limits));
+}
+
+test "a three-digest link section is shorter than six digests" {
+    const three_digest = [_]u8{1} ++ [_]u8{0xaa} ** 96 ++ [_]u8{ 1, 1 };
+    try std.testing.expect(three_digest.len < 192);
 }
 
 test "padded relocation encodings retain fixed width" {

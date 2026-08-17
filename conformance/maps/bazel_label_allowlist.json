@@ -21,7 +21,7 @@
     "//conformance/tests:userdata_test",
     "//compiler:compiler_api_test",
     "//compiler:compiler_build_test",
-    "//compiler:source_package_v1_test",
+    "//schema:source_package_v1_test",
     "//compiler/ir:frontend_snapshot_v1_test",
     "//compiler/link:linker_test",
     "//compiler/wasm:object_test",
