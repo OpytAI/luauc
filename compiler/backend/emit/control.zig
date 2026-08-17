@@ -527,16 +527,18 @@ pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: 
     try self.body.localSet(self.allocator, self.status_local);
     try self.body.end(self.allocator);
     try self.body.localGet(self.allocator, self.status_local);
-    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Const(self.allocator, status_yielded);
+    try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.else_(self.allocator);
     try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.status_local);
     try self.body.call(self.allocator, self.finish_compiled_call orelse return Error.UnsupportedCommand);
     if (continuation) |resumable|
         try self.emitClearContinuation(resumable.continuation_id);
     try self.emitReloadBase();
-    try self.body.else_(self.allocator);
-    try self.body.localGet(self.allocator, self.status_local);
-    try self.body.return_(self.allocator);
     try self.body.end(self.allocator);
     try self.body.else_(self.allocator);
     try self.body.localGet(self.allocator, self.status_local);

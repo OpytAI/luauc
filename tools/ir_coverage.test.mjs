@@ -6,10 +6,17 @@ import {
   QUALIFYING_GATES,
   USERDATA_HELPERS,
   canonicalHashOf,
+  compileBackendPackage,
+  compileFrontendSnapshot,
+  instantiateZeroImport,
   loadJson,
+  parseSnapshot,
+  parseWasmFunctionImports,
   printRule13,
   runfile,
+  snapshotSection,
   validateCoverageMap,
+  walkSnapshot,
 } from "./ir_ledger.mjs";
 import { generateGeneralArms } from "./generate_general_arms.mjs";
 import { generateIrCoverage, writeCoverageMap } from "./generate_ir_coverage.mjs";
@@ -80,6 +87,54 @@ if (!stripStdout.includes("strip=hold barrier=on dead=0") ||
   throw new Error(`interpreter color strip failed:\n${stripStdout}`);
 }
 
+function nopCommand(snapshot, commandValue) {
+  const parsed = parseSnapshot(snapshot);
+  const mutated = Buffer.from(snapshot);
+  const functions = snapshotSection(parsed, 15);
+  const instructions = snapshotSection(parsed, 17);
+  let count = 0;
+  walkSnapshot(parsed, {
+    instruction({ command, functionId, instructionId }) {
+      if (command !== commandValue) return;
+      const functionRecord = functions.offset + functionId * functions.recordSize;
+      const instructionStart = mutated.readUInt32LE(functionRecord + 24);
+      const instructionOffset = instructions.offset +
+        (instructionStart + instructionId) * instructions.recordSize;
+      mutated[instructionOffset] = 0;
+      count += 1;
+    },
+  });
+  return { mutated, count };
+}
+
+const frontend = await instantiateZeroImport(pathOf("LUAUC_FRONTEND_WASM"), "frontend");
+const backend = await instantiateZeroImport(pathOf("LUAUC_BACKEND_WASM"), "backend");
+frontend.exports.luauc_frontend_v1_init();
+const holdSnapshot = compileFrontendSnapshot(
+  frontend.exports,
+  readFileSync(pathOf("LUAUC_USERDATA_HOLD"), "utf8"),
+  "@userdata_hold.luau",
+);
+const storeSnapshot = compileFrontendSnapshot(
+  frontend.exports,
+  readFileSync(pathOf("LUAUC_USERDATA_STORE"), "utf8"),
+  "@userdata_store.luau",
+);
+const holdNop = nopCommand(holdSnapshot, 147);
+const storeNop = nopCommand(storeSnapshot, 148);
+if (holdNop.count === 0 || storeNop.count === 0) {
+  throw new Error(`compiled omit missing barrier ops: hold=${holdNop.count} store=${storeNop.count}`);
+}
+const holdOmitImports = parseWasmFunctionImports(compileBackendPackage(backend.exports, holdNop.mutated));
+const storeOmitImports = parseWasmFunctionImports(compileBackendPackage(backend.exports, storeNop.mutated));
+if (!holdOmitImports.includes("luauc_runtime_v1_set_userdata_metatable")) {
+  throw new Error(`compiled Hold omit lost set_userdata_metatable: ${JSON.stringify(holdOmitImports)}`);
+}
+if (!storeOmitImports.includes("luauc_runtime_v1_table_store")) {
+  throw new Error(`compiled Store omit lost table_store: ${JSON.stringify(storeOmitImports)}`);
+}
+const isolatedStripSatisfied = true;
+
 const generated = await generateIrCoverage({
   frontend: pathOf("LUAUC_FRONTEND_WASM"),
   backend: pathOf("LUAUC_BACKEND_WASM"),
@@ -91,12 +146,15 @@ const generated = await generateIrCoverage({
 }, {
   resolveSource: (entry) => runfile(entry.path, entry.path),
   hookUnitMarkSatisfied,
-  isolatedStripSatisfied: true,
+  isolatedStripSatisfied,
+  measurementGate: true,
 });
 
 const temp = mkdtempSync(join(tmpdir(), "luauc-ir-coverage-"));
 const generatedPath = join(temp, "luauc_ir_coverage.json");
 writeCoverageMap(generatedPath, generated.document);
+if (process.env.LUAUC_WRITE_COVERAGE)
+  writeCoverageMap(process.env.LUAUC_WRITE_COVERAGE, generated.document);
 
 if (generated.document.canonical_hash !== checkedCoverage.canonical_hash) {
   throw new Error(
@@ -113,7 +171,7 @@ const coverageOptions = {
   existingGates: new Set([...QUALIFYING_GATES, "//hosts/js:embed_test", "//hosts/js:cli_test"]),
   intToNumMayImportUserdata,
   hookUnitMarkSatisfied,
-  isolatedStripSatisfied: true,
+  isolatedStripSatisfied,
 };
 
 const errors = validateCoverageMap(generated.document, coverageOptions);

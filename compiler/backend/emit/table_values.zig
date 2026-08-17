@@ -6,6 +6,7 @@ const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 
 const Error = model.Error;
+const tvalue_size = abi.tvalue_size;
 
 fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
     if (operand.kind != .constant)
@@ -18,6 +19,20 @@ fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
         .double => constant.doubleValue() orelse return Error.InvalidOperandType,
         .tag, .import => return Error.InvalidOperandType,
     };
+}
+
+fn isUserdataOwnerRegister(self: anytype, register: u32) Error!bool {
+    var instruction_id: u32 = 0;
+    while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
+        const instruction = try self.instruction(instruction_id);
+        if (instruction.command != abi.ir_cmd_check_userdata_tag or instruction.operand_count < 1)
+            continue;
+        if ((try self.loadedPointerRegister(try self.operand(instruction, 0)))) |owner| {
+            if (owner == register)
+                return true;
+        }
+    }
+    return false;
 }
 
 
@@ -111,9 +126,7 @@ pub noinline fn emitForwardTableBarrier(
     const table = try self.operand(instruction_value, 0);
     const source = try self.operand(instruction_value, 1);
     const known_tag = try self.operand(instruction_value, 2);
-    if (table.kind != .instruction or
-        (!self.plan.isProvenTablePointer(table.value) and
-            try self.loadedPointerRegister(table) == null) or
+    if (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value) or
         source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
         (known_tag.kind != .undef and known_tag.kind != .constant))
         return Error.UnsupportedControlFlow;
@@ -136,6 +149,26 @@ pub noinline fn emitGeneralTableOperation(
     const value = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
     const table = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
     const key = try self.operand(instruction_value, 2);
+    if (instruction_value.command == abi.ir_cmd_set_table and self.plan.tableAllocHasDest(value)) {
+        if (try isUserdataOwnerRegister(self, table)) {
+            try self.body.localGet(self.allocator, 0);
+            try self.body.localGet(self.allocator, self.base_local);
+            try self.body.i32Load(self.allocator, 2, table * tvalue_size);
+            try self.body.i32Const(self.allocator, @intCast(value));
+            try self.body.call(self.allocator, self.set_userdata_metatable orelse return Error.UnsupportedCommand);
+            return;
+        }
+        const index = (try immediateNumber(self, key)) orelse return Error.InvalidOperandType;
+        if (index != @as(f64, @floatFromInt(@as(i32, @intFromFloat(index)))) or index <= 0)
+            return Error.UnsupportedControlFlow;
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(table));
+        try self.body.i32Const(self.allocator, @intFromFloat(index));
+        try self.body.i32Const(self.allocator, @intCast(value));
+        try self.body.call(self.allocator, self.table_store orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+        return;
+    }
 
     try self.body.localGet(self.allocator, 0);
     if (key.kind == .constant) {

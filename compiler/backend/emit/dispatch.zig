@@ -38,6 +38,7 @@ const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_concat = abi.ir_cmd_concat;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
+const ir_cmd_table_setnum = abi.ir_cmd_table_setnum;
 const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
 const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
@@ -330,6 +331,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         ir_cmd_check_readonly => try self.emitCheckReadonly(instruction_value),
         ir_cmd_check_no_metatable, ir_cmd_check_array_size => try self.emitTableLayoutGuard(instruction_value),
         ir_cmd_try_num_to_index => try self.emitTryNumberToIndex(instruction_id, instruction_value),
+        ir_cmd_table_setnum => try self.emitTableSetNum(instruction_id, instruction_value),
         ir_cmd_get_table, ir_cmd_set_table => {
             if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
                 return Error.UnsupportedControlFlow;
@@ -620,7 +622,7 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         .ordinary_call_fallback, .fastcall_fallback => {
             if (self.plan.blockKind(block_id) == .fastcall_fallback)
                 return self.emitFastcallFallbackBlock(block_id, block);
-            return emitDispatchBlock(self, block_id, block);
+            return emitDispatchBlock(self, block);
         },
         .specialized_ipairs => {
             const pattern = (try self.specializedIpairsPattern(block)) orelse return Error.UnsupportedControlFlow;
@@ -665,12 +667,11 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         .dispatch, .none => {
             if (block.kind == .fallback and !try admission.supportsFallback(self, block))
                 return Error.UnsupportedControlFlow;
-            return emitDispatchBlock(self, block_id, block);
+            return emitDispatchBlock(self, block);
         },
     }
 }
-fn emitDispatchBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
-    _ = block_id;
+fn emitDispatchBlock(self: anytype, block: snapshot_v1.IrBlock) Error!void {
     const terminated = try self.emitInstructionRange(block.start, block.finish, block);
     if (!terminated)
         return Error.InvalidBlockTermination;

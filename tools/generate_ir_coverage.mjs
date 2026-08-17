@@ -117,6 +117,8 @@ const FAMILY_TESTS = Object.freeze({
   natural_integer: "//conformance/tests:natural_sources_test",
   natural_bit32: "//conformance/tests:natural_sources_test",
   natural_buffer: "//conformance/tests:natural_sources_test",
+  call_graph: "//conformance:runtime_measurement_test",
+  table_churn: "//conformance:runtime_measurement_test",
 });
 
 function existingTests(sourceIds) {

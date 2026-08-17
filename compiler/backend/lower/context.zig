@@ -46,7 +46,6 @@ pub const Context = struct {
     get_upvalue: ?wasm.FunctionRef,
     set_upvalue: ?wasm.FunctionRef,
     close_upvalues: ?wasm.FunctionRef,
-    call: ?wasm.FunctionRef,
     prepare_compiled_call: ?wasm.FunctionRef,
     finish_compiled_call: ?wasm.FunctionRef,
     count_direct_call: ?wasm.FunctionRef,
@@ -337,6 +336,7 @@ pub const Context = struct {
     pub const emitPlainTableNamecallOperation = namecall.emitPlainTableNamecallOperation;
 
     pub const emitTableAllocation = namecall.emitTableAllocation;
+    pub const emitTableSetNum = namecall.emitTableSetNum;
     pub const emitUserdataAllocationInstruction = namecall.emitUserdataAllocationInstruction;
     pub const emitNewUserdata = namecall.emitNewUserdata;
     pub const emitSetList = namecall.emitSetList;

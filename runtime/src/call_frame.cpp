@@ -1893,12 +1893,18 @@ extern "C" const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_c
     return &gPreparedCall;
 }
 
-extern "C" void luauc_runtime_v1_finish_compiled_call(lua_State *L) {
+extern "C" void luauc_runtime_v1_finish_compiled_call(lua_State *L, uint32_t status) {
     countRuntimeHelper();
     if (!L || !L->ci)
         luaG_runerror(L, "strict AOT compiled call finish requires an active frame");
-    luau_poscall(L, L->base);
-    luaC_checkGC(L);
+    if (status == LUAUC_RUNTIME_V1_OK) {
+        luau_poscall(L, L->base);
+        luaC_checkGC(L);
+        return;
+    }
+    if (status == LUAUC_RUNTIME_V1_UNSUPPORTED_TYPE)
+        luaG_runerror(L, "strict AOT nested numeric tier received an unsupported value type");
+    luaG_runerror(L, "strict AOT nested function returned invalid status %u", status);
 }
 
 static uint32_t callAotFunction(lua_State *L, StkId function, int32_t resultCount) {
@@ -1962,6 +1968,7 @@ extern "C" void luauc_runtime_v1_reset_counts(void) {
     gIndirectCalls = 0;
 }
 
+// Measurement-only counters for P2. Not required product call semantics (Rule 30).
 extern "C" void luauc_runtime_v1_count_direct_call(void) {
     gDirectCalls++;
 }
@@ -2153,6 +2160,7 @@ static GCObject *stackCollectable(lua_State *L, int index) {
 
 static uint32_t forceGcStep(lua_State *L) {
     L->global->GCthreshold = 0;
+    // One luaC_step only. lua_gc(LUA_GCSTEP) loops to pause and can sweep in the same call.
     luaC_step(L, false);
     return L->global->gcstate;
 }
@@ -2174,6 +2182,8 @@ extern "C" uint32_t luauc_runtime_v1_gc_isblack(lua_State *L, int stackIndex) {
 
 extern "C" uint32_t luauc_runtime_v1_gc_isdead(lua_State *L, uint32_t objectPointer) {
     if (!L || !L->global || objectPointer == 0)
+        return 0;
+    if (L->global->gcstate != GCSsweep)
         return 0;
     return isdead(L->global, reinterpret_cast<GCObject *>(static_cast<uintptr_t>(objectPointer)));
 }
@@ -2271,8 +2281,14 @@ extern "C" uint32_t luauc_runtime_v1_barrier_probe(lua_State *L, uint32_t kind) 
 
     GCObject *white = nullptr;
     if (kind == 0) {
-        white = stackCollectable(L, -1);
         lua_pop(L, 1);
+        const TValue *seedValue = luaA_toobject(L, 2);
+        if (!seedValue || !ttisuserdata(seedValue))
+            return 2;
+        LuaTable *held = uvalue(seedValue)->metatable;
+        if (!held)
+            return 2;
+        white = (GCObject *)held;
     } else {
         lua_rawgeti(L, 3, 1);
         white = stackCollectable(L, -1);

@@ -44,15 +44,6 @@ pub const TableAlloc = struct {
     check_gc_id: ?u32,
 };
 
-pub const SetList = struct {
-    instruction_id: u32,
-    table_reg: u32,
-    source_start: u32,
-    count: u32,
-    start_index: u32,
-    known_size: ?u32,
-};
-
 pub const PlainLen = struct {
     table_len_id: u32,
     finish: u32,
@@ -218,7 +209,7 @@ pub fn recognize(
         }
 
         if (instruction.command == ir_cmd_setlist)
-            _ = try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction);
+            try validateSetList(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction);
 
         if (instruction.command == ir_cmd_table_len)
             if (try plainLenAt(snapshot, function, proto, slices, instruction_id, instruction)) |decoded|
@@ -639,20 +630,20 @@ pub fn isDeferredTableInitializationCommand(command: snapshot_v1.IrCommand) bool
     };
 }
 
-fn setListAt(
+fn validateSetList(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
     proto: snapshot_v1.Proto,
     instruction_blocks: []const u32,
     instruction_id: u32,
     instruction: snapshot_v1.IrInstruction,
-) Error!?SetList {
+) Error!void {
     if (!inCompilableBlock(snapshot, function, instruction_blocks, instruction_id))
-        return null;
+        return;
     if (instruction.operand_count != 6)
         return Error.InvalidOperandCount;
     _ = try uintOperand(snapshot, function, try snapshot.irOperand(instruction, 0));
-    const table = try vmReg(proto, try snapshot.irOperand(instruction, 1));
+    _ = try vmReg(proto, try snapshot.irOperand(instruction, 1));
     const source = try vmReg(proto, try snapshot.irOperand(instruction, 2));
     const count = try intOperand(snapshot, function, try snapshot.irOperand(instruction, 3));
     const start_index = try uintOperand(snapshot, function, try snapshot.irOperand(instruction, 4));
@@ -668,14 +659,6 @@ fn setListAt(
     if (count_u32 > @as(u32, proto.max_stack_size) - source or
         (known_size != null and count_u32 > known_size.? -| (start_index - 1)))
         return Error.UnsupportedControlFlow;
-    return .{
-        .instruction_id = instruction_id,
-        .table_reg = table,
-        .source_start = source,
-        .count = count_u32,
-        .start_index = start_index,
-        .known_size = known_size,
-    };
 }
 
 fn plainLenAt(

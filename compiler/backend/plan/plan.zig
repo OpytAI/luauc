@@ -74,6 +74,7 @@ pub const FunctionPlan = struct {
     continuation_regions: []ContinuationRegion,
     iteration_regions: []IterationRegion,
     block_index: recognize_tables.BlockIndex,
+    pow_sites: []model.PowPattern,
     call_facts: recognize_calls.CallFacts,
     import_needs: model.ImportNeeds,
     lowered_commands: std.StaticBitSet(256),
@@ -475,6 +476,7 @@ pub const FunctionPlan = struct {
             .continuation_regions = &.{},
             .iteration_regions = &.{},
             .block_index = .{},
+            .pow_sites = &.{},
             .call_facts = .{},
             .import_needs = import_needs,
             .lowered_commands = std.StaticBitSet(256).initEmpty(),
@@ -508,6 +510,8 @@ pub const FunctionPlan = struct {
         if (self.iteration_regions.len != 0)
             self.allocator.free(self.iteration_regions);
         self.block_index.deinit();
+        if (self.pow_sites.len != 0)
+            self.allocator.free(self.pow_sites);
         self.call_facts.deinit();
         self.facts.deinit();
         self.* = undefined;
@@ -536,6 +540,14 @@ pub const FunctionPlan = struct {
         return self.facts.tableAllocCovering(instruction_id);
     }
 
+    pub fn tableAllocHasDest(self: FunctionPlan, dest_reg: u32) bool {
+        for (self.facts.table_allocs) |alloc| {
+            if (alloc.dest_reg == dest_reg)
+                return true;
+        }
+        return false;
+    }
+
     pub fn clusterAt(self: FunctionPlan, instruction_id: u32) ?Cluster {
         if (instruction_id >= self.cluster_index.len)
             return null;
@@ -546,6 +558,7 @@ pub const FunctionPlan = struct {
     }
 
     pub fn indexClusters(self: *FunctionPlan, ctx: anytype) Error!void {
+        try self.collectPowSites(ctx);
         var clusters: std.ArrayList(Cluster) = .empty;
         errdefer clusters.deinit(self.allocator);
         try clusters.appendSlice(self.allocator, self.clusters);
@@ -588,13 +601,27 @@ pub const FunctionPlan = struct {
     }
 
     pub fn ownsFallback(self: FunctionPlan, block_id: u32) bool {
-        if (self.block_index.isBypassed(block_id))
-            return true;
-        for (self.block_index.facts) |fact| {
-            if (fact.fallback == block_id or fact.extra0 == block_id or fact.extra1 == block_id)
-                return true;
+        return self.block_index.ownsFallback(block_id);
+    }
+
+    pub fn fallbackOwner(self: FunctionPlan, block_id: u32) ?u32 {
+        return self.block_index.fallbackOwner(block_id);
+    }
+
+    fn collectPowSites(self: *FunctionPlan, ctx: anytype) Error!void {
+        if (self.pow_sites.len != 0) {
+            self.allocator.free(self.pow_sites);
+            self.pow_sites = &.{};
         }
-        return false;
+        var sites: std.ArrayList(model.PowPattern) = .empty;
+        errdefer sites.deinit(self.allocator);
+        var block_id: u32 = 0;
+        while (block_id < ctx.function.block_count) : (block_id += 1) {
+            const block = try ctx.snapshot.irBlock(ctx.function, block_id);
+            if (try ctx.powPattern(block)) |pattern|
+                try sites.append(self.allocator, pattern);
+        }
+        self.pow_sites = try sites.toOwnedSlice(self.allocator);
     }
 
     pub fn supportsFallback(self: FunctionPlan, block_id: u32) bool {

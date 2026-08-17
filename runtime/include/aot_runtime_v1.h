@@ -318,7 +318,7 @@ uint32_t luauc_runtime_v1_direct_calls(void);
 uint32_t luauc_runtime_v1_indirect_calls(void);
 const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_call(
     lua_State *state, uint32_t function_register, int32_t parameter_count, int32_t result_count);
-void luauc_runtime_v1_finish_compiled_call(lua_State *state);
+void luauc_runtime_v1_finish_compiled_call(lua_State *state, uint32_t status);
 uint32_t luauc_runtime_v1_call(lua_State *state, uint32_t function_register, int32_t parameter_count,
                              int32_t result_count);
 void luauc_runtime_v1_prep_varargs(lua_State *state, uint32_t fixed_parameter_count);

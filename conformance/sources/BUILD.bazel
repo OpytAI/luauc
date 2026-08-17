@@ -54,7 +54,7 @@ js_library(
 
 js_library(
     name = "ir_ledger_luau",
-    srcs = _LEDGER_LUAU + _PRODUCT_LUAU,
+    srcs = _LEDGER_LUAU + _PRODUCT_LUAU + _MEASURE_LUAU,
     visibility = ["//visibility:public"],
 )
 

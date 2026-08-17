@@ -16,7 +16,6 @@ const newclosure_capture_symbol = abi.newclosure_capture_symbol;
 const get_upvalue_symbol = abi.get_upvalue_symbol;
 const set_upvalue_symbol = abi.set_upvalue_symbol;
 const close_upvalues_symbol = abi.close_upvalues_symbol;
-const call_symbol = abi.call_symbol;
 const prepare_compiled_call_symbol = abi.prepare_compiled_call_symbol;
 const finish_compiled_call_symbol = abi.finish_compiled_call_symbol;
 const count_direct_call_symbol = abi.count_direct_call_symbol;
@@ -147,7 +146,6 @@ pub const RuntimeImports = struct {
     get_upvalue: ?wasm.FunctionRef,
     set_upvalue: ?wasm.FunctionRef,
     close_upvalues: ?wasm.FunctionRef,
-    call: ?wasm.FunctionRef,
     prepare_compiled_call: ?wasm.FunctionRef,
     finish_compiled_call: ?wasm.FunctionRef,
     count_direct_call: ?wasm.FunctionRef,
@@ -228,9 +226,8 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const get_upvalue_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const set_upvalue_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const close_upvalues_params = [_]wasm.ValueType{ .i32, .i32 };
-    const call_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const prepare_compiled_call_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
-    const finish_compiled_call_params = [_]wasm.ValueType{.i32};
+    const finish_compiled_call_params = [_]wasm.ValueType{ .i32, .i32 };
     const no_params = [_]wasm.ValueType{};
     const exchange_continuation_params = [_]wasm.ValueType{ .i32, .i32 };
     const set_location_params = [_]wasm.ValueType{ .i32, .i32 };
@@ -315,10 +312,6 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &close_upvalues_params, .results = &no_results });
         break :blk try object.importFunction("env", close_upvalues_symbol, helper_type);
     } else null;
-    const call = if (needs.call) blk: {
-        const helper_type = try object.addType(.{ .params = &call_params, .results = &status_result });
-        break :blk try object.importFunction("env", call_symbol, helper_type);
-    } else null;
     const prepare_compiled_call = if (needs.call) blk: {
         const helper_type = try object.addType(.{ .params = &prepare_compiled_call_params, .results = &status_result });
         break :blk try object.importFunction("env", prepare_compiled_call_symbol, helper_type);
@@ -327,6 +320,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &finish_compiled_call_params, .results = &no_results });
         break :blk try object.importFunction("env", finish_compiled_call_symbol, helper_type);
     } else null;
+    // P2 measurement imports only. Generated CALL does not require them as product ABI.
     const count_direct_call = if (needs.call) blk: {
         const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
         break :blk try object.importFunction("env", count_direct_call_symbol, helper_type);
@@ -576,7 +570,6 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .get_upvalue = get_upvalue,
         .set_upvalue = set_upvalue,
         .close_upvalues = close_upvalues,
-        .call = call,
         .prepare_compiled_call = prepare_compiled_call,
         .finish_compiled_call = finish_compiled_call,
         .count_direct_call = count_direct_call,

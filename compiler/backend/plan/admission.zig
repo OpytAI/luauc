@@ -292,12 +292,24 @@ pub noinline fn supportsGenericIterationFallback(self: anytype, block: snapshot_
         fallback_block.finish != block.finish)
         return Error.UnsupportedControlFlow;
 
+    if (self.plan.fallbackOwner(resolved_fallback_id)) |owner| {
+        if (self.plan.blockKind(owner) != .generic_iteration)
+            return false;
+        const owner_block = try self.snapshot.irBlock(self.function, owner);
+        const fast = (try self.genericIterationPattern(owner_block)) orelse return false;
+        return fast.fallback_target != null and fast.fallback_target.? == resolved_fallback_id and
+            fast.base == fallback.base and fast.aux == fallback.aux and
+            fast.repeat_target == fallback.repeat_target and
+            fast.exit_target == fallback.exit_target;
+    }
+
     var block_id: u32 = 0;
     while (block_id < self.function.block_count) : (block_id += 1) {
         const candidate = try self.snapshot.irBlock(self.function, block_id);
         const fast = (try self.genericIterationPattern(candidate)) orelse continue;
-        if (fast.fallback_target != null and fast.fallback_target.? == resolved_fallback_id and fast.base == fallback.base and
-            fast.aux == fallback.aux and fast.repeat_target == fallback.repeat_target and
+        if (fast.fallback_target != null and fast.fallback_target.? == resolved_fallback_id and
+            fast.base == fallback.base and fast.aux == fallback.aux and
+            fast.repeat_target == fallback.repeat_target and
             fast.exit_target == fallback.exit_target)
             return true;
     }
@@ -314,8 +326,15 @@ pub noinline fn supportsSpecializedIpairsFallback(self: anytype, block: snapshot
         fallback_block.finish != block.finish)
         return Error.UnsupportedControlFlow;
 
-    var block_id: u32 = 0;
+    const indexed = self.plan.fallbackOwner(resolved_fallback);
+    if (indexed) |owner| {
+        if (self.plan.blockKind(owner) != .specialized_ipairs)
+            return false;
+    }
+    var block_id: u32 = indexed orelse 0;
     while (block_id < self.function.block_count) : (block_id += 1) {
+        if (indexed != null and block_id != indexed.?)
+            break;
         const candidate = try self.snapshot.irBlock(self.function, block_id);
         if (!candidate.kind.isCompilable() or candidate.isEmpty() or candidate.finish != candidate.start + 8)
             continue;

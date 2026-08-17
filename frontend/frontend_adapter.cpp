@@ -121,6 +121,9 @@ static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, s
         IrOp created = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
         build.inst(IrCmd::STORE_POINTER, build.vmReg(resultReg), created);
         build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TTABLE));
+        // Explicit Hold store: SET_TABLE(held, seed, 0) lowers to set_userdata_metatable.
+        build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+        build.inst(IrCmd::SET_TABLE, build.vmReg(resultReg), build.vmReg(sourceReg), build.constUint(0));
         build.inst(IrCmd::BARRIER_OBJ, udata, build.vmReg(resultReg), build.undef());
         return true;
     }
@@ -164,6 +167,8 @@ static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member,
         IrOp created = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
         build.inst(IrCmd::STORE_POINTER, build.vmReg(argResReg), created);
         build.inst(IrCmd::STORE_TAG, build.vmReg(argResReg), build.constTag(LUA_TTABLE));
+        build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+        build.inst(IrCmd::SET_TABLE, build.vmReg(argResReg), build.vmReg(argResReg + 2), build.constUint(1));
         IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
         build.inst(IrCmd::BARRIER_TABLE_BACK, table);
         if (results == LUA_MULTRET)

@@ -350,6 +350,8 @@ pub noinline fn emitStoreVector(self: anytype, instruction_value: snapshot_v1.Ir
 pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (self.plan.closureContaining(instruction_id) != null)
         return;
+    if (instruction_id > 0 and (try self.instruction(instruction_id - 1)).command == abi.ir_cmd_table_setnum)
+        return;
     if (instruction_value.operand_count != 2 and instruction_value.operand_count != 3)
         return Error.InvalidOperandCount;
     const destination = try self.operand(instruction_value, 0);

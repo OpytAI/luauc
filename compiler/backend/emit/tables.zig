@@ -1343,8 +1343,11 @@ fn storedLenRegister(self: anytype, store: snapshot_v1.IrInstruction, convert_id
 }
 
 fn tableLenDestination(self: anytype, table_len_id: u32, table_reg: u32) Error!?u32 {
-    if (self.plan.plainLenAt(table_len_id)) |fact|
+    if (self.plan.plainLenAt(table_len_id)) |fact| {
+        if (fact.dest_reg == table_reg)
+            return null;
         return fact.dest_reg;
+    }
     if (table_len_id + 1 >= self.function.instruction_count)
         return null;
     const convert = try self.instruction(table_len_id + 1);
@@ -1357,9 +1360,11 @@ fn tableLenDestination(self: anytype, table_len_id: u32, table_reg: u32) Error!?
     const limit = @min(self.function.instruction_count, table_len_id + 8);
     while (cursor < limit) : (cursor += 1) {
         const dest = try storedLenRegister(self, try self.instruction(cursor), table_len_id + 1);
-        if (dest) |register|
+        if (dest) |register| {
+            if (register == table_reg)
+                return null;
             return register;
+        }
     }
-    _ = table_reg;
     return null;
 }

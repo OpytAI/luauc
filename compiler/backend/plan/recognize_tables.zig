@@ -39,6 +39,8 @@ pub const BlockIndex = struct {
     facts: []BlockFact = &.{},
     bypassed: []bool = &.{},
     fallback_supported: []bool = &.{},
+    owns_fallback: []bool = &.{},
+    fallback_owner: []u32 = &.{},
 
     pub fn deinit(self: *BlockIndex) void {
         if (self.facts.len != 0)
@@ -47,6 +49,10 @@ pub const BlockIndex = struct {
             self.allocator.free(self.bypassed);
         if (self.fallback_supported.len != 0)
             self.allocator.free(self.fallback_supported);
+        if (self.owns_fallback.len != 0)
+            self.allocator.free(self.owns_fallback);
+        if (self.fallback_owner.len != 0)
+            self.allocator.free(self.fallback_owner);
         self.* = .{};
     }
 
@@ -60,6 +66,17 @@ pub const BlockIndex = struct {
 
     pub fn supportsFallback(self: BlockIndex, block_id: u32) bool {
         return block_id < self.fallback_supported.len and self.fallback_supported[block_id];
+    }
+
+    pub fn ownsFallback(self: BlockIndex, block_id: u32) bool {
+        return block_id < self.owns_fallback.len and self.owns_fallback[block_id];
+    }
+
+    pub fn fallbackOwner(self: BlockIndex, block_id: u32) ?u32 {
+        if (block_id >= self.fallback_owner.len)
+            return null;
+        const owner = self.fallback_owner[block_id];
+        return if (owner == snapshot_v1.no_id) null else owner;
     }
 };
 
@@ -96,11 +113,34 @@ pub fn indexBlocks(allocator: std.mem.Allocator, ctx: anytype) Error!BlockIndex 
             bypassed[block_id] = true;
     }
 
+    const owns_fallback = try allocator.alloc(bool, block_count);
+    errdefer allocator.free(owns_fallback);
+    @memset(owns_fallback, false);
+    const fallback_owner = try allocator.alloc(u32, block_count);
+    errdefer allocator.free(fallback_owner);
+    @memset(fallback_owner, snapshot_v1.no_id);
+    block_id = 0;
+    while (block_id < ctx.function.block_count) : (block_id += 1) {
+        if (bypassed[block_id])
+            owns_fallback[block_id] = true;
+        const fact = facts[block_id];
+        if (fact.fallback < block_count) {
+            owns_fallback[fact.fallback] = true;
+            fallback_owner[fact.fallback] = block_id;
+        }
+        if (fact.extra0 < block_count)
+            owns_fallback[fact.extra0] = true;
+        if (fact.extra1 < block_count)
+            owns_fallback[fact.extra1] = true;
+    }
+
     return .{
         .allocator = allocator,
         .facts = facts,
         .bypassed = bypassed,
         .fallback_supported = fallback_supported,
+        .owns_fallback = owns_fallback,
+        .fallback_owner = fallback_owner,
     };
 }
 
@@ -113,7 +153,6 @@ fn classifyFallbackSupport(ctx: anytype, fact: BlockFact, block: snapshot_v1.IrB
             (try ctx.supportsComparisonFallback(block)) or
             (try ctx.supportsMaterializedComparisonFallback(block)) or
             (try ctx.supportsLengthFallback(block)) or
-            (try ctx.supportsSpecializedIpairsFallback(block)) or
             (try ctx.supportsNamecallFallback(block)) or
             (try ctx.supportsGeneralTableFallback(block)),
     };

@@ -39,14 +39,30 @@ const errors = validateMeasurement(document);
 if (errors.length) throw new Error(errors.join("\n"));
 
 const checked = JSON.parse(readFileSync(runfile(process.env.LUAUC_RUNTIME_MEASUREMENT, "LUAUC_RUNTIME_MEASUREMENT"), "utf8"));
+const checkedErrors = validateMeasurement(checked);
+if (checkedErrors.length) throw new Error(checkedErrors.join("\n"));
 for (const name of ["embed_product", "call_graph", "table_churn"]) {
   if (!checked.programs?.[name]?.compiled || !checked.programs?.[name]?.interpreted)
     throw new Error(`checked-in measurement is missing ${name}`);
 }
 if (checked.programs.embed_product && !checked.programs.call_graph)
   throw new Error("P1-only measurement JSON is not acceptable");
+if (checked.baseline_commit !== process.env.LUAUC_BASELINE_COMMIT)
+  throw new Error(`baseline_commit drift: json=${checked.baseline_commit} env=${process.env.LUAUC_BASELINE_COMMIT}`);
+
+const p2 = document.programs.call_graph.compiled;
+if (p2.trampoline_calls !== 0 || p2.direct_calls !== 168 || p2.indirect_calls !== 24) {
+  throw new Error(
+    `P2 counters: trampoline=${p2.trampoline_calls} direct=${p2.direct_calls} indirect=${p2.indirect_calls}`,
+  );
+}
+if (p2.result_number !== 67 || p2.result_text !== "beta")
+  throw new Error(`P2 result drift: ${p2.result_number}/${p2.result_text}`);
+const p3 = document.programs.table_churn.compiled;
+if (p3.result_number !== 8 || p3.result_text !== "beta")
+  throw new Error(`P3 result drift: ${p3.result_number}/${p3.result_text}`);
 
 console.log(
   `runtime measurement: ${Object.keys(document.programs).join(",")} ` +
-    `P2 trampoline=${document.programs.call_graph.compiled.trampoline_calls}`,
+    `P2 trampoline=${p2.trampoline_calls} direct=${p2.direct_calls} indirect=${p2.indirect_calls}`,
 );

@@ -32,6 +32,49 @@ const aot_layout_sha256 = abi.aot_layout_sha256;
 const status_internal_error = abi.status_internal_error;
 const max_lowered_locals = abi.max_lowered_locals;
 
+pub const br_table_page_size: u32 = 256;
+pub const br_table_case_limit: u32 = 512;
+pub const function_body_limit: usize = 256 * 1024;
+pub const i32_ge_u: u8 = 0x4f;
+
+pub const DispatchMode = enum { flat, paged };
+
+pub fn dispatchMode(case_count: u32, block_plus_cont: u32) Error!DispatchMode {
+    if (case_count > br_table_case_limit)
+        return Error.ResourceLimit;
+    return if (block_plus_cont > br_table_page_size) .paged else .flat;
+}
+
+pub fn checkFunctionBodyLimit(len: usize) Error!void {
+    if (len > function_body_limit)
+        return Error.ResourceLimit;
+}
+
+pub fn emitPagedBrTable(
+    allocator: std.mem.Allocator,
+    body: *wasm.Body,
+    dispatch_local: u32,
+    labels: []const u32,
+    nest: u32,
+) Error!void {
+    var paged = try allocator.alloc(u32, labels.len);
+    defer allocator.free(paged);
+    for (labels, 0..) |label, index|
+        paged[index] = label + 1;
+    const paged_default = nest;
+    try body.i32Const(allocator, @intCast(br_table_page_size));
+    try body.opcode(allocator, i32_ge_u);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, dispatch_local);
+    try body.i32Const(allocator, @intCast(br_table_page_size));
+    try body.opcode(allocator, 0x6b); // i32.sub
+    try body.brTable(allocator, paged[br_table_page_size..], paged_default);
+    try body.else_(allocator);
+    try body.localGet(allocator, dispatch_local);
+    try body.brTable(allocator, paged[0..@min(labels.len, br_table_page_size)], paged_default);
+    try body.end(allocator);
+}
+
 fn lowerFunction(
     allocator: std.mem.Allocator,
     snapshot: snapshot_v1.Snapshot,
@@ -161,7 +204,6 @@ fn lowerFunction(
         .get_upvalue = imports.get_upvalue,
         .set_upvalue = imports.set_upvalue,
         .close_upvalues = imports.close_upvalues,
-        .call = imports.call,
         .prepare_compiled_call = imports.prepare_compiled_call,
         .finish_compiled_call = imports.finish_compiled_call,
         .count_direct_call = imports.count_direct_call,
@@ -338,8 +380,7 @@ fn lowerFunction(
     const case_count: u32 = @intCast(cases.items.len);
     const block_plus_cont = std.math.add(u32, function.block_count, @intCast(call_continuations.len)) catch
         return Error.ResourceLimit;
-    if (case_count > 512)
-        return Error.ResourceLimit;
+    const mode = try dispatchMode(case_count, block_plus_cont);
     const nest = case_count + 1;
     var opened: u32 = 0;
     while (opened < nest) : (opened += 1)
@@ -357,24 +398,9 @@ fn lowerFunction(
     }
 
     try body.localGet(allocator, context.dispatch_local);
-    if (block_plus_cont > 256) {
-        // if/else sits inside C_0, so every br_table depth is +1 versus the case labels.
-        var paged = try allocator.alloc(u32, table_len);
-        defer allocator.free(paged);
-        for (labels, 0..) |label, index|
-            paged[index] = label + 1;
-        const paged_default = nest;
-        try body.i32Const(allocator, 256);
-        try body.opcode(allocator, 0x4b); // i32.ge_u
-        try body.ifVoid(allocator);
-        try body.localGet(allocator, context.dispatch_local);
-        try body.i32Const(allocator, 256);
-        try body.opcode(allocator, 0x6b); // i32.sub
-        try body.brTable(allocator, paged[256..], paged_default);
-        try body.else_(allocator);
-        try body.localGet(allocator, context.dispatch_local);
-        try body.brTable(allocator, paged[0..@min(table_len, 256)], paged_default);
-        try body.end(allocator);
+    if (mode == .paged) {
+        // Page if is an extra depth inside the innermost case, so br_table labels are +1.
+        try emitPagedBrTable(allocator, &body, context.dispatch_local, labels, nest);
     } else {
         try body.brTable(allocator, labels, nest - 1);
     }
@@ -400,8 +426,7 @@ fn lowerFunction(
     try body.end(allocator);
     try body.i32Const(allocator, status_internal_error);
     try body.finish(allocator);
-    if (body.bytes.items.len > 256 * 1024)
-        return Error.ResourceLimit;
+    try checkFunctionBodyLimit(body.bytes.items.len);
 
     return object.defineFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden, body);
 }

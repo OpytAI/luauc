@@ -16,9 +16,47 @@ const preparedCallImports = [
   ["env", "luauc_runtime_v1_count_indirect_call", "function"],
 ];
 const preparedCallScratch = 20000;
+const preparedMetaScratch = 20032;
+const PREPARED_CALL_STATUS = 4;
 
 function withPreparedCallImports(expected) {
   return expected.flatMap((entry) => entry[1] === "luauc_runtime_v1_call" ? preparedCallImports : [entry]);
+}
+
+function functionTableIndex(instance, fn) {
+  const table = instance.exports.__indirect_function_table;
+  if (!table) throw new Error("generated module has no function table");
+  for (let index = 0; index < table.length; index++) {
+    try {
+      if (table.get(index) === fn) return index;
+    } catch {
+      // empty slot
+    }
+  }
+  for (let index = 0; index < table.length; index++) {
+    try {
+      table.set(index, fn);
+      return index;
+    } catch {
+      // immutable slot
+    }
+  }
+  throw new Error("cannot place callee in the function table");
+}
+
+function writePreparedCall(view, tableIndex, functionId) {
+  view.setUint32(preparedCallScratch, PREPARED_CALL_STATUS, true);
+  view.setUint32(preparedCallScratch + 4, tableIndex, true);
+  view.setUint32(preparedCallScratch + 8, preparedMetaScratch, true);
+  view.setUint32(preparedMetaScratch + 44, functionId, true);
+  return preparedCallScratch;
+}
+
+function writePreparedDone(view) {
+  view.setUint32(preparedCallScratch, 0, true);
+  view.setUint32(preparedCallScratch + 4, 0, true);
+  view.setUint32(preparedCallScratch + 8, 0, true);
+  return preparedCallScratch;
 }
 
 export function runfile(relative, variable) {
@@ -2452,6 +2490,7 @@ export async function executeCompiledCallPackage() {
   let interrupts = 0;
   let nestedCalls = 0;
   let continuationState = 0;
+  let pendingCall = null;
   const closureChildren = [];
   const state = 1024;
   const initialBase = 2048;
@@ -2523,24 +2562,22 @@ export async function executeCompiledCallPackage() {
         );
         view.setUint32(state + 12, childBase, true);
         returned = null;
-        const callerContinuation = continuationState;
+        pendingCall = { functionRegister, callerContinuation: continuationState };
         continuationState = 0;
-        const childStatus = instance.exports[packageSymbols[2]](state, 0);
-        const childContinuation = continuationState;
-        continuationState = callerContinuation;
-        if (childStatus !== 0 || childContinuation !== 0 || returned?.tag !== 3)
-          throw new Error(`${name}: nested child failed with ${childStatus}/${childContinuation}/${JSON.stringify(returned)}`);
-
-        const childResult = returned.value;
-        view.setUint32(state + 12, relocatedCallerBase, true);
-        writeNumber(view, relocatedCallerBase, functionRegister, childResult);
-        nestedCalls++;
-        view.setUint32(preparedCallScratch, 0, true);
-        view.setUint32(preparedCallScratch + 4, 0, true);
-        view.setUint32(preparedCallScratch + 8, 0, true);
-        return preparedCallScratch;
+        return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
-      luauc_runtime_v1_finish_compiled_call() {},
+      luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        if (finishState !== state || status !== 0 || !pendingCall)
+          throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
+        if (continuationState !== 0 || returned?.tag !== 3)
+          throw new Error(`${name}: nested child failed with ${continuationState}/${JSON.stringify(returned)}`);
+        const view = new DataView(instance.exports.memory.buffer);
+        view.setUint32(state + 12, relocatedCallerBase, true);
+        writeNumber(view, relocatedCallerBase, pendingCall.functionRegister, returned.value);
+        continuationState = pendingCall.callerContinuation;
+        pendingCall = null;
+        nestedCalls++;
+      },
       luauc_runtime_v1_count_direct_call() {},
       luauc_runtime_v1_count_indirect_call() {},
     },
@@ -2638,6 +2675,7 @@ export async function executeCapturedCallPackage() {
   let interrupts = 0;
   let nestedCalls = 0;
   let continuationState = 0;
+  let pendingCall = null;
   let captureCount = 0;
   const closureChildren = [];
   const state = 1024;
@@ -2734,24 +2772,22 @@ export async function executeCapturedCallPackage() {
         );
         view.setUint32(state + 12, childBase, true);
         returned = null;
-        const callerContinuation = continuationState;
+        pendingCall = { functionRegister, callerContinuation: continuationState };
         continuationState = 0;
-        const childStatus = instance.exports[packageSymbols[2]](state, 0);
-        const childContinuation = continuationState;
-        continuationState = callerContinuation;
-        if (childStatus !== 0 || childContinuation !== 0 || returned?.tag !== 3)
-          throw new Error(`${name}: captured child failed with ${childStatus}/${childContinuation}/${JSON.stringify(returned)}`);
-
-        const childResult = returned.value;
-        view.setUint32(state + 12, finalCallerBase, true);
-        writeNumber(view, finalCallerBase, functionRegister, childResult);
-        nestedCalls++;
-        view.setUint32(preparedCallScratch, 0, true);
-        view.setUint32(preparedCallScratch + 4, 0, true);
-        view.setUint32(preparedCallScratch + 8, 0, true);
-        return preparedCallScratch;
+        return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
-      luauc_runtime_v1_finish_compiled_call() {},
+      luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        if (finishState !== state || status !== 0 || !pendingCall)
+          throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
+        if (continuationState !== 0 || returned?.tag !== 3)
+          throw new Error(`${name}: captured child failed with ${continuationState}/${JSON.stringify(returned)}`);
+        const view = new DataView(instance.exports.memory.buffer);
+        view.setUint32(state + 12, finalCallerBase, true);
+        writeNumber(view, finalCallerBase, pendingCall.functionRegister, returned.value);
+        continuationState = pendingCall.callerContinuation;
+        pendingCall = null;
+        nestedCalls++;
+      },
       luauc_runtime_v1_count_direct_call() {},
       luauc_runtime_v1_count_indirect_call() {},
     },
@@ -3105,6 +3141,7 @@ export async function executeMultiResultCallPackage() {
   let nestedCalls = 0;
   let pairReturns = 0;
   let continuationState = 0;
+  let pendingCall = null;
   const closureChildren = [];
   const state = 1024;
   const initialBase = 2048;
@@ -3180,24 +3217,23 @@ export async function executeMultiResultCallPackage() {
         );
         view.setUint32(state + 12, childBase, true);
         returned = [];
-        const callerContinuation = continuationState;
+        pendingCall = { functionRegister, callerContinuation: continuationState };
         continuationState = 0;
-        const childStatus = instance.exports[packageSymbols[2]](state, 0);
-        const childContinuation = continuationState;
-        continuationState = callerContinuation;
-        if (childStatus !== 0 || childContinuation !== 0 || returned.length !== 2 || returned.some((value) => value.tag !== 3))
-          throw new Error(`${name}: nested pair failed with ${childStatus}/${childContinuation}/${JSON.stringify(returned)}`);
-
-        view.setUint32(state + 12, relocatedCallerBase, true);
-        writeNumber(view, relocatedCallerBase, functionRegister, returned[0].value);
-        writeNumber(view, relocatedCallerBase, functionRegister + 1, returned[1].value);
-        nestedCalls++;
-        view.setUint32(preparedCallScratch, 0, true);
-        view.setUint32(preparedCallScratch + 4, 0, true);
-        view.setUint32(preparedCallScratch + 8, 0, true);
-        return preparedCallScratch;
+        return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
-      luauc_runtime_v1_finish_compiled_call() {},
+      luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        if (finishState !== state || status !== 0 || !pendingCall)
+          throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
+        if (continuationState !== 0 || returned.length !== 2 || returned.some((value) => value.tag !== 3))
+          throw new Error(`${name}: nested pair failed with ${continuationState}/${JSON.stringify(returned)}`);
+        const view = new DataView(instance.exports.memory.buffer);
+        view.setUint32(state + 12, relocatedCallerBase, true);
+        writeNumber(view, relocatedCallerBase, pendingCall.functionRegister, returned[0].value);
+        writeNumber(view, relocatedCallerBase, pendingCall.functionRegister + 1, returned[1].value);
+        continuationState = pendingCall.callerContinuation;
+        pendingCall = null;
+        nestedCalls++;
+      },
       luauc_runtime_v1_count_direct_call() {},
       luauc_runtime_v1_count_indirect_call() {},
     },

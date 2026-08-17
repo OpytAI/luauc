@@ -876,19 +876,6 @@ pub fn scanImportNeedsFor(
                 } else {
                     needs.new_table_deferred = true;
                 }
-                if (instruction_id >= 2) {
-                    const previous = try snapshot.irInstruction(function, instruction_id - 1);
-                    if (previous.command == .check_gc) {
-                        const prefix = try snapshot.irInstruction(function, instruction_id - 2);
-                        if (prefix.command == ir_cmd_check_userdata_tag)
-                            needs.set_userdata_metatable = true;
-                        if (prefix.command == .set_savedpc and instruction_id >= 5) {
-                            const hook = try snapshot.irInstruction(function, instruction_id - 5);
-                            if (hook.command == ir_cmd_check_userdata_tag)
-                                needs.table_store = true;
-                        }
-                    }
-                }
             },
             .check_gc => needs.check_gc = true,
             ir_cmd_new_userdata => needs.new_userdata = true,
@@ -944,7 +931,10 @@ pub fn scanImportNeedsFor(
                 }
             },
             ir_cmd_dup_table => needs.dup_table = true,
-            ir_cmd_table_setnum => needs.table_insert_append = true,
+            ir_cmd_table_setnum => {
+                needs.table_insert_append = true;
+                needs.table_store = true;
+            },
             ir_cmd_fallback_namecall => {
                 needs.namecall_plain = true;
                 needs.set_location = true;
@@ -955,6 +945,8 @@ pub fn scanImportNeedsFor(
                 needs.table_set = true;
                 needs.table_array_set = true;
                 needs.table_set_number = true;
+                needs.table_store = true;
+                needs.set_userdata_metatable = true;
             },
             ir_cmd_get_table => {
                 needs.array_get = true;

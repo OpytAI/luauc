@@ -471,10 +471,7 @@ pub noinline fn linearizedPowPattern(self: anytype, instruction_id: u32, block: 
     var index: u32 = 0;
     while (index <= ordinal) : (index += 1) {
         var next: ?PowPattern = null;
-        var block_id: u32 = 0;
-        while (block_id < self.function.block_count) : (block_id += 1) {
-            const candidate = try self.snapshot.irBlock(self.function, block_id);
-            const pattern = (try self.powPattern(candidate)) orelse continue;
+        for (self.plan.pow_sites) |pattern| {
             if (pattern.destination != destination or pattern.lhs != lhs or pattern.rhs != rhs or
                 (previous_start != null and pattern.start <= previous_start.?) or
                 (next != null and pattern.start >= next.?.start))
