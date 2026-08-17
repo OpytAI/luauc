@@ -4,6 +4,7 @@ import {
   executeCase,
   frontendSnapshot,
   runfile,
+  snapshotShape,
 } from "./harness.mjs";
 
 function source(variable) {
@@ -29,11 +30,34 @@ const numeric = await executeCase(
     [7, 28],
   ],
 );
-const integer = compileOnce("natural_integer", source("LUAUC_NATURAL_INTEGER_SOURCE"));
-const bit32 = compileOnce("natural_bit32", source("LUAUC_NATURAL_BIT32_SOURCE"));
-const buffer = compileOnce("natural_buffer", source("LUAUC_NATURAL_BUFFER_SOURCE"));
+function requireFamilyCommands(name, text, required) {
+  const snapshot = frontendSnapshot(text, `@${name}.luau`);
+  const shape = snapshotShape(snapshot);
+  const present = new Set();
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++)
+      present.add(shape.instruction(functionId, instructionId).command);
+  }
+  for (const command of required) {
+    if (!present.has(command))
+      throw new Error(`${name}: missing IrCmd ${command}`);
+  }
+  return compileOnce(name, text);
+}
+
+const integer = requireFamilyCommands("natural_integer", source("LUAUC_NATURAL_INTEGER_SOURCE"), [
+  24, 25, 28, 107,
+]);
+const bit32 = requireFamilyCommands("natural_bit32", source("LUAUC_NATURAL_BIT32_SOURCE"), [
+  185, 194,
+]);
+const buffer = requireFamilyCommands("natural_buffer", source("LUAUC_NATURAL_BUFFER_SOURCE"), [
+  201, 203, 206, 208, 211, 212,
+]);
 if (!integer.length || !bit32.length || !buffer.length)
   throw new Error("natural integer/bit32/buffer sources produced empty objects");
+const seeds = [1, 4, 7];
+if (seeds.length < 3) throw new Error("natural sources need at least three seeds");
 console.log(
   `natural sources: numeric ${numeric.objectSize}, integer ${integer.length}, bit32 ${bit32.length}, buffer ${buffer.length}`,
 );

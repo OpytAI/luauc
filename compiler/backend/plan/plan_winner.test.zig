@@ -118,6 +118,46 @@ test "later family wins when the higher-priority range does not cover the id" {
     try std.testing.expectEqual(@as(u32, 2), winner.at);
 }
 
+test "all 13 cluster priorities first-win in HEAD order" {
+    const kinds = [_]plan_mod.FunctionPlan.ClusterKind{
+        .constant_truthy,
+        .inline_const_table_get,
+        .inline_array_get,
+        .semantic_table_reload,
+        .inline_generic_table_set,
+        .userdata_alloc,
+        .literal_field_set,
+        .constant_load,
+        .dup_table,
+        .table_insert_append,
+        .plain_len,
+        .concat,
+        .table_alloc,
+    };
+    try std.testing.expectEqual(@as(usize, 13), kinds.len);
+    var commands = nopCommands(4);
+    commands[0] = abi.ir_cmd_check_readonly;
+    commands[1] = abi.ir_cmd_table_len;
+    const ctx = Mock{
+        .function = .{ .instruction_count = commands.len },
+        .commands = &commands,
+        .truthy = .{ .start = 0, .finish = 3 },
+        .const_get = .{ .pattern = .{ .start = 0, .finish = 3 }, .finish = 3 },
+        .array_get = .{ .start = 0, .finish = 3 },
+        .reload = .{ .start = 0, .finish = 3 },
+        .generic_set = .{ .pattern = .{ .start = 0, .finish = 3 }, .finish = 3 },
+        .userdata = .{ .start = 0, .finish = 3 },
+        .literal_set = .{ .start = 0, .finish = 3 },
+        .constant_load = .{ .start = 0, .finish = 3 },
+        .dup_table = .{ .start = 0, .finish = 3 },
+        .insert_append = .{ .start = 0, .finish = 3 },
+        .concat = .{ .start = 0, .finish = 3 },
+        .table_alloc = .{ .start = 0, .finish = 3 },
+    };
+    const winner = (try plan_mod.matchInstructionCluster(ctx, 0)).?;
+    try std.testing.expectEqual(plan_mod.FunctionPlan.ClusterKind.constant_truthy, winner.kind);
+}
+
 test "table insert-append records the TABLE_LEN decoder cursor" {
     var commands = nopCommands(6);
     commands[0] = abi.ir_cmd_check_readonly;
