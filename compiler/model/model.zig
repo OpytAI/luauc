@@ -931,10 +931,7 @@ pub fn scanImportNeedsFor(
                 }
             },
             ir_cmd_dup_table => needs.dup_table = true,
-            ir_cmd_table_setnum => {
-                needs.table_insert_append = true;
-                needs.table_store = true;
-            },
+            ir_cmd_table_setnum => needs.table_insert_append = true,
             ir_cmd_fallback_namecall => {
                 needs.namecall_plain = true;
                 needs.set_location = true;
@@ -945,8 +942,18 @@ pub fn scanImportNeedsFor(
                 needs.table_set = true;
                 needs.table_array_set = true;
                 needs.table_set_number = true;
-                needs.table_store = true;
-                needs.set_userdata_metatable = true;
+                if (instruction_id > 0) {
+                    var cursor = instruction_id -| 12;
+                    var saw_userdata_tag = false;
+                    while (cursor < instruction_id) : (cursor += 1) {
+                        if ((try snapshot.irInstruction(function, cursor)).command == ir_cmd_check_userdata_tag)
+                            saw_userdata_tag = true;
+                    }
+                    if (saw_userdata_tag) {
+                        needs.set_userdata_metatable = true;
+                        needs.table_store = true;
+                    }
+                }
             },
             ir_cmd_get_table => {
                 needs.array_get = true;

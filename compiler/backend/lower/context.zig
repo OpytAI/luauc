@@ -336,7 +336,6 @@ pub const Context = struct {
     pub const emitPlainTableNamecallOperation = namecall.emitPlainTableNamecallOperation;
 
     pub const emitTableAllocation = namecall.emitTableAllocation;
-    pub const emitTableSetNum = namecall.emitTableSetNum;
     pub const emitUserdataAllocationInstruction = namecall.emitUserdataAllocationInstruction;
     pub const emitNewUserdata = namecall.emitNewUserdata;
     pub const emitSetList = namecall.emitSetList;

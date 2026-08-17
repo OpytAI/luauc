@@ -2,7 +2,7 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "694ce3ccfe7843f528b9f04ea0a5a7f3fc1e8deef452e1f1ec3fba824dca0b5b",
+  "compiler_build_digest": "14ed42ce91c742a7c19e2ab7e3199211fbf01fe4034dee36cc1716559b4844e7",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
@@ -503,7 +503,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -515,7 +514,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -661,7 +659,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -901,11 +898,9 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_number"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -1333,7 +1328,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -1345,7 +1339,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -1759,7 +1752,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -2075,8 +2067,7 @@
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_set_location"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -2294,7 +2285,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -2368,7 +2358,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -2508,7 +2497,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -2583,7 +2571,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -2658,7 +2645,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -2733,7 +2719,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3202,8 +3187,7 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_list",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_set_location"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -3297,7 +3281,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -3309,7 +3292,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -3450,7 +3432,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3525,7 +3506,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3600,7 +3580,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3738,7 +3717,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3819,7 +3797,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3894,7 +3871,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3944,8 +3920,7 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_list",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_set_location"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -4090,7 +4065,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4192,7 +4166,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4267,7 +4240,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4342,7 +4314,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4417,7 +4388,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4492,7 +4462,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4648,7 +4617,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4750,7 +4718,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4887,7 +4854,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -4962,7 +4928,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5037,7 +5002,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5139,7 +5103,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5214,7 +5177,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5343,7 +5305,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5445,7 +5406,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5520,7 +5480,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5595,7 +5554,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5670,7 +5628,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5745,7 +5702,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5820,7 +5776,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -5895,7 +5850,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -6060,7 +6014,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -6135,7 +6088,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -6424,7 +6376,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -6436,7 +6387,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -6709,7 +6659,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -6721,7 +6670,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -6867,7 +6815,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -7228,8 +7175,7 @@
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_string"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -7272,8 +7218,8 @@
       "class": "runtime_helper",
       "status": "partial",
       "reachability": "census",
-      "general_arm": true,
-      "cluster_only": false,
+      "general_arm": false,
+      "cluster_only": true,
       "forms": [
         {
           "id": "any"
@@ -7304,8 +7250,7 @@
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_string"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -7369,11 +7314,9 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_number"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -8144,7 +8087,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -8219,7 +8161,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -8482,7 +8423,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -8840,14 +8780,12 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_number"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -8904,11 +8842,9 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_number"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -9410,7 +9346,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -9674,11 +9609,9 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_number"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -10151,7 +10084,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -10231,7 +10163,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -11420,7 +11351,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -11432,7 +11362,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -12450,7 +12379,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -12531,7 +12459,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -12606,7 +12533,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -12681,7 +12607,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -12814,7 +12739,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -12895,7 +12819,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -12970,7 +12893,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13045,7 +12967,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13120,7 +13041,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13195,7 +13115,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13270,7 +13189,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13408,7 +13326,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13597,7 +13514,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13735,7 +13651,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -13867,7 +13782,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -14056,7 +13970,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -14130,7 +14043,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -14210,7 +14122,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -14291,7 +14202,6 @@
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -15366,5 +15276,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "c20b243c435b1a5cf76f345de96988b5e4d9ac082725a1f714f1dfd8673dd086"
+  "canonical_hash": "a763e3e06252178de8b5761fcd9823e642ec198ce7a73bb35af9a0ad92b95aa0"
 }

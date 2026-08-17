@@ -38,7 +38,6 @@ const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_concat = abi.ir_cmd_concat;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
-const ir_cmd_table_setnum = abi.ir_cmd_table_setnum;
 const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
 const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
@@ -331,11 +330,10 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         ir_cmd_check_readonly => try self.emitCheckReadonly(instruction_value),
         ir_cmd_check_no_metatable, ir_cmd_check_array_size => try self.emitTableLayoutGuard(instruction_value),
         ir_cmd_try_num_to_index => try self.emitTryNumberToIndex(instruction_id, instruction_value),
-        ir_cmd_table_setnum => try self.emitTableSetNum(instruction_id, instruction_value),
         ir_cmd_get_table, ir_cmd_set_table => {
             if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
                 return Error.UnsupportedControlFlow;
-            try self.emitGeneralTableOperation(instruction_value);
+            try self.emitGeneralTableOperation(instruction_id, instruction_value);
         },
         .set_savedpc => {
             try self.emitSavedPcLocation(instruction_value);

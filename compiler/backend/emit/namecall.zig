@@ -265,33 +265,6 @@ pub noinline fn emitTableAllocation(self: anytype, pattern: TableAllocationPatte
     try self.body.call(self.allocator, helper orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
 }
-pub noinline fn emitTableSetNum(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    try self.requireOperandCount(instruction_value, 2);
-    const table = try self.operand(instruction_value, 0);
-    const index_operand = try self.operand(instruction_value, 1);
-    const table_reg = (try self.loadedPointerRegister(table)) orelse return Error.UnsupportedControlFlow;
-    const index = try self.intConstant(index_operand);
-    if (index <= 0)
-        return Error.UnsupportedControlFlow;
-    if (instruction_id + 1 >= self.function.instruction_count)
-        return Error.UnsupportedControlFlow;
-    const store = try self.instruction(instruction_id + 1);
-    if (store.command != .store_tvalue or store.operand_count < 2)
-        return Error.UnsupportedControlFlow;
-    const stored = try self.operand(store, 1);
-    if (stored.kind != .instruction)
-        return Error.UnsupportedControlFlow;
-    const load = try self.instruction(stored.value);
-    if (load.command != .load_tvalue or load.operand_count < 1)
-        return Error.UnsupportedControlFlow;
-    const source = try self.vmRegisterIndex(try self.operand(load, 0));
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(table_reg));
-    try self.body.i32Const(self.allocator, @intCast(index));
-    try self.body.i32Const(self.allocator, @intCast(source));
-    try self.body.call(self.allocator, self.table_store orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
-}
 pub noinline fn emitUserdataAllocationInstruction(
     self: anytype,
     instruction_id: u32,

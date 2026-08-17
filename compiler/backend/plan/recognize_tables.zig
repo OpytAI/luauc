@@ -126,6 +126,9 @@ pub fn indexBlocks(allocator: std.mem.Allocator, ctx: anytype) Error!BlockIndex 
         const fact = facts[block_id];
         if (fact.fallback < block_count) {
             owns_fallback[fact.fallback] = true;
+            if (fallback_owner[fact.fallback] != snapshot_v1.no_id and
+                fallback_owner[fact.fallback] != block_id)
+                return Error.UnsupportedControlFlow;
             fallback_owner[fact.fallback] = block_id;
         }
         if (fact.extra0 < block_count)

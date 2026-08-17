@@ -8,7 +8,7 @@
     {
       "name": "embed_lib",
       "kind": "generated_package",
-      "object_sha256": "580b3d91d0c3a9d8e567783857e38ca610aa5f1d3dc3e2bc6fee9ae0914117f7",
+      "object_sha256": "ed68458102eccc03fa4383473e243aa4020495136325835cc3528ec162305f69",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -121,7 +121,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_string_keys",
         "luauc_runtime_v1_table_array_get",
@@ -134,7 +133,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store",
         "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
@@ -198,7 +196,7 @@
         "function_count": 97
       },
       "production": {
-        "sha256": "5627e0efa317cf436961a880b2b3b775bd2bb23c660f7d21448cfa6f5e357507",
+        "sha256": "ff725423b67bc679656481e700e4dd88b4b7ef12eedafb30d4e0351e0f17be3d",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -391,7 +389,7 @@
     {
       "name": "table_clone_append",
       "kind": "generated_package",
-      "object_sha256": "89a959ce4cf669d26cf0d09fd1760b64fd837f305dae2c72abc782fa75c5978e",
+      "object_sha256": "5137316b524d30c32dc73aa3f2f7b2af69b342bd22880e3530f1aef66c9c6a73",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -434,8 +432,7 @@
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
         "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_table_store"
+        "luauc_runtime_v1_table_set_string"
       ],
       "wasm_ld": {
         "sha256": "e72b5a42129a7611e06f952aa7a7610a8f296c9b0ce2a857d214d27737f119a1",
@@ -448,7 +445,7 @@
         "function_count": 20
       },
       "production": {
-        "sha256": "cfec523d3543936a791fd7600cd67ca81ab93e3fda1a48400f5a9af0723f3251",
+        "sha256": "43fb735c55128e04eff876e953ae75a009f88a4c91f1a6afd18f8c78048b72a3",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -584,5 +581,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "9a7f49a5432ca33a75023c4c38af13dc628a792fbb64c5a25258e513c117d60b"
+  "canonical_hash": "08a345f4f7f188f3ba5f8780409dbcdea3e63d255ec554703c6a21456774034a"
 }

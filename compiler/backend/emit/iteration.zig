@@ -357,9 +357,9 @@ pub noinline fn specializedIpairsPattern(self: anytype, block: snapshot_v1.IrBlo
         fallback_target.kind != .block or fallback_target.value >= self.function.block_count)
         return null;
     const fallback_block = try self.snapshot.irBlock(self.function, fallback_target.value);
-    if (!try self.supportsSpecializedIpairsFallback(fallback_block))
-        return null;
     var fallback = (try self.genericIterationFallbackPattern(fallback_block)) orelse return null;
+    if (fallback.aux != 0x8000_0002)
+        return null;
     const base = self.vmRegisterIndex(try self.operand(load_tag, 0)) catch return null;
     if (base != fallback.base)
         return null;

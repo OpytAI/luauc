@@ -21,18 +21,39 @@ fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
     };
 }
 
-fn isUserdataOwnerRegister(self: anytype, register: u32) Error!bool {
-    var instruction_id: u32 = 0;
-    while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
-        const instruction = try self.instruction(instruction_id);
-        if (instruction.command != abi.ir_cmd_check_userdata_tag or instruction.operand_count < 1)
-            continue;
-        if ((try self.loadedPointerRegister(try self.operand(instruction, 0)))) |owner| {
-            if (owner == register)
-                return true;
+fn hookSetTableKind(
+    self: anytype,
+    instruction_id: u32,
+    value_reg: u32,
+    table_reg: u32,
+    key: snapshot_v1.IrOperand,
+) Error!?enum { hold, store } {
+    if (!self.plan.tableAllocHasDest(value_reg))
+        return null;
+    const index = (try immediateNumber(self, key)) orelse return null;
+    if (index != 0 and index != 1)
+        return null;
+    var userdata_reg: ?u32 = null;
+    var saw_table_tag = false;
+    var cursor = instruction_id -| 12;
+    while (cursor < instruction_id) : (cursor += 1) {
+        const instruction = try self.instruction(cursor);
+        if (instruction.command == abi.ir_cmd_check_userdata_tag and instruction.operand_count >= 1) {
+            if ((try self.loadedPointerRegister(try self.operand(instruction, 0)))) |owner|
+                userdata_reg = owner;
+        }
+        if (instruction.command == .check_tag and instruction.operand_count >= 2) {
+            const expected = try self.operand(instruction, 1);
+            if (expected.kind == .constant and (try self.constant(expected.value)).tagValue() == abi.lua_tag_table)
+                saw_table_tag = true;
         }
     }
-    return false;
+    const owner = userdata_reg orelse return null;
+    if (index == 0 and owner == table_reg)
+        return .hold;
+    if (index == 1 and owner != table_reg and saw_table_tag)
+        return .store;
+    return null;
 }
 
 
@@ -141,6 +162,7 @@ pub noinline fn emitForwardTableBarrier(
 
 pub noinline fn emitGeneralTableOperation(
     self: anytype,
+    instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
     if ((instruction_value.command != abi.ir_cmd_set_table and
@@ -149,25 +171,26 @@ pub noinline fn emitGeneralTableOperation(
     const value = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
     const table = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
     const key = try self.operand(instruction_value, 2);
-    if (instruction_value.command == abi.ir_cmd_set_table and self.plan.tableAllocHasDest(value)) {
-        if (try isUserdataOwnerRegister(self, table)) {
-            try self.body.localGet(self.allocator, 0);
-            try self.body.localGet(self.allocator, self.base_local);
-            try self.body.i32Load(self.allocator, 2, table * tvalue_size);
-            try self.body.i32Const(self.allocator, @intCast(value));
-            try self.body.call(self.allocator, self.set_userdata_metatable orelse return Error.UnsupportedCommand);
-            return;
-        }
-        const index = (try immediateNumber(self, key)) orelse return Error.InvalidOperandType;
-        if (index != @as(f64, @floatFromInt(@as(i32, @intFromFloat(index)))) or index <= 0)
-            return Error.UnsupportedControlFlow;
-        try self.body.localGet(self.allocator, 0);
-        try self.body.i32Const(self.allocator, @intCast(table));
-        try self.body.i32Const(self.allocator, @intFromFloat(index));
-        try self.body.i32Const(self.allocator, @intCast(value));
-        try self.body.call(self.allocator, self.table_store orelse return Error.UnsupportedCommand);
-        try self.emitReloadBase();
-        return;
+    if (instruction_value.command == abi.ir_cmd_set_table) {
+        if (try hookSetTableKind(self, instruction_id, value, table, key)) |kind| switch (kind) {
+            .hold => {
+                try self.body.localGet(self.allocator, 0);
+                try self.body.localGet(self.allocator, self.base_local);
+                try self.body.i32Load(self.allocator, 2, table * tvalue_size);
+                try self.body.i32Const(self.allocator, @intCast(value));
+                try self.body.call(self.allocator, self.set_userdata_metatable orelse return Error.UnsupportedCommand);
+                return;
+            },
+            .store => {
+                try self.body.localGet(self.allocator, 0);
+                try self.body.i32Const(self.allocator, @intCast(table));
+                try self.body.i32Const(self.allocator, 1);
+                try self.body.i32Const(self.allocator, @intCast(value));
+                try self.body.call(self.allocator, self.table_store orelse return Error.UnsupportedCommand);
+                try self.emitReloadBase();
+                return;
+            },
+        };
     }
 
     try self.body.localGet(self.allocator, 0);

@@ -5,7 +5,7 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
   "input_sha256": {
-    "luauc.wasm": "f4c5ea667fc6356996ea88918ba5e46c6983194f242a153ed8c074f5788332f8",
+    "luauc.wasm": "0bd4b541e03827e4c0399c01315ce9d9e05f369f03fd78217297169e1b8a8a2e",
     "embed_v1.pack.wasm": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c",
     "scalar_fixture.wasm": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
@@ -18,8 +18,8 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "f4c5ea667fc6356996ea88918ba5e46c6983194f242a153ed8c074f5788332f8",
-      "size": 1634550,
+      "sha256": "0bd4b541e03827e4c0399c01315ce9d9e05f369f03fd78217297169e1b8a8a2e",
+      "size": 1631081,
       "imports": [],
       "exports": [
         "luauc_v1_alloc",
@@ -31,7 +31,7 @@
         "luauc_v1_result_free",
         "memory"
       ],
-      "function_count": 3250,
+      "function_count": 3248,
       "memory_min": 1024,
       "helpers": [],
       "features": [
@@ -189,5 +189,5 @@
       ]
     }
   ],
-  "canonical_hash": "815a646515983c1aa7f44b5accdd251b37df82f3f4fb46fd65c76f2ec618194d"
+  "canonical_hash": "0389bc802d298b91e4ca3b160f025d6037fe08b40054cbb2910d7f2e6e40c315"
 }

@@ -284,8 +284,11 @@ pub fn recognize(
     @memset(table_alloc_index, snapshot_v1.no_id);
     for (table_alloc_slice, 0..) |alloc, index| {
         var cursor = alloc.start;
-        while (cursor <= alloc.finish) : (cursor += 1)
+        while (cursor <= alloc.finish) : (cursor += 1) {
+            if (table_alloc_index[cursor] != snapshot_v1.no_id)
+                return Error.UnsupportedControlFlow;
             table_alloc_index[cursor] = @intCast(index);
+        }
     }
 
     const dup_table_index = try allocator.alloc(u32, function.instruction_count);
