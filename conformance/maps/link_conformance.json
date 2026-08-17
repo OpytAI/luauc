@@ -3,7 +3,7 @@
   "generator_version": "luauc-link-conformance-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "3f02ade9eb7b4be0be91a75d111b86d02dd8408c061395f0bd9c1f9ecacd2fbe",
+  "frontend_contract_digest": "35c7e683add7d255a76e3b1434070e288e74c9e53c961a8774bd02fb5646507e",
   "objects": [
     {
       "name": "embed_lib",
@@ -192,7 +192,7 @@
         "function_count": 94
       },
       "production": {
-        "sha256": "61fcead75ad74cbad610a0aac1e7127afc8df177a3112588cc8ab8e0265c6110",
+        "sha256": "39db93c285e104a002c510b83bf285a5b2d8ed76ecc19fcea37045172bb0d9c1",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -250,7 +250,7 @@
         "function_count": 11
       },
       "production": {
-        "sha256": "9b3745a459e10bebb7340cfe9f977c0e381ba736d065ab02ccec5b69a791f8e3",
+        "sha256": "42174b769020f259aaf3d1d6ecf9dd1ba403954991970d1ea1fa7ffc626e987e",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -313,7 +313,7 @@
         "function_count": 15
       },
       "production": {
-        "sha256": "8ce2ac1f650767e7a2e1da2a78a78b1186ad74a51a887e11ad60ef8684b78bfc",
+        "sha256": "b68f5d1f30f271978019d6b5f405b844acdafa8bde8923e53680211d1a600f7b",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -387,7 +387,7 @@
         "function_count": 17
       },
       "production": {
-        "sha256": "936ed20000eb45ff46b82ea7b0e1caae760d6c9ea133506a52e8ed05379ca166",
+        "sha256": "19b6df361d2c2aa4d2c82c46f26b13b5fed259d0540b618081a323d448f26eb9",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -453,7 +453,7 @@
         "function_count": 18
       },
       "production": {
-        "sha256": "4dbf03dfdc47cbe5037490534a4a5412bbecb8ed7c25768c4274331a6a653287",
+        "sha256": "bbb90db6e164f802ea2512c891560b16cce591c10818315dd37238ca71fdd934",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -495,5 +495,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "df601e9f64934440d19e9f95eb7795c7f26e7e153a815a3185c13fe64e57d69d"
+  "canonical_hash": "88f054ddbff2b0d2d43a2ad8a40420c16c7bc73d8a9db4e6f9fbef2b5ec0a151"
 }

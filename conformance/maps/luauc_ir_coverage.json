@@ -2,9 +2,9 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "eab3855d8d1f1c130ce905c36fed03397e9e5b8205ef6b8794cb08affcddf37c",
+  "compiler_build_digest": "92ed0b68d7237e79193c6414bdf34fa436ae9015cb9efa05199406ff667f706b",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "3f02ade9eb7b4be0be91a75d111b86d02dd8408c061395f0bd9c1f9ecacd2fbe",
+  "frontend_contract_digest": "35c7e683add7d255a76e3b1434070e288e74c9e53c961a8774bd02fb5646507e",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,
@@ -96,7 +96,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -203,13 +202,13 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -286,7 +285,6 @@
       "tests": [
         "//conformance/tests:buffers_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:natural_sources_test",
@@ -390,13 +388,13 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -722,7 +720,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -801,7 +798,6 @@
       "tests": [
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
@@ -934,7 +930,6 @@
         "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -1070,7 +1065,6 @@
       "tests": [
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
@@ -1175,7 +1169,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -1183,6 +1176,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:scalar_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -1360,7 +1354,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -1467,7 +1460,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -1475,6 +1467,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:scalar_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -1530,10 +1523,9 @@
         "//hosts/wasmtime:parity_test"
       ],
       "tests": [
-        "//conformance/tests:operators_test",
+        "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:tables_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -1761,7 +1753,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -1846,7 +1837,6 @@
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
@@ -2832,9 +2822,9 @@
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -5632,9 +5622,8 @@
         "//hosts/wasmtime:parity_test"
       ],
       "tests": [
-        "//conformance/tests:operators_test",
-        "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:tables_test",
+        "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:calls_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -5853,7 +5842,7 @@
         "//hosts/wasmtime:parity_test"
       ],
       "tests": [
-        "//conformance/tests:operators_test",
+        "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//hosts/js:embed_test",
@@ -5955,13 +5944,13 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -6601,7 +6590,6 @@
       ],
       "tests": [
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//hosts/js:embed_test",
@@ -7152,7 +7140,6 @@
       "tests": [
         "//conformance/tests:buffers_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:natural_sources_test",
@@ -8218,9 +8205,9 @@
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -8276,7 +8263,6 @@
       ],
       "tests": [
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -8474,9 +8460,8 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:operators_test",
-        "//conformance/tests:natural_sources_test",
         "//conformance/tests:tables_test",
+        "//conformance/tests:natural_sources_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -8531,7 +8516,7 @@
         "//hosts/wasmtime:parity_test"
       ],
       "tests": [
-        "//conformance/tests:operators_test",
+        "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -8613,7 +8598,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -8779,13 +8763,13 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -8927,7 +8911,6 @@
         "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:operators_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -8984,7 +8967,6 @@
       ],
       "tests": [
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -9181,7 +9163,6 @@
         "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -9737,7 +9718,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -9745,6 +9725,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:scalar_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -9826,7 +9807,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -9992,7 +9972,6 @@
         "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:operators_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -10092,13 +10071,13 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -10237,7 +10216,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -10386,10 +10364,9 @@
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
-        "//conformance/tests:operators_test",
+        "//conformance/tests:tables_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
-        "//conformance/tests:tables_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -10491,7 +10468,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -10499,6 +10475,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:scalar_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -10820,7 +10797,7 @@
       ],
       "tests": [
         "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:operators_test",
+        "//conformance/tests:tables_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -10880,7 +10857,7 @@
       ],
       "tests": [
         "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:operators_test",
+        "//conformance/tests:tables_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -10942,7 +10919,6 @@
         "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
-        "//conformance/tests:operators_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -11167,7 +11143,6 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
@@ -11175,6 +11150,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:scalar_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -11307,7 +11283,6 @@
       "tests": [
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
@@ -11411,13 +11386,13 @@
         "//conformance/tests:buffers_test",
         "//conformance/tests:calls_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:operators_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
+        "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
@@ -14368,5 +14343,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "3f2a132128d87314c617a19976aaeaa68c76e0ee69fbce12343ee682673e0b2f"
+  "canonical_hash": "b0fabd7d80e0909688203f719093433de02f55ada037de806f2a2565fb203941"
 }

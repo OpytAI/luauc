@@ -3,10 +3,10 @@
   "generator_version": "luauc-artifact-report-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "3f02ade9eb7b4be0be91a75d111b86d02dd8408c061395f0bd9c1f9ecacd2fbe",
+  "frontend_contract_digest": "35c7e683add7d255a76e3b1434070e288e74c9e53c961a8774bd02fb5646507e",
   "input_sha256": {
-    "luauc.wasm": "b156065317df4baa48566e16ff1beb2412387ac3b1254cd9e5b2654d7d0316bb",
-    "embed_v1.pack.wasm": "30876e1671d90acf9e3836407aeac40602c550a5477c77eca0c75e7471fc7fac",
+    "luauc.wasm": "a61a3548b30c9864070b91b7f3ea2cd317e9efc4d0ce9706e1520d5014535d7a",
+    "embed_v1.pack.wasm": "10edb7c8216d363b5500ed17c5e2f44b6e91e195d2a5c3df81416e75b7a8956f",
     "scalar_fixture.wasm": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "gates": [
@@ -18,8 +18,8 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "b156065317df4baa48566e16ff1beb2412387ac3b1254cd9e5b2654d7d0316bb",
-      "size": 1613776,
+      "sha256": "a61a3548b30c9864070b91b7f3ea2cd317e9efc4d0ce9706e1520d5014535d7a",
+      "size": 1613780,
       "imports": [],
       "exports": [
         "luauc_v1_alloc",
@@ -31,7 +31,7 @@
         "luauc_v1_result_free",
         "memory"
       ],
-      "function_count": 3227,
+      "function_count": 3224,
       "memory_min": 1024,
       "helpers": [],
       "features": [
@@ -45,8 +45,8 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "30876e1671d90acf9e3836407aeac40602c550a5477c77eca0c75e7471fc7fac",
-      "size": 255858,
+      "sha256": "10edb7c8216d363b5500ed17c5e2f44b6e91e195d2a5c3df81416e75b7a8956f",
+      "size": 255861,
       "imports": [
         "luauc_embed_v1.protected_call",
         "luauc_embed_v1.set_throw"
@@ -169,5 +169,5 @@
       ]
     }
   ],
-  "canonical_hash": "542b04e844b48d07c6e62f0960fc2ecca63d6bcf1f81ddcaea47826f38c519ac"
+  "canonical_hash": "fdbce6d4f848d4a33da12bab2c6a328d7d0e8a0835752fdb59c695945d014ba9"
 }
