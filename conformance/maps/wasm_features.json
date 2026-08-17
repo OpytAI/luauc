@@ -5,7 +5,7 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "35c7e683add7d255a76e3b1434070e288e74c9e53c961a8774bd02fb5646507e",
   "input_sha256": {
-    "compiler": "a61a3548b30c9864070b91b7f3ea2cd317e9efc4d0ce9706e1520d5014535d7a",
+    "compiler": "0a3df41ab52d4b154eb1df8ee3f36dda5a31e20e918a7612a5630b00e856503d",
     "pack": "10edb7c8216d363b5500ed17c5e2f44b6e91e195d2a5c3df81416e75b7a8956f",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
@@ -35,7 +35,7 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "a61a3548b30c9864070b91b7f3ea2cd317e9efc4d0ce9706e1520d5014535d7a",
+      "sha256": "0a3df41ab52d4b154eb1df8ee3f36dda5a31e20e918a7612a5630b00e856503d",
       "export_names": [
         "luauc_v1_alloc",
         "luauc_v1_compile",
@@ -181,5 +181,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "fe8a14538484a09e1dd86bd09723893e1a622be0d44af937122c516233e27194"
+  "canonical_hash": "347f465cd5358fa8a05e4cb2a9ae853fff8a4fb2b1bfabf29a5b8323c8fd09b8"
 }

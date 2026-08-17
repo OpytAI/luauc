@@ -41,11 +41,25 @@ zig_library(
 )
 
 zig_library(
+    name = "cluster_index",
+    main = "cluster_index.zig",
+    import_name = "luauc_backend_cluster_index",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":recognize",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
     name = "plan",
     main = "plan.zig",
     import_name = "luauc_backend_plan",
     visibility = ["//visibility:public"],
     deps = [
+        ":cluster_index",
         ":recognize",
         ":recognize_calls",
         ":recognize_tables",

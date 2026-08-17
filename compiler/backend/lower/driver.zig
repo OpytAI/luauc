@@ -364,12 +364,10 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var needs = runtime_imports.ImportNeeds{};
     {
         const function = try snapshot.irFunction(function_id);
-        var plan = FunctionPlan.init(allocator, snapshot, function, false) catch |err| {
+        model.scanImportNeedsFor(snapshot, function, false, &needs) catch |err| {
             diagnostics.recordPhase(@errorName(err), "runtime import planning");
             return err;
         };
-        defer plan.deinit();
-        needs = plan.import_needs;
     }
     var object = wasm.Object.init(allocator);
     defer object.deinit();
@@ -392,9 +390,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     var function_id: u32 = 0;
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const function = try snapshot.irFunction(function_id);
-        var plan = try FunctionPlan.init(allocator, snapshot, function, false);
-        needs.merge(plan.import_needs);
-        plan.deinit();
+        try model.scanImportNeedsFor(snapshot, function, false, &needs);
     }
 
     var object = wasm.Object.init(allocator);
@@ -817,9 +813,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
         var function_id: u32 = 0;
         while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
             const function = try snapshot.irFunction(function_id);
-            var plan = try FunctionPlan.init(allocator, snapshot, function, true);
-            needs.merge(plan.import_needs);
-            plan.deinit();
+            try model.scanImportNeedsFor(snapshot, function, true, &needs);
         }
     }
     if (total_functions == 0)

@@ -5,7 +5,7 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "35c7e683add7d255a76e3b1434070e288e74c9e53c961a8774bd02fb5646507e",
   "input_sha256": {
-    "luauc.wasm": "a61a3548b30c9864070b91b7f3ea2cd317e9efc4d0ce9706e1520d5014535d7a",
+    "luauc.wasm": "0a3df41ab52d4b154eb1df8ee3f36dda5a31e20e918a7612a5630b00e856503d",
     "embed_v1.pack.wasm": "10edb7c8216d363b5500ed17c5e2f44b6e91e195d2a5c3df81416e75b7a8956f",
     "scalar_fixture.wasm": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
@@ -18,8 +18,8 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "a61a3548b30c9864070b91b7f3ea2cd317e9efc4d0ce9706e1520d5014535d7a",
-      "size": 1613780,
+      "sha256": "0a3df41ab52d4b154eb1df8ee3f36dda5a31e20e918a7612a5630b00e856503d",
+      "size": 1610386,
       "imports": [],
       "exports": [
         "luauc_v1_alloc",
@@ -169,5 +169,5 @@
       ]
     }
   ],
-  "canonical_hash": "fdbce6d4f848d4a33da12bab2c6a328d7d0e8a0835752fdb59c695945d014ba9"
+  "canonical_hash": "f0b0659bdab1f40fe84bb9552a689d9ba2639cbe073832ff234e94aa2ee43c48"
 }

@@ -68,6 +68,35 @@ pub fn planContinuations(
     if (plan.continuation_regions.len != 0)
         plan.allocator.free(plan.continuation_regions);
     plan.continuation_regions = try regions.toOwnedSlice(allocator);
+
+    var iteration_regions: std.ArrayList(FunctionPlan.IterationRegion) = .empty;
+    errdefer iteration_regions.deinit(allocator);
+    for (plan.call_facts.iterations) |fact| {
+        var already = false;
+        for (iteration_regions.items) |region| {
+            if (region.repeat_target == fact.repeat_target and region.exit_target == fact.exit_target) {
+                already = true;
+                break;
+            }
+        }
+        if (already)
+            continue;
+        try iteration_regions.append(allocator, .{
+            .repeat_target = fact.repeat_target,
+            .exit_target = fact.exit_target,
+            .admitted = try admitIterationRegion(
+                allocator,
+                snapshot,
+                function,
+                plan,
+                fact.repeat_target,
+                fact.exit_target,
+            ),
+        });
+    }
+    if (plan.iteration_regions.len != 0)
+        plan.allocator.free(plan.iteration_regions);
+    plan.iteration_regions = try iteration_regions.toOwnedSlice(allocator);
 }
 
 fn admitRegion(
@@ -142,6 +171,88 @@ fn admitRegion(
     defer region_dominators.deinit();
 
     instruction_id = 0;
+    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        if (!reachable_instructions[instruction_id])
+            continue;
+        const instruction_value = try snapshot.irInstruction(function, instruction_id);
+        var operand_id: u32 = 0;
+        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
+            const operand_value = try snapshot.irOperand(instruction_value, operand_id);
+            if (operand_value.kind != .instruction)
+                continue;
+            if (operand_value.value >= function.instruction_count or
+                !reachable_instructions[operand_value.value])
+                return false;
+            const producer_block = plan.instructionBlock(operand_value.value) orelse return false;
+            const consumer_block = plan.instructionBlock(instruction_id) orelse return false;
+            if (producer_block == consumer_block) {
+                if (operand_value.value >= instruction_id)
+                    return false;
+            } else if (!region_dominators.dominates(producer_block, consumer_block)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// Generic FORGLOOP resume enters at the repeat and exit arms, not the function entry.
+fn admitIterationRegion(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    plan: *FunctionPlan,
+    repeat_target: u32,
+    exit_target: u32,
+) Error!bool {
+    const reachable_blocks = try allocator.alloc(bool, function.block_count);
+    defer allocator.free(reachable_blocks);
+    @memset(reachable_blocks, false);
+    const reachable_instructions = try allocator.alloc(bool, function.instruction_count);
+    defer allocator.free(reachable_instructions);
+    @memset(reachable_instructions, false);
+
+    var pending_blocks: std.ArrayList(u32) = .empty;
+    defer pending_blocks.deinit(allocator);
+    try pending_blocks.append(allocator, repeat_target);
+    try pending_blocks.append(allocator, exit_target);
+
+    while (pending_blocks.items.len != 0) {
+        const block_id = pending_blocks.items[pending_blocks.items.len - 1];
+        pending_blocks.items.len -= 1;
+        if (block_id >= function.block_count)
+            return Error.UnsupportedControlFlow;
+        if (reachable_blocks[block_id])
+            continue;
+        reachable_blocks[block_id] = true;
+
+        const block = try snapshot.irBlock(function, block_id);
+        if (block.isEmpty() or (!block.kind.isCompilable() and block.kind != .fallback))
+            return false;
+        if (block.kind == .fallback and
+            !plan.isPlannedBypass(block_id) and
+            !plan.supportsFallback(block_id))
+            return false;
+
+        var instruction_id = block.start;
+        while (instruction_id <= block.finish) : (instruction_id += 1) {
+            if (instruction_id >= function.instruction_count)
+                return Error.UnsupportedControlFlow;
+            reachable_instructions[instruction_id] = true;
+        }
+        const successors = plan.successorSlice(block_id) orelse return Error.UnsupportedControlFlow;
+        for (successors) |target|
+            try pending_blocks.append(allocator, target);
+    }
+
+    var region_dominators = try plan.regionDominators(
+        allocator,
+        reachable_blocks,
+        &.{ repeat_target, exit_target },
+    );
+    defer region_dominators.deinit();
+
+    var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
         if (!reachable_instructions[instruction_id])
             continue;
