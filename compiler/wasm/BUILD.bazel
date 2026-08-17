@@ -50,6 +50,7 @@ genrule(
     outs = ["scalar_fixture_wasm_ld_reference.wasm"],
     cmd = "$(execpath @@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld) --no-entry --allow-undefined --export-memory --export=luauc_runtime_v1_generated_scalar_fixture $(location :scalar_fixture_object) -o $@",
     tools = ["@@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld"],
+    visibility = ["//visibility:public"],
 )
 
 js_test(

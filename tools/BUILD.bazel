@@ -1,6 +1,35 @@
-load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_library", "js_test")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary")
+
+exports_files([
+    "generate_artifact_report.mjs",
+    "generate_link_conformance.mjs",
+    "generate_runtime_profile.mjs",
+    "generate_runtime_symbols.mjs",
+    "generate_wasm_features.mjs",
+    "ir_ledger.mjs",
+    "wasm_bytes.mjs",
+])
+
+js_library(
+    name = "wasm_bytes",
+    srcs = ["wasm_bytes.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "ir_ledger",
+    srcs = ["ir_ledger.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "generate_link_conformance",
+    srcs = ["generate_link_conformance.mjs"],
+    deps = [":wasm_bytes"],
+    visibility = ["//visibility:public"],
+)
 
 zig_binary(
     name = "layout_probe_raw",
@@ -105,6 +134,46 @@ js_test(
         "LUAUC_FORBIDDEN_LINK": "$(rlocationpath //conformance/maps:forbidden_link_json)",
         "LUAUC_FRONTEND_INTERP_ARCHIVE": "$(rlocationpath @luau//:aot_frontend_interp_wasm32_wasi)",
         "LUAUC_RUNTIME_ARCHIVE": "$(rlocationpath //runtime:runtime_archive_wasm32)",
+    },
+)
+
+js_test(
+    name = "maps_test",
+    size = "large",
+    data = [
+        "generate_artifact_report.mjs",
+        "generate_runtime_profile.mjs",
+        "generate_runtime_symbols.mjs",
+        "generate_wasm_features.mjs",
+        "maps.test.mjs",
+        "wasm_bytes.mjs",
+        "//compiler:compiler_wasm",
+        "//compiler/wasm:scalar_fixture_wasm_ld_reference",
+        "//conformance/maps:artifact_report_json",
+        "//conformance/maps:runtime_profile_json",
+        "//conformance/maps:runtime_symbols_json",
+        "//conformance/maps:wasm_features_json",
+        "//profiles/embed:embed_build_src",
+        "//profiles/embed:embed_v1_policy_src",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+        "//runtime:aot_runtime_v1_h",
+        "//runtime:runtime_symbols_bzl",
+    ],
+    entry_point = "maps.test.mjs",
+    env = {
+        "LUAUC_ARTIFACT_REPORT": "$(rlocationpath //conformance/maps:artifact_report_json)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_CORPUS_ARTIFACT": "$(rlocationpath //compiler/wasm:scalar_fixture_wasm_ld_reference)",
+        "LUAUC_EMBED_BUILD": "$(rlocationpath //profiles/embed:embed_build_src)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_POLICY": "$(rlocationpath //profiles/embed:embed_v1_policy_src)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_RUNTIME_HEADER": "$(rlocationpath //runtime:aot_runtime_v1_h)",
+        "LUAUC_RUNTIME_PROFILE": "$(rlocationpath //conformance/maps:runtime_profile_json)",
+        "LUAUC_RUNTIME_SYMBOLS": "$(rlocationpath //conformance/maps:runtime_symbols_json)",
+        "LUAUC_RUNTIME_SYMBOLS_BZL": "$(rlocationpath //runtime:runtime_symbols_bzl)",
+        "LUAUC_WASM_FEATURES": "$(rlocationpath //conformance/maps:wasm_features_json)",
     },
 )
 

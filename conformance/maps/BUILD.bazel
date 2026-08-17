@@ -1,17 +1,22 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 
 exports_files([
+    "artifact_report.json",
     "bazel_label_allowlist.json",
     "forbidden_link.json",
     "general_arms.json",
     "general_arms_fixture.json",
     "ir_command_forms.json",
     "ir_ledger_corpus.json",
+    "link_conformance.json",
     "luauc_ir_coverage.json",
     "luauc_layout.json",
     "luauc_runtime_link_reference.json",
     "luauc_runtime_objects.json",
     "luauc_runtime_sources.json",
+    "runtime_profile.json",
+    "runtime_symbols.json",
+    "wasm_features.json",
 ])
 
 js_library(
@@ -93,4 +98,34 @@ js_library(
     name = "runtime_sources_json",
     srcs = ["luauc_runtime_sources.json"],
     visibility = ["//tools:__pkg__"],
+)
+
+js_library(
+    name = "runtime_symbols_json",
+    srcs = ["runtime_symbols.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "runtime_profile_json",
+    srcs = ["runtime_profile.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "wasm_features_json",
+    srcs = ["wasm_features.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "link_conformance_json",
+    srcs = ["link_conformance.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "artifact_report_json",
+    srcs = ["artifact_report.json"],
+    visibility = ["//visibility:public"],
 )
