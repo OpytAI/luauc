@@ -7803,8 +7803,8 @@
       "class": "call_protocol",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "builtin"
@@ -10218,8 +10218,8 @@
       "class": "call_protocol",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "aux_1_255",
@@ -10289,8 +10289,8 @@
       "class": "call_protocol",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "generic_callable"
@@ -10474,8 +10474,8 @@
       "class": "rewrite_required",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "global_name"
@@ -10533,8 +10533,8 @@
       "class": "rewrite_required",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "global_name"
@@ -10592,8 +10592,8 @@
       "class": "rewrite_required",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "string_key"
@@ -10651,8 +10651,8 @@
       "class": "rewrite_required",
       "status": "partial",
       "reachability": "census",
-      "general_arm": false,
-      "cluster_only": true,
+      "general_arm": true,
+      "cluster_only": false,
       "forms": [
         {
           "id": "string_key"
@@ -14033,5 +14033,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "67083eecf6d593e072b34328aaa735763c9a80cbaf3330a7d171e5311ad72326"
+  "canonical_hash": "e02751834a84f5941ccf65926397556a4f3ebb11fec679fa6913a78d11eff514"
 }

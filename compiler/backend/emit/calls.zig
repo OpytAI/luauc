@@ -612,6 +612,50 @@ pub noinline fn emitAdjustStackToTop(self: anytype) Error!void {
     try self.body.i32Load(self.allocator, 2, callinfo_top_offset);
     try self.body.i32Store(self.allocator, 2, lua_state_top_offset);
 }
+pub noinline fn emitGeneralInvokeFastcall(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 7);
+    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+        return Error.UnsupportedControlFlow;
+    try self.emitSavedPcLocation(try self.instruction(instruction_id - 1));
+    const builtin_operand = try self.operand(instruction_value, 0);
+    if (builtin_operand.kind != .constant)
+        return Error.InvalidOperandType;
+    const builtin_id = (try self.constant(builtin_operand.value)).uintValue() orelse return Error.InvalidOperandType;
+    if (builtin_id >= 256)
+        return Error.InvalidOperandType;
+    const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
+    const argument_two = (try self.fastcallValueOperand(try self.operand(instruction_value, 3))) orelse
+        return Error.UnsupportedControlFlow;
+    const argument_three = (try self.fastcallValueOperand(try self.operand(instruction_value, 4))) orelse
+        return Error.UnsupportedControlFlow;
+    const parameter_count = try self.intConstant(try self.operand(instruction_value, 5));
+    const result_count = try self.intConstant(try self.operand(instruction_value, 6));
+    if (parameter_count < -1 or result_count < -1)
+        return Error.UnsupportedControlFlow;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(builtin_id));
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32Const(self.allocator, @bitCast(argument_two));
+    try self.body.i32Const(self.allocator, @bitCast(argument_three));
+    try self.body.i32Const(self.allocator, result_count);
+    try self.body.i32Const(self.allocator, parameter_count);
+    try self.body.call(self.allocator, self.fastcall orelse return Error.UnsupportedCommand);
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+    try self.emitReloadBase();
+}
+
 pub noinline fn emitDirectFastcall(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 4);
     const builtin_operand = try self.operand(instruction_value, 0);

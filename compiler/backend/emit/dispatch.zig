@@ -41,6 +41,13 @@ const ir_cmd_set_table = abi.ir_cmd_set_table;
 const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
 const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
+const ir_cmd_forgloop = abi.ir_cmd_forgloop;
+const ir_cmd_forgloop_fallback = abi.ir_cmd_forgloop_fallback;
+const ir_cmd_fallback_gettableks = abi.ir_cmd_fallback_gettableks;
+const ir_cmd_fallback_settableks = abi.ir_cmd_fallback_settableks;
+const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
+const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
+const ir_cmd_invoke_fastcall = abi.ir_cmd_invoke_fastcall;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
 const ir_cmd_buffer_readu8 = abi.ir_cmd_buffer_readu8;
 const ir_cmd_buffer_writei8 = abi.ir_cmd_buffer_writei8;
@@ -315,7 +322,13 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_do_len and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_concat and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_get_table and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table))
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_invoke_fastcall and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_forgloop_fallback and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_gettableks and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_settableks and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_getglobal and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_setglobal))
                     return Error.UnsupportedControlFlow;
             }
         },
@@ -330,8 +343,10 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         .close_upvals => try self.emitCloseUpvalues(instruction_id),
         .do_arith => {
-            if (block_kind != .fallback)
-                return Error.UnsupportedControlFlow;
+            if (block_kind != .fallback) {
+                if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+                    return Error.UnsupportedControlFlow;
+            }
             try self.emitDoArith(instruction_id, instruction_value);
         },
         ir_cmd_do_len => {
@@ -351,6 +366,19 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         ir_cmd_invoke_libm => try self.emitLibm(instruction_id, instruction_value),
         ir_cmd_fastcall => try self.emitDirectFastcall(instruction_value),
+        ir_cmd_invoke_fastcall => try self.emitGeneralInvokeFastcall(instruction_id, instruction_value),
+        ir_cmd_forgloop => {
+            try self.emitGeneralForgLoop(instruction_value);
+            return true;
+        },
+        ir_cmd_forgloop_fallback => {
+            try self.emitGeneralForgLoopFallback(instruction_id, instruction_value);
+            return true;
+        },
+        ir_cmd_fallback_gettableks => try self.emitGeneralGetTableKs(instruction_value),
+        ir_cmd_fallback_settableks => try self.emitGeneralSetTableKs(instruction_value),
+        ir_cmd_fallback_getglobal => try self.emitGeneralGetGlobal(instruction_value),
+        ir_cmd_fallback_setglobal => try self.emitGeneralSetGlobal(instruction_value),
         ir_cmd_new_userdata => try self.emitNewUserdata(instruction_id, instruction_value),
         ir_cmd_table_len => try self.emitGeneralTableLen(instruction_id, instruction_value),
         ir_cmd_string_len => try self.emitStringLen(instruction_id, instruction_value),

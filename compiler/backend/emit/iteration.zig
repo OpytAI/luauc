@@ -377,6 +377,49 @@ pub noinline fn specializedIpairsPattern(self: anytype, block: snapshot_v1.IrBlo
     fallback.fallback_target = fallback_target.value;
     return fallback;
 }
+pub noinline fn emitGeneralForgLoop(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const base = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const aux = try self.genericIterationAux(try self.operand(instruction_value, 1));
+    const repeat = try self.requireCompiledTarget(try self.operand(instruction_value, 2));
+    const exit = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
+    const live_count = @max(std.math.add(u32, aux & 0xff, 3) catch return Error.UnsupportedControlFlow, 5);
+    if (live_count > self.proto.max_stack_size or
+        base > @as(u32, self.proto.max_stack_size) - live_count)
+        return Error.UnsupportedControlFlow;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(base));
+    try self.body.i32Const(self.allocator, @bitCast(aux));
+    try self.body.call(self.allocator, self.forg_loop orelse return Error.UnsupportedCommand);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.emitReloadBase();
+    try self.body.i32Const(self.allocator, @intCast(repeat));
+    try self.body.i32Const(self.allocator, @intCast(exit));
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.select(self.allocator);
+    try self.body.localSet(self.allocator, self.dispatch_local);
+}
+
+pub noinline fn emitGeneralForgLoopFallback(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const base = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const aux = try self.genericIterationAux(try self.operand(instruction_value, 1));
+    const repeat = try self.requireCompiledTarget(try self.operand(instruction_value, 2));
+    const exit = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
+    try self.emitGenericIterationFallbackCall(instruction_id, .{
+        .marker = if (instruction_id != 0) try self.instruction(instruction_id - 1) else instruction_value,
+        .base = base,
+        .aux = aux,
+        .variable_count = aux & 0xff,
+        .repeat_target = repeat,
+        .exit_target = exit,
+    });
+}
+
 pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.base));

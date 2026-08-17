@@ -35,6 +35,74 @@ const tvalue_size = abi.tvalue_size;
 const lua_tag_number = abi.lua_tag_number;
 const lua_tag_table = abi.lua_tag_table;
 
+pub noinline fn emitGeneralGetGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralGlobal(self, instruction_value, .get);
+}
+
+pub noinline fn emitGeneralSetGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralGlobal(self, instruction_value, .set);
+}
+
+fn emitGeneralGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction, operation: GlobalOperation) Error!void {
+    try self.requireOperandCount(instruction_value, 3);
+    const pc = try self.uintConstant(try self.operand(instruction_value, 0));
+    const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const key = (try self.stringKey(try self.operand(instruction_value, 2))) orelse
+        return Error.UnsupportedControlFlow;
+    const interned = try self.string_keys.intern(self.allocator, key);
+    try self.emitPcLocation(pc);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(value));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+    try self.body.i32Const(self.allocator, @intCast(interned.length));
+    try self.body.call(self.allocator, switch (operation) {
+        .get => self.get_global orelse return Error.UnsupportedCommand,
+        .set => self.set_global orelse return Error.UnsupportedCommand,
+    });
+    try self.emitReloadBase();
+}
+
+pub noinline fn emitGeneralGetTableKs(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralTableKs(self, instruction_value, .get);
+}
+
+pub noinline fn emitGeneralSetTableKs(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralTableKs(self, instruction_value, .set);
+}
+
+fn emitGeneralTableKs(
+    self: anytype,
+    instruction_value: snapshot_v1.IrInstruction,
+    operation: model.StringTableOperation,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const pc = try self.uintConstant(try self.operand(instruction_value, 0));
+    const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const table = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
+    const key = (try self.stringKey(try self.operand(instruction_value, 3))) orelse
+        return Error.UnsupportedControlFlow;
+    const interned = try self.string_keys.intern(self.allocator, key);
+    try self.emitPcLocation(pc);
+    try self.body.localGet(self.allocator, 0);
+    switch (operation) {
+        .set => {
+            try self.body.i32Const(self.allocator, @intCast(table));
+            try self.body.i32Const(self.allocator, @intCast(value));
+            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+            try self.body.i32Const(self.allocator, @intCast(interned.length));
+            try self.body.call(self.allocator, self.table_set_string orelse return Error.UnsupportedCommand);
+        },
+        .get => {
+            try self.body.i32Const(self.allocator, @intCast(value));
+            try self.body.i32Const(self.allocator, @intCast(table));
+            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+            try self.body.i32Const(self.allocator, @intCast(interned.length));
+            try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
+        },
+    }
+    try self.emitReloadBase();
+}
+
 pub noinline fn emitDirectGenericTableOperation(
     self: anytype,
     instruction_value: snapshot_v1.IrInstruction,
