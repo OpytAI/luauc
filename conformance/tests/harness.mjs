@@ -979,6 +979,33 @@ export function executeEmbedNamecallFamilyPackageShape() {
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
 
+export async function executeTableAssignEmptyPackage() {
+  const name = "table-assign-empty-package";
+  const source = readFileSync(
+    runfile(process.env.LUAUC_TABLE_ASSIGN_EMPTY_SOURCE, "LUAUC_TABLE_ASSIGN_EMPTY_SOURCE"),
+    "utf8",
+  );
+  const snapshot = frontendSnapshot(source, "@aot/table_assign_empty.luau");
+  const shape = snapshotShape(snapshot);
+  if (shape.protoCount !== 2 || shape.functionCount !== 2)
+    throw new Error(`${name}: expected one wrapper and one function, got ${shape.protoCount}/${shape.functionCount}`);
+
+  const first = backendPackage(snapshot);
+  const second = backendPackage(snapshot);
+  if (!first.equals(second)) throw new Error(`${name}: package backend is nondeterministic`);
+  const module = await WebAssembly.compile(linkPackage(first, packageFunctionSymbols(2)));
+  const helpers = WebAssembly.Module.imports(module).map(({ name: importName }) => importName);
+  const usesSetNumber = helpers.includes("luauc_runtime_v1_table_set_number");
+  const usesSet = helpers.includes("luauc_runtime_v1_table_set");
+  if (!usesSetNumber && !usesSet)
+    throw new Error(`${name}: ordinary t[k] = {} must import table_set_number or table_set: ${JSON.stringify(helpers)}`);
+  if (helpers.includes("luauc_runtime_v1_table_store"))
+    throw new Error(`${name}: ordinary t[k] = {} imported table_store: ${JSON.stringify(helpers)}`);
+  if (helpers.includes("luauc_runtime_v1_set_userdata_metatable"))
+    throw new Error(`${name}: ordinary t[k] = {} imported set_userdata_metatable: ${JSON.stringify(helpers)}`);
+  return { objectSize: first.length };
+}
+
 export async function executeTableInsertAppendPackageShape() {
   const name = "table-clone-append-package-shape";
   const snapshot = frontendSnapshot(

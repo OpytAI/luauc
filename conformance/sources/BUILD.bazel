@@ -18,6 +18,7 @@ _LEDGER_LUAU = [
     "recursive_call.luau",
     "silent_return.luau",
     "slow_add.luau",
+    "table_assign_empty.luau",
     "table_clone_append.luau",
     "table_namecall.luau",
     "yield_call.luau",

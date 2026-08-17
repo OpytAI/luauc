@@ -38,6 +38,7 @@ SOURCE_ENV = {
     "LUAUC_REFERENCE_CAPTURE_SOURCE": "//conformance/sources:reference_capture",
     "LUAUC_SILENT_SOURCE": "//conformance/sources:silent_return",
     "LUAUC_SLOW_ADD_SOURCE": "//conformance/sources:slow_add",
+    "LUAUC_TABLE_ASSIGN_EMPTY_SOURCE": "//conformance/sources:table_assign_empty",
     "LUAUC_TABLE_CLONE_APPEND_SOURCE": "//conformance/sources:table_clone_append",
     "LUAUC_TABLE_NAMECALL_SOURCE": "//conformance/sources:table_namecall",
     "LUAUC_USERDATA_HOOKS_SOURCE": "//conformance/sources:userdata_hooks",

@@ -605,6 +605,13 @@ pub noinline fn emitStoreSplitTValue(
             if (reloaded_table_register) |register| {
                 try self.body.localGet(self.allocator, self.base_local);
                 try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+            } else if (source.kind == .instruction) {
+                if (self.plan.tableAllocAt(source.value)) |alloc| {
+                    try self.body.localGet(self.allocator, self.base_local);
+                    try self.body.i32Load(self.allocator, 2, alloc.destination * tvalue_size);
+                } else {
+                    try self.emitPointerValue(source);
+                }
             } else {
                 try self.emitPointerValue(source);
             }

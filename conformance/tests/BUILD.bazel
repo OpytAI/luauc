@@ -44,6 +44,7 @@ family_js_test(
     name = "tables_test",
     entry_point = "tables.test.mjs",
     source_env_keys = [
+        "LUAUC_TABLE_ASSIGN_EMPTY_SOURCE",
         "LUAUC_TABLE_CLONE_APPEND_SOURCE",
         "LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE",
         "LUAUC_DYNAMIC_HASH_TABLE_SOURCE",
