@@ -298,15 +298,10 @@ pub noinline fn emitXnextFastPreparationBlock(
     block: snapshot_v1.IrBlock,
     pattern: XnextFastPreparationPattern,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.emitPcLocation(pattern.pc);
     try self.body.localGet(self.allocator, 0);
@@ -315,18 +310,14 @@ pub noinline fn emitXnextFastPreparationBlock(
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(pattern.target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitXnextPreparationBlock(
     self: anytype,
     block_id: u32,
     pattern: XnextPreparationPattern,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     try self.emitPcLocation(pattern.pc);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.base));
@@ -334,8 +325,7 @@ pub noinline fn emitXnextPreparationBlock(
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(pattern.target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn specializedIpairsPattern(self: anytype, block: snapshot_v1.IrBlock) Error!?GenericIterationPattern {
     if (!block.kind.isCompilable() or block.isEmpty() or block.finish != block.start + 8)
@@ -494,10 +484,6 @@ pub noinline fn emitGenericIterationBlock(
     guarded: bool,
 ) Error!void {
     const block = try self.snapshot.irBlock(self.function, block_id);
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
     if (guarded) {
         try self.emitInterrupt(block.start, pattern.marker);
         const fallback_target = pattern.fallback_target orelse return Error.UnsupportedControlFlow;
@@ -519,8 +505,7 @@ pub noinline fn emitGenericIterationBlock(
         // exclusively the guarded nil-iterator fast arm above.
         try self.emitGenericIterationFallbackCall(block.finish, pattern);
     }
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitGenericIterationPrep(
     self: anytype,
@@ -558,7 +543,7 @@ pub noinline fn emitGenericIterationPrep(
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitArrayOperationBlock(
     self: anytype,
@@ -567,19 +552,13 @@ pub noinline fn emitArrayOperationBlock(
     pattern: ArrayOperationPattern,
     operation: ArrayOperationKind,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.emitArrayOperation(pattern, operation);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitArrayOperation(
     self: anytype,
@@ -622,24 +601,18 @@ pub fn semanticArrayOperation(self: anytype, block: snapshot_v1.IrBlock) Error!?
     return null;
 }
 pub noinline fn emitStringTableOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: StringTablePattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.emitStringTableOperation(pattern);
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitStringTableOperation(self: anytype, pattern: StringTablePattern) Error!void {
     try self.emitStringTableHelper(pattern);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitStringTableHelper(self: anytype, pattern: StringTablePattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -667,19 +640,13 @@ pub noinline fn emitStringTableHelper(self: anytype, pattern: StringTablePattern
     try self.emitReloadBase();
 }
 pub noinline fn emitGlobalOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: GlobalPattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.emitGlobalOperation(pattern);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitGlobalOperation(self: anytype, pattern: GlobalPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -775,15 +742,10 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
     try self.body.end(self.allocator);
 }
 pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: GenericTablePattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.emitGenericTableDirectAttempt(pattern);
     try self.body.localGet(self.allocator, self.status_local);
@@ -793,8 +755,7 @@ pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, blo
     try self.body.end(self.allocator);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitInlineGenericTableSet(self: anytype, pattern: GenericTablePattern) Error!void {
     try self.emitGenericTableDirectAttempt(pattern);

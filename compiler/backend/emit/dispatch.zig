@@ -526,7 +526,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         }
         if (try self.globalHeadPatternAt(instruction_id, block)) |pattern| {
             try self.emitGlobalOperation(pattern);
-            try self.body.branch(self.allocator, 1);
+            try self.body.branch(self.allocator, self.loop_branch_depth);
             instruction_id = block.finish;
             terminated = true;
             continue;
@@ -576,7 +576,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         if (try self.dynamicLengthPattern(block)) |pattern| {
             if (instruction_id == pattern.start) {
                 try self.emitDynamicLength(pattern);
-                try self.body.branch(self.allocator, 1);
+                try self.body.branch(self.allocator, self.loop_branch_depth);
                 instruction_id = block.finish;
                 terminated = true;
                 continue;
@@ -585,7 +585,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         if (try self.semanticArrayOperation(block)) |operation| {
             if (instruction_id == operation.pattern.start) {
                 try self.emitArrayOperation(operation.pattern, operation.kind);
-                try self.body.branch(self.allocator, 1);
+                try self.body.branch(self.allocator, self.loop_branch_depth);
                 instruction_id = block.finish;
                 terminated = true;
                 continue;
@@ -670,21 +670,12 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
     }
 }
 fn emitDispatchBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
-
+    _ = block_id;
     const terminated = try self.emitInstructionRange(block.start, block.finish, block);
     if (!terminated)
         return Error.InvalidBlockTermination;
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuation) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(continuation.dispatch_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
     switch (continuation.action) {
         .call_suffix => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
@@ -694,12 +685,12 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
         },
         .generic_iteration => |pattern| {
             try self.emitGenericIterationFinish(pattern);
-            try self.body.branch(self.allocator, 1);
+            try self.body.branch(self.allocator, self.loop_branch_depth);
         },
         .interrupt_block_retry => |retry| {
             try self.body.i32Const(self.allocator, @intCast(retry.block_id));
             try self.body.localSet(self.allocator, self.dispatch_local);
-            try self.body.branch(self.allocator, 1);
+            try self.body.branch(self.allocator, self.loop_branch_depth);
         },
         .interrupt_suffix => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
@@ -720,5 +711,4 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
                 return Error.InvalidBlockTermination;
         },
     }
-    try self.body.end(self.allocator);
 }

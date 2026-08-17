@@ -211,19 +211,13 @@ pub noinline fn emitPlainTableNamecallBlock(
     block: snapshot_v1.IrBlock,
     pattern: PlainTableNamecallPattern,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.emitPlainTableNamecallOperation(pattern);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitFallbackNamecall(
     self: anytype,

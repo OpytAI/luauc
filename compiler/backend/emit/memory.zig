@@ -74,7 +74,7 @@ pub noinline fn emitCheckDivInt64(self: anytype, instruction_value: snapshot_v1.
                 try self.requireCompiledTarget(failure);
             try self.body.i32Const(self.allocator, @intCast(target));
             try self.body.localSet(self.allocator, self.dispatch_local);
-            try self.body.branch(self.allocator, 2);
+            try self.body.branch(self.allocator, self.loop_branch_depth + 1);
         },
         .vm_exit => return Error.UnsupportedControlFlow,
         .undef => try self.emitStatusReturn(status_internal_error),
@@ -170,8 +170,7 @@ pub noinline fn emitCheckTag(self: anytype, instruction_value: snapshot_v1.IrIns
                 try self.requireCompiledTarget(failure);
             try self.body.i32Const(self.allocator, @intCast(target));
             try self.body.localSet(self.allocator, self.dispatch_local);
-            // CHECK_TAG's conditional is nested inside the selected-block conditional.
-            try self.body.branch(self.allocator, 2);
+            try self.body.branch(self.allocator, self.loop_branch_depth + 1);
         },
         .vm_exit => blk: {
             if (failure.value < self.proto.code_count) {
@@ -779,8 +778,7 @@ pub noinline fn emitGuardFailure(self: anytype, failure: snapshot_v1.IrOperand) 
                 try self.requireCompiledTarget(failure);
             try self.body.i32Const(self.allocator, @intCast(target));
             try self.body.localSet(self.allocator, self.dispatch_local);
-            // The guard conditional is nested inside the selected-block conditional.
-            try self.body.branch(self.allocator, 2);
+            try self.body.branch(self.allocator, self.loop_branch_depth + 1);
         },
         .vm_exit => return Error.UnsupportedControlFlow,
         .undef => try self.emitStatusReturn(status_internal_error),

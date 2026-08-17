@@ -116,6 +116,7 @@ pub const Context = struct {
     proto_id_by_bytecode_id: []const u32,
     base_local: u32,
     dispatch_local: u32,
+    loop_branch_depth: u32,
     status_local: u32,
     continuation_local: u32,
     table_index_local: u32,

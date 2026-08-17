@@ -179,18 +179,10 @@ pub noinline fn stringEqualityPattern(self: anytype, block: snapshot_v1.IrBlock)
     };
 }
 pub noinline fn emitStringEqualityBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: StringEqualityPattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
-        if (try self.emitInstructionRange(block.start, pattern.start - 1, block)) {
-            // Optimizer-linearized blocks can retain a dead pattern-shaped suffix after an
-            // earlier semantic operation has already dispatched. The terminating prefix owns
-            // this entry; do not compile or reject the unreachable suffix.
-            try self.body.end(self.allocator);
+        if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
-        }
     }
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.lhs));
@@ -199,7 +191,6 @@ pub noinline fn emitStringEqualityBlock(self: anytype, block_id: u32, block: sna
     try self.body.call(self.allocator, self.compare_any orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
     try self.emitConditionalDispatch(pattern.true_target, pattern.false_target);
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitInterrupt(
     self: anytype,
@@ -253,7 +244,7 @@ pub noinline fn emitJump(self: anytype, instruction_value: snapshot_v1.IrInstruc
     const target = try self.requireDispatchTarget(try self.operand(instruction_value, 0));
     try self.body.i32Const(self.allocator, @intCast(target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitConditionalDispatch(self: anytype, true_target: u32, false_target: u32) Error!void {
     try self.body.ifVoid(self.allocator);
@@ -263,7 +254,7 @@ pub noinline fn emitConditionalDispatch(self: anytype, true_target: u32, false_t
     try self.body.i32Const(self.allocator, @intCast(false_target));
     try self.body.localSet(self.allocator, self.dispatch_local);
     try self.body.end(self.allocator);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitJumpIfTruthy(self: anytype, instruction_value: snapshot_v1.IrInstruction, invert: bool) Error!void {
     try self.requireOperandCount(instruction_value, 3);
@@ -380,7 +371,7 @@ pub noinline fn emitJumpCompareNumber(self: anytype, instruction_value: snapshot
     try self.emitNumericCondition(condition);
     try self.body.select(self.allocator);
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitJumpFornLoopCondition(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 5);

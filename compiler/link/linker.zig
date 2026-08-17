@@ -1048,27 +1048,29 @@ fn resolve(allocator: std.mem.Allocator, pack: *const PackModel, object: *Object
     errdefer allocator.free(type_map);
     var appended_types: std.ArrayList([]const u8) = .empty;
     errdefer appended_types.deinit(allocator);
+    var pack_types = std.StringHashMap(u32).init(allocator);
+    defer pack_types.deinit();
+    try pack_types.ensureTotalCapacity(@intCast(pack.types.encodings.items.len));
+    for (pack.types.encodings.items, 0..) |encoding, index|
+        try pack_types.put(encoding, @intCast(index));
+    var appended_lookup = std.StringHashMap(u32).init(allocator);
+    defer appended_lookup.deinit();
     for (object.types.encodings.items, 0..) |encoding, object_index| {
-        var mapped: ?u32 = null;
-        for (pack.types.encodings.items, 0..) |candidate, index|
-            if (std.mem.eql(u8, encoding, candidate)) {
-                mapped = @intCast(index);
-                break;
-            };
-        if (mapped == null)
-            for (appended_types.items, 0..) |candidate, index|
-                if (std.mem.eql(u8, encoding, candidate)) {
-                    mapped = @intCast(pack.types.encodings.items.len + index);
-                    break;
-                };
-        if (mapped == null) {
-            const total = std.math.add(usize, pack.types.encodings.items.len, appended_types.items.len) catch return Error.IntegerOverflow;
-            if (total >= limits.max_types)
-                return Error.ResourceLimit;
-            mapped = @intCast(total);
-            try appended_types.append(allocator, encoding);
+        if (pack_types.get(encoding)) |mapped| {
+            type_map[object_index] = mapped;
+            continue;
         }
-        type_map[object_index] = mapped.?;
+        if (appended_lookup.get(encoding)) |mapped| {
+            type_map[object_index] = mapped;
+            continue;
+        }
+        const total = std.math.add(usize, pack.types.encodings.items.len, appended_types.items.len) catch return Error.IntegerOverflow;
+        if (total >= limits.max_types)
+            return Error.ResourceLimit;
+        const mapped: u32 = @intCast(total);
+        try appended_types.append(allocator, encoding);
+        try appended_lookup.put(encoding, mapped);
+        type_map[object_index] = mapped;
     }
 
     const object_function_count = std.math.add(usize, object.imports.functions.items.len, object.function_types.items.len) catch return Error.IntegerOverflow;

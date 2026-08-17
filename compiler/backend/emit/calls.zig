@@ -716,7 +716,7 @@ pub noinline fn emitFastcallCluster(self: anytype, pattern: FastcallPattern) Err
     try self.body.i32Const(self.allocator, @intCast(pattern.fast_target));
     try self.body.localSet(self.allocator, self.dispatch_local);
     try self.body.end(self.allocator);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub fn isFastcallFallback(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty())
@@ -735,14 +735,10 @@ pub fn isFastcallFallback(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
     return false;
 }
 pub noinline fn emitFastcallFallbackBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     const terminated = try self.emitInstructionRange(block.start, block.finish, block);
     if (!terminated)
         return Error.InvalidBlockTermination;
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitLibm(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (instruction_value.operand_count != 2 and instruction_value.operand_count != 3)

@@ -231,6 +231,7 @@ fn lowerFunction(
         .proto_id_by_bytecode_id = proto_id_by_bytecode_id,
         .base_local = 2,
         .dispatch_local = 3,
+        .loop_branch_depth = 1,
         .status_local = 4,
         .continuation_local = 5,
         .table_index_local = 6,
@@ -307,6 +308,10 @@ fn lowerFunction(
     }
     try body.loop(allocator);
 
+    const DispatchCase = union(enum) { block: u32, continuation: u32 };
+    var cases: std.ArrayList(DispatchCase) = .empty;
+    defer cases.deinit(allocator);
+    var max_dispatch: u32 = 0;
     block_id = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
@@ -317,25 +322,86 @@ fn lowerFunction(
                 diagnostics.recordBlock(@errorName(err), block_id);
                 return err;
             };
-        if (block.kind.isCompilable() and !block.isEmpty() and !bypassed)
-            context.emitBlock(block_id, block) catch |err| {
-                diagnostics.recordBlock(@errorName(err), block_id);
-                return err;
-            }
-        else if (block.kind == .fallback and !bypassed and try admission.supportsFallback(context, block))
-            context.emitBlock(block_id, block) catch |err| {
-                diagnostics.recordBlock(@errorName(err), block_id);
-                return err;
-            };
+        const emit_block = (block.kind.isCompilable() and !block.isEmpty() and !bypassed) or
+            (block.kind == .fallback and !bypassed and try admission.supportsFallback(context, block));
+        if (emit_block) {
+            try cases.append(allocator, .{ .block = block_id });
+            max_dispatch = @max(max_dispatch, block_id);
+        }
     }
-    for (call_continuations) |continuation|
-        try context.emitCallContinuation(continuation);
+    for (call_continuations, 0..) |continuation, index| {
+        try cases.append(allocator, .{ .continuation = @intCast(index) });
+        max_dispatch = @max(max_dispatch, continuation.dispatch_id);
+    }
+
+    const table_len = std.math.add(u32, max_dispatch, 1) catch return Error.ResourceLimit;
+    const case_count: u32 = @intCast(cases.items.len);
+    const block_plus_cont = std.math.add(u32, function.block_count, @intCast(call_continuations.len)) catch
+        return Error.ResourceLimit;
+    if (case_count > 512)
+        return Error.ResourceLimit;
+    const nest = case_count + 1;
+    var opened: u32 = 0;
+    while (opened < nest) : (opened += 1)
+        try body.block(allocator);
+
+    var labels = try allocator.alloc(u32, table_len);
+    defer allocator.free(labels);
+    @memset(labels, nest - 1);
+    for (cases.items, 0..) |case, index| {
+        const dispatch_id = switch (case) {
+            .block => |id| id,
+            .continuation => |id| call_continuations[id].dispatch_id,
+        };
+        labels[dispatch_id] = @intCast(index);
+    }
+
+    try body.localGet(allocator, context.dispatch_local);
+    if (block_plus_cont > 256) {
+        // if/else sits inside C_0, so every br_table depth is +1 versus the case labels.
+        var paged = try allocator.alloc(u32, table_len);
+        defer allocator.free(paged);
+        for (labels, 0..) |label, index|
+            paged[index] = label + 1;
+        const paged_default = nest;
+        try body.i32Const(allocator, 256);
+        try body.opcode(allocator, 0x4b); // i32.ge_u
+        try body.ifVoid(allocator);
+        try body.localGet(allocator, context.dispatch_local);
+        try body.i32Const(allocator, 256);
+        try body.opcode(allocator, 0x6b); // i32.sub
+        try body.brTable(allocator, paged[256..], paged_default);
+        try body.else_(allocator);
+        try body.localGet(allocator, context.dispatch_local);
+        try body.brTable(allocator, paged[0..@min(table_len, 256)], paged_default);
+        try body.end(allocator);
+    } else {
+        try body.brTable(allocator, labels, nest - 1);
+    }
+
+    for (cases.items, 0..) |case, index| {
+        try body.end(allocator);
+        context.loop_branch_depth = nest - @as(u32, @intCast(index)) - 1;
+        switch (case) {
+            .block => |id| {
+                const block = try snapshot.irBlock(function, id);
+                context.emitBlock(id, block) catch |err| {
+                    diagnostics.recordBlock(@errorName(err), id);
+                    return err;
+                };
+            },
+            .continuation => |id| try context.emitCallContinuation(call_continuations[id]),
+        }
+    }
 
     // Reaching the bottom means a malformed/generated dispatch target escaped static validation.
     try context.emitStatusReturn(status_internal_error);
     try body.end(allocator);
+    try body.end(allocator);
     try body.i32Const(allocator, status_internal_error);
     try body.finish(allocator);
+    if (body.bytes.items.len > 256 * 1024)
+        return Error.ResourceLimit;
 
     return object.defineFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden, body);
 }

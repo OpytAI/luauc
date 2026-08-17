@@ -9,6 +9,17 @@ const packageFunctionSymbols = (count) => Array.from(
   (_, id) => `luauc_runtime_v1_function_${String(id).padStart(8, "0")}`,
 );
 const packageSymbols = packageFunctionSymbols(3);
+const preparedCallImports = [
+  ["env", "luauc_runtime_v1_prepare_compiled_call", "function"],
+  ["env", "luauc_runtime_v1_finish_compiled_call", "function"],
+  ["env", "luauc_runtime_v1_count_direct_call", "function"],
+  ["env", "luauc_runtime_v1_count_indirect_call", "function"],
+];
+const preparedCallScratch = 20000;
+
+function withPreparedCallImports(expected) {
+  return expected.flatMap((entry) => entry[1] === "luauc_runtime_v1_call" ? preparedCallImports : [entry]);
+}
 
 export function runfile(relative, variable) {
   if (!relative) throw new Error(`${variable} is not set`);
@@ -2065,7 +2076,7 @@ export async function executeBufferScalarMatrixPackage() {
     ["env", "luauc_runtime_v1_get_varargs_multret", "function"],
     ["env", "luauc_runtime_v1_check_safe_env", "function"],
   ];
-  if (JSON.stringify(imports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(imports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(imports)}`);
   return { objectSize: first.length, functionCount: 9 };
 }
@@ -2081,6 +2092,7 @@ export function linkObject(object, name) {
       "--no-entry",
       "--allow-undefined",
       "--export-memory",
+      "--export-table",
       `--export=${generatedSymbol}`,
       objectPath,
       "-o",
@@ -2106,6 +2118,7 @@ export function linkPackage(object, functionSymbols = packageSymbols, extraExpor
       "--no-entry",
       "--allow-undefined",
       "--export-memory",
+      "--export-table",
       ...functionSymbols.map((symbol) => `--export=${symbol}`),
       ...extraExports.map((symbol) => `--export=${symbol}`),
       objectPath,
@@ -2431,7 +2444,7 @@ export async function executeCompiledCallPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
-  if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
   let instance;
@@ -2492,7 +2505,7 @@ export async function executeCompiledCallPackage() {
         continuationState = nextId;
         return previous;
       },
-      luauc_runtime_v1_call(callState, functionRegister, parameterCount, resultCount) {
+      luauc_runtime_v1_prepare_compiled_call(callState, functionRegister, parameterCount, resultCount) {
         if (callState !== state || functionRegister !== 3 || parameterCount !== 2 || resultCount !== 1)
           throw new Error(`${name}: invalid fixed call ABI`);
         const memory = new Uint8Array(instance.exports.memory.buffer);
@@ -2522,8 +2535,14 @@ export async function executeCompiledCallPackage() {
         view.setUint32(state + 12, relocatedCallerBase, true);
         writeNumber(view, relocatedCallerBase, functionRegister, childResult);
         nestedCalls++;
-        return 0;
+        view.setUint32(preparedCallScratch, 0, true);
+        view.setUint32(preparedCallScratch + 4, 0, true);
+        view.setUint32(preparedCallScratch + 8, 0, true);
+        return preparedCallScratch;
       },
+      luauc_runtime_v1_finish_compiled_call() {},
+      luauc_runtime_v1_count_direct_call() {},
+      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -2610,7 +2629,7 @@ export async function executeCapturedCallPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
-  if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
   let instance;
@@ -2697,7 +2716,7 @@ export async function executeCapturedCallPackage() {
         continuationState = nextId;
         return previous;
       },
-      luauc_runtime_v1_call(callState, functionRegister, parameterCount, resultCount) {
+      luauc_runtime_v1_prepare_compiled_call(callState, functionRegister, parameterCount, resultCount) {
         if (callState !== state || functionRegister !== 3 || parameterCount !== 1 || resultCount !== 1)
           throw new Error(`${name}: invalid fixed call ABI`);
         const memory = new Uint8Array(instance.exports.memory.buffer);
@@ -2727,8 +2746,14 @@ export async function executeCapturedCallPackage() {
         view.setUint32(state + 12, finalCallerBase, true);
         writeNumber(view, finalCallerBase, functionRegister, childResult);
         nestedCalls++;
-        return 0;
+        view.setUint32(preparedCallScratch, 0, true);
+        view.setUint32(preparedCallScratch + 4, 0, true);
+        view.setUint32(preparedCallScratch + 8, 0, true);
+        return preparedCallScratch;
       },
+      luauc_runtime_v1_finish_compiled_call() {},
+      luauc_runtime_v1_count_direct_call() {},
+      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -3071,7 +3096,7 @@ export async function executeMultiResultCallPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
-  if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
   let instance;
@@ -3137,7 +3162,7 @@ export async function executeMultiResultCallPackage() {
         continuationState = nextId;
         return previous;
       },
-      luauc_runtime_v1_call(callState, functionRegister, parameterCount, resultCount) {
+      luauc_runtime_v1_prepare_compiled_call(callState, functionRegister, parameterCount, resultCount) {
         if (callState !== state || functionRegister !== 3 || parameterCount !== 2 || resultCount !== 2)
           throw new Error(`${name}: invalid fixed call ABI`);
         const memory = new Uint8Array(instance.exports.memory.buffer);
@@ -3167,8 +3192,14 @@ export async function executeMultiResultCallPackage() {
         writeNumber(view, relocatedCallerBase, functionRegister, returned[0].value);
         writeNumber(view, relocatedCallerBase, functionRegister + 1, returned[1].value);
         nestedCalls++;
-        return 0;
+        view.setUint32(preparedCallScratch, 0, true);
+        view.setUint32(preparedCallScratch + 4, 0, true);
+        view.setUint32(preparedCallScratch + 8, 0, true);
+        return preparedCallScratch;
       },
+      luauc_runtime_v1_finish_compiled_call() {},
+      luauc_runtime_v1_count_direct_call() {},
+      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 

@@ -283,6 +283,14 @@ pub const Body = struct {
         try self.opU32(allocator, 0x0d, depth);
     }
 
+    pub fn brTable(self: *Body, allocator: std.mem.Allocator, labels: []const u32, default_label: u32) !void {
+        try self.bytes.append(allocator, 0x0e);
+        try appendUleb(&self.bytes, allocator, labels.len);
+        for (labels) |label|
+            try appendUleb(&self.bytes, allocator, label);
+        try appendUleb(&self.bytes, allocator, default_label);
+    }
+
     pub fn return_(self: *Body, allocator: std.mem.Allocator) !void {
         try self.bytes.append(allocator, 0x0f);
     }
@@ -555,10 +563,11 @@ pub const Object = struct {
 
         const has_data = self.data_segments.items.len != 0;
         const has_table_relocations = self.hasTableRelocations();
-        if (self.imports.items.len != 0 or has_data or has_table_relocations) {
+        const needs_function_table = has_table_relocations or self.hasCallIndirect();
+        if (self.imports.items.len != 0 or has_data or needs_function_table) {
             var import_payload: std.ArrayList(u8) = .empty;
             defer import_payload.deinit(self.allocator);
-            const infrastructure_imports: usize = @as(usize, @intFromBool(has_data)) + @as(usize, @intFromBool(has_table_relocations));
+            const infrastructure_imports: usize = @as(usize, @intFromBool(has_data)) + @as(usize, @intFromBool(needs_function_table));
             try appendUleb(&import_payload, self.allocator, self.imports.items.len + infrastructure_imports);
             if (has_data) {
                 try appendName(&import_payload, self.allocator, "env");
@@ -573,7 +582,7 @@ pub const Object = struct {
                 try import_payload.append(self.allocator, 0x00);
                 try appendUleb(&import_payload, self.allocator, function_import.type_index);
             }
-            if (has_table_relocations) {
+            if (needs_function_table) {
                 try appendName(&import_payload, self.allocator, "env");
                 try appendName(&import_payload, self.allocator, "__indirect_function_table");
                 try import_payload.append(self.allocator, 0x01);
@@ -593,7 +602,7 @@ pub const Object = struct {
         try appendSection(&output, self.allocator, 3, function_payload.items);
         section_index += 1;
 
-        if (has_table_relocations) {
+        if (needs_function_table) {
             var element_payload: std.ArrayList(u8) = .empty;
             defer element_payload.deinit(self.allocator);
             try appendUleb(&element_payload, self.allocator, 1);
@@ -754,6 +763,14 @@ pub const Object = struct {
         for (self.data_segments.items) |segment|
             for (segment.relocations.items) |item|
                 if (item.kind == relocation.table_index_i32)
+                    return true;
+        return false;
+    }
+
+    fn hasCallIndirect(self: *const Object) bool {
+        for (self.functions.items) |function|
+            for (function.relocations) |item|
+                if (item.kind == relocation.type_index_leb)
                     return true;
         return false;
     }
