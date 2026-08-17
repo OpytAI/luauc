@@ -192,7 +192,7 @@
         "function_count": 94
       },
       "production": {
-        "sha256": "df030df65fa1049709f0dd03c60e3330ab7dbad9380e6fe041b4868aeaf390c6",
+        "sha256": "7d2d16f86115e213d5d40c013e3cd474198cfb0bb99229b06ec2d377aaed55ac",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -202,6 +202,7 @@
           "luauc_embed_v1_context_destroy",
           "luauc_embed_v1_coverage",
           "luauc_embed_v1_dealloc",
+          "luauc_embed_v1_direct_calls",
           "luauc_embed_v1_gc_finish_mark",
           "luauc_embed_v1_gc_finish_sweep",
           "luauc_embed_v1_gc_isblack",
@@ -210,14 +211,18 @@
           "luauc_embed_v1_gc_state",
           "luauc_embed_v1_gc_step",
           "luauc_embed_v1_gc_stop",
+          "luauc_embed_v1_helper_calls",
+          "luauc_embed_v1_indirect_calls",
           "luauc_embed_v1_invoke",
           "luauc_embed_v1_last_error",
           "luauc_embed_v1_last_error_size",
           "luauc_embed_v1_protected_call_run",
+          "luauc_embed_v1_reset_counts",
+          "luauc_embed_v1_trampoline_calls",
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1085
+        "function_count": 1095
       }
     },
     {
@@ -259,7 +264,7 @@
         "function_count": 11
       },
       "production": {
-        "sha256": "a22aefbaf2e48e5c86e784b8039f5843d96547fe17a56971c5d78e260192e7d9",
+        "sha256": "a6ca7b1c6bf593d0dbf0acfb668b50a6a59f0b91c6ae3696d2af95adec5e81e3",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -269,6 +274,7 @@
           "luauc_embed_v1_context_destroy",
           "luauc_embed_v1_coverage",
           "luauc_embed_v1_dealloc",
+          "luauc_embed_v1_direct_calls",
           "luauc_embed_v1_gc_finish_mark",
           "luauc_embed_v1_gc_finish_sweep",
           "luauc_embed_v1_gc_isblack",
@@ -277,14 +283,18 @@
           "luauc_embed_v1_gc_state",
           "luauc_embed_v1_gc_step",
           "luauc_embed_v1_gc_stop",
+          "luauc_embed_v1_helper_calls",
+          "luauc_embed_v1_indirect_calls",
           "luauc_embed_v1_invoke",
           "luauc_embed_v1_last_error",
           "luauc_embed_v1_last_error_size",
           "luauc_embed_v1_protected_call_run",
+          "luauc_embed_v1_reset_counts",
+          "luauc_embed_v1_trampoline_calls",
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1037
+        "function_count": 1047
       }
     },
     {
@@ -331,7 +341,7 @@
         "function_count": 15
       },
       "production": {
-        "sha256": "d82199bcab11a864e878a1ce0587868059b190a9e5e0182ce1d849717b59baf2",
+        "sha256": "420393eb904dc5727556edc40467dde7abd89c573e54f72dfa8d994f82405094",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -341,6 +351,7 @@
           "luauc_embed_v1_context_destroy",
           "luauc_embed_v1_coverage",
           "luauc_embed_v1_dealloc",
+          "luauc_embed_v1_direct_calls",
           "luauc_embed_v1_gc_finish_mark",
           "luauc_embed_v1_gc_finish_sweep",
           "luauc_embed_v1_gc_isblack",
@@ -349,14 +360,18 @@
           "luauc_embed_v1_gc_state",
           "luauc_embed_v1_gc_step",
           "luauc_embed_v1_gc_stop",
+          "luauc_embed_v1_helper_calls",
+          "luauc_embed_v1_indirect_calls",
           "luauc_embed_v1_invoke",
           "luauc_embed_v1_last_error",
           "luauc_embed_v1_last_error_size",
           "luauc_embed_v1_protected_call_run",
+          "luauc_embed_v1_reset_counts",
+          "luauc_embed_v1_trampoline_calls",
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1038
+        "function_count": 1048
       }
     },
     {
@@ -414,7 +429,7 @@
         "function_count": 17
       },
       "production": {
-        "sha256": "b9a9b04c85d0e763224f945559716a6760006f64058b0253f08ddd5c1abe5c59",
+        "sha256": "cd6dc86f9c4fdb54a621c7800937b6330349da8617b354ae2a3e77bf674d9cff",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -424,6 +439,7 @@
           "luauc_embed_v1_context_destroy",
           "luauc_embed_v1_coverage",
           "luauc_embed_v1_dealloc",
+          "luauc_embed_v1_direct_calls",
           "luauc_embed_v1_gc_finish_mark",
           "luauc_embed_v1_gc_finish_sweep",
           "luauc_embed_v1_gc_isblack",
@@ -432,14 +448,18 @@
           "luauc_embed_v1_gc_state",
           "luauc_embed_v1_gc_step",
           "luauc_embed_v1_gc_stop",
+          "luauc_embed_v1_helper_calls",
+          "luauc_embed_v1_indirect_calls",
           "luauc_embed_v1_invoke",
           "luauc_embed_v1_last_error",
           "luauc_embed_v1_last_error_size",
           "luauc_embed_v1_protected_call_run",
+          "luauc_embed_v1_reset_counts",
+          "luauc_embed_v1_trampoline_calls",
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1036
+        "function_count": 1046
       }
     },
     {
@@ -489,7 +509,7 @@
         "function_count": 18
       },
       "production": {
-        "sha256": "422a723b56e9b5bfb51c8b86362895d2c08803e9534606169a29248e6aaf8176",
+        "sha256": "6219f503944d3e5053adfeee27232947b31dd2a690c464a14242f9e66e95f343",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -499,6 +519,7 @@
           "luauc_embed_v1_context_destroy",
           "luauc_embed_v1_coverage",
           "luauc_embed_v1_dealloc",
+          "luauc_embed_v1_direct_calls",
           "luauc_embed_v1_gc_finish_mark",
           "luauc_embed_v1_gc_finish_sweep",
           "luauc_embed_v1_gc_isblack",
@@ -507,14 +528,18 @@
           "luauc_embed_v1_gc_state",
           "luauc_embed_v1_gc_step",
           "luauc_embed_v1_gc_stop",
+          "luauc_embed_v1_helper_calls",
+          "luauc_embed_v1_indirect_calls",
           "luauc_embed_v1_invoke",
           "luauc_embed_v1_last_error",
           "luauc_embed_v1_last_error_size",
           "luauc_embed_v1_protected_call_run",
+          "luauc_embed_v1_reset_counts",
+          "luauc_embed_v1_trampoline_calls",
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1037
+        "function_count": 1047
       }
     },
     {
@@ -540,5 +565,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "5466fefb72b89d92957064713a3ab870767ff9247d0b987c7fda55595f899b97"
+  "canonical_hash": "fbefbbfeec2ca7c08681b0833ff16e4e10aaf2ba1df0047131bb33266497235c"
 }

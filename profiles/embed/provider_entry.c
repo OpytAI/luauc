@@ -234,6 +234,11 @@ uint32_t luauc_runtime_v1_gc_restart(lua_State *state);
 uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *state);
 uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *state);
 uint32_t luauc_runtime_v1_barrier_probe(lua_State *state, uint32_t kind);
+void luauc_runtime_v1_reset_counts(void);
+uint32_t luauc_runtime_v1_helper_calls(void);
+uint32_t luauc_runtime_v1_trampoline_calls(void);
+uint32_t luauc_runtime_v1_direct_calls(void);
+uint32_t luauc_runtime_v1_indirect_calls(void);
 
 uint32_t luauc_embed_v1_alloc(uint32_t size) {
     return size == 0 ? 0 : (uint32_t)(uintptr_t)malloc(size);
@@ -470,4 +475,30 @@ uint32_t luauc_embed_v1_gc_finish_sweep(uint32_t handle) {
 uint32_t luauc_embed_v1_barrier_probe(uint32_t handle, uint32_t kind) {
     lua_State *state = embedState(handle);
     return state ? luauc_runtime_v1_barrier_probe(state, kind) : 2;
+}
+
+uint32_t luauc_embed_v1_reset_counts(uint32_t handle) {
+    (void)handle;
+    luauc_runtime_v1_reset_counts();
+    return 0;
+}
+
+uint32_t luauc_embed_v1_helper_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_helper_calls();
+}
+
+uint32_t luauc_embed_v1_trampoline_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_trampoline_calls();
+}
+
+uint32_t luauc_embed_v1_direct_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_direct_calls();
+}
+
+uint32_t luauc_embed_v1_indirect_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_indirect_calls();
 }

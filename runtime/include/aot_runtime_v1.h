@@ -302,6 +302,13 @@ void luauc_runtime_v1_get_upvalue(lua_State *state, uint32_t destination_registe
                                 uint32_t upvalue_index);
 void luauc_runtime_v1_set_upvalue(lua_State *state, uint32_t upvalue_index, uint32_t source_register);
 void luauc_runtime_v1_close_upvalues(lua_State *state, uint32_t first_register);
+void luauc_runtime_v1_reset_counts(void);
+void luauc_runtime_v1_count_direct_call(void);
+void luauc_runtime_v1_count_indirect_call(void);
+uint32_t luauc_runtime_v1_helper_calls(void);
+uint32_t luauc_runtime_v1_trampoline_calls(void);
+uint32_t luauc_runtime_v1_direct_calls(void);
+uint32_t luauc_runtime_v1_indirect_calls(void);
 uint32_t luauc_runtime_v1_call(lua_State *state, uint32_t function_register, int32_t parameter_count,
                              int32_t result_count);
 void luauc_runtime_v1_prep_varargs(lua_State *state, uint32_t fixed_parameter_count);

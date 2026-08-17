@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "generator_version": "luauc-runtime-measurement-v1",
+  "baseline_commit": "adbfbd505100ad7100b56101657b2e8e4cd648ed",
+  "input": {
+    "number": 7,
+    "text": "beta",
+    "warmup": 8,
+    "samples": 24
+  },
+  "programs": {
+    "embed_product": {
+      "compiled": {
+        "p50_ns": 3781414,
+        "p90_ns": 5763229,
+        "samples": 24,
+        "result_number": 641,
+        "result_text": "beta:8:2/1/11:missing",
+        "helper_calls": 16080,
+        "trampoline_calls": 1632,
+        "direct_calls": 0,
+        "indirect_calls": 0
+      },
+      "interpreted": {
+        "p50_ns": 978843,
+        "p90_ns": 1095277,
+        "samples": 24
+      }
+    },
+    "call_graph": {
+      "compiled": {
+        "p50_ns": 134879,
+        "p90_ns": 315006,
+        "samples": 24,
+        "result_number": 67,
+        "result_text": "beta",
+        "helper_calls": 864,
+        "trampoline_calls": 216,
+        "direct_calls": 0,
+        "indirect_calls": 0
+      },
+      "interpreted": {
+        "p50_ns": 11824,
+        "p90_ns": 34071,
+        "samples": 24
+      }
+    },
+    "table_churn": {
+      "compiled": {
+        "p50_ns": 250790,
+        "p90_ns": 740615,
+        "samples": 24,
+        "result_number": 8,
+        "result_text": "beta",
+        "helper_calls": 1152,
+        "trampoline_calls": 0,
+        "direct_calls": 0,
+        "indirect_calls": 0
+      },
+      "interpreted": {
+        "p50_ns": 13625,
+        "p90_ns": 22565,
+        "samples": 24
+      }
+    }
+  }
+}

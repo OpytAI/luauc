@@ -36,6 +36,11 @@ _PRODUCT_LUAU = [
     "userdata_store.luau",
 ]
 
+_MEASURE_LUAU = [
+    "call_graph.luau",
+    "table_churn.luau",
+]
+
 exports_files(
     glob(["*.luau"]),
     visibility = ["//visibility:public"],
@@ -59,5 +64,5 @@ js_library(
         srcs = [src],
         visibility = ["//visibility:public"],
     )
-    for src in _LEDGER_LUAU + _PRODUCT_LUAU
+    for src in _LEDGER_LUAU + _PRODUCT_LUAU + _MEASURE_LUAU
 ]

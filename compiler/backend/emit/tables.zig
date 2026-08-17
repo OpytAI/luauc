@@ -1321,7 +1321,8 @@ pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruct
     const pointer = try self.operand(instruction_value, 0);
     const table_reg = (try self.loadedPointerRegister(pointer)) orelse
         ((try self.rootedTablePointerRegister(pointer)) orelse return Error.UnsupportedControlFlow);
-    const dest_reg = (try tableLenDestination(self, instruction_id)) orelse return Error.UnsupportedControlFlow;
+    const dest_reg = (try tableLenDestination(self, instruction_id, table_reg)) orelse
+        return Error.UnsupportedControlFlow;
     try self.emitPlainTableLen(dest_reg, table_reg);
     try self.body.localGet(self.allocator, self.base_local);
     try self.body.f64Load(self.allocator, 3, dest_reg * tvalue_size);
@@ -1329,7 +1330,19 @@ pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruct
     try self.emitInstructionResultSet(instruction_id);
 }
 
-fn tableLenDestination(self: anytype, table_len_id: u32) Error!?u32 {
+fn storedLenRegister(self: anytype, store: snapshot_v1.IrInstruction, convert_id: u32) Error!?u32 {
+    if (store.operand_count != 2)
+        return null;
+    if (store.command != .store_double and store.command != .store_tvalue and
+        store.command != .store_split_tvalue)
+        return null;
+    const stored = try self.operand(store, 1);
+    if (stored.kind != .instruction or stored.value != convert_id)
+        return null;
+    return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+}
+
+fn tableLenDestination(self: anytype, table_len_id: u32, table_reg: u32) Error!?u32 {
     if (self.plan.plainLenAt(table_len_id)) |fact|
         return fact.dest_reg;
     if (table_len_id + 1 >= self.function.instruction_count)
@@ -1340,18 +1353,13 @@ fn tableLenDestination(self: anytype, table_len_id: u32) Error!?u32 {
     const converted = try self.operand(convert, 0);
     if (converted.kind != .instruction or converted.value != table_len_id)
         return null;
-    if (table_len_id + 2 >= self.function.instruction_count)
-        return null;
-    const store = try self.instruction(table_len_id + 2);
-    if (store.command == .store_double and store.operand_count == 2) {
-        const stored = try self.operand(store, 1);
-        if (stored.kind == .instruction and stored.value == table_len_id + 1)
-            return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+    var cursor = table_len_id + 2;
+    const limit = @min(self.function.instruction_count, table_len_id + 8);
+    while (cursor < limit) : (cursor += 1) {
+        const dest = try storedLenRegister(self, try self.instruction(cursor), table_len_id + 1);
+        if (dest) |register|
+            return register;
     }
-    if (store.command == .store_tvalue and store.operand_count == 2) {
-        const stored = try self.operand(store, 1);
-        if (stored.kind == .instruction and stored.value == table_len_id + 1)
-            return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
-    }
+    _ = table_reg;
     return null;
 }

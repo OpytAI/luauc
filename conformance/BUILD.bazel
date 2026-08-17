@@ -1,0 +1,5 @@
+test_suite(
+    name = "runtime_measurement_test",
+    tests = ["//tools:runtime_measurement_test"],
+    visibility = ["//visibility:public"],
+)

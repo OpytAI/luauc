@@ -111,7 +111,9 @@ pub noinline fn emitForwardTableBarrier(
     const table = try self.operand(instruction_value, 0);
     const source = try self.operand(instruction_value, 1);
     const known_tag = try self.operand(instruction_value, 2);
-    if (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value) or
+    if (table.kind != .instruction or
+        (!self.plan.isProvenTablePointer(table.value) and
+            try self.loadedPointerRegister(table) == null) or
         source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
         (known_tag.kind != .undef and known_tag.kind != .constant))
         return Error.UnsupportedControlFlow;

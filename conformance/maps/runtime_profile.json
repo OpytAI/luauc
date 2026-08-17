@@ -5,9 +5,9 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "65331dc7d2821c6ec8df07225183590a5dae4a0be2ddd97b1cecf6c6391d698b",
   "input_sha256": {
-    "profile": "ed294b542e786201e6f5d0da9897ee51f60ea904f14f09e0acc70bf936388f23",
-    "policy": "0ef5bf8353a1393734fe0b387f76f6758e70073079c270d15a3cc61bdfdebf47",
-    "pack": "e5d365cef5bed7c27a2e329b9e141281d2da5db2b7e67395d12a96b7e6d238ad"
+    "profile": "d0a0958458a510629b1bbf87d0f4bebb8816cace20034fc2279dc91b1f0d5a21",
+    "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",
+    "pack": "b46dc8df7fb367efa11273ece5862101d3e6f5acb6ab9ffe8f10bd7f7f0a5135"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
@@ -19,7 +19,7 @@
     "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
     "object_contract_sha256": "daa259f21f18f79ff67a819272ade020c5aba56d9966c9388ace758b1c8bf662",
-    "pack_build_sha256": "f706e0cd5890f9e53df269d0cfed605409143fa6847ca3f61437f8374829b467",
+    "pack_build_sha256": "1b989b23c28ba385c80e20f59aff2102fe3a9c192acdebae3a0ebcb4e00ce30f",
     "license_inventory_sha256": "62db69aaae1bfdcf018c8a83254e4aeb91f1e42d8882e8b4cd224bda6045659c"
   },
   "host_imports": [
@@ -78,6 +78,11 @@
       "role": "dealloc"
     },
     {
+      "name": "luauc_embed_v1_direct_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
       "name": "luauc_embed_v1_gc_finish_mark",
       "kind": "function",
       "role": null
@@ -118,6 +123,16 @@
       "role": null
     },
     {
+      "name": "luauc_embed_v1_helper_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_indirect_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
       "name": "luauc_embed_v1_invoke",
       "kind": "function",
       "role": "invoke"
@@ -136,6 +151,16 @@
       "name": "luauc_embed_v1_protected_call_run",
       "kind": "function",
       "role": "protected_dispatch"
+    },
+    {
+      "name": "luauc_embed_v1_reset_counts",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_trampoline_calls",
+      "kind": "function",
+      "role": null
     },
     {
       "name": "memory",
@@ -396,8 +421,28 @@
       {
         "name": "luauc_embed_v1_barrier_probe",
         "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_reset_counts",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_helper_calls",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_trampoline_calls",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_direct_calls",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_indirect_calls",
+        "kind": "function"
       }
     ]
   },
-  "canonical_hash": "c2302b93a8d71931a393efb9a377d4212ae48f6940ae0a5438283b2e483f2458"
+  "canonical_hash": "1a752f6c8f2ed5521db4f289c78bb9218a0e8cc6b96c57b9f89186bae379c958"
 }

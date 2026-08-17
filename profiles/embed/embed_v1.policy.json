@@ -27,6 +27,11 @@
     { "name": "luauc_embed_v1_gc_restart", "kind": "function" },
     { "name": "luauc_embed_v1_gc_finish_mark", "kind": "function" },
     { "name": "luauc_embed_v1_gc_finish_sweep", "kind": "function" },
-    { "name": "luauc_embed_v1_barrier_probe", "kind": "function" }
+    { "name": "luauc_embed_v1_barrier_probe", "kind": "function" },
+    { "name": "luauc_embed_v1_reset_counts", "kind": "function" },
+    { "name": "luauc_embed_v1_helper_calls", "kind": "function" },
+    { "name": "luauc_embed_v1_trampoline_calls", "kind": "function" },
+    { "name": "luauc_embed_v1_direct_calls", "kind": "function" },
+    { "name": "luauc_embed_v1_indirect_calls", "kind": "function" }
   ]
 }

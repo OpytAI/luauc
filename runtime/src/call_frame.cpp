@@ -28,6 +28,15 @@
 static_assert(LUAUC_RUNTIME_V1_MULTRET == LUA_MULTRET, "Luau MULTRET sentinel drift");
 static_assert(sizeof(TValue) == 16, "strict AOT TValue layout mismatch");
 
+static uint32_t gHelperCalls;
+static uint32_t gTrampolineCalls;
+static uint32_t gDirectCalls;
+static uint32_t gIndirectCalls;
+
+static void countRuntimeHelper() {
+    gHelperCalls++;
+}
+
 static constexpr uint32_t AOT_FASTCALL_NO_OPERAND = UINT32_MAX;
 static constexpr uint64_t AOT_COVERAGE_MAX_HITS = (UINT64_C(1) << 23) - 1;
 
@@ -334,6 +343,7 @@ static void configurePinnedRuntimeFlags(lua_State *L) {
 }
 
 static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
+    countRuntimeHelper();
     if (!L || !L->ci || L->ci <= L->base_ci || !isLua(L->ci) ||
         !(L->ci->flags & LUA_CALLINFO_NATIVE))
         luaG_runerror(L, "strict AOT %s requires an active native Luau frame", operation);
@@ -1869,8 +1879,41 @@ static uint32_t callAotFunction(lua_State *L, StkId function, int32_t resultCoun
     }
 }
 
+extern "C" void luauc_runtime_v1_reset_counts(void) {
+    gHelperCalls = 0;
+    gTrampolineCalls = 0;
+    gDirectCalls = 0;
+    gIndirectCalls = 0;
+}
+
+extern "C" void luauc_runtime_v1_count_direct_call(void) {
+    gDirectCalls++;
+}
+
+extern "C" void luauc_runtime_v1_count_indirect_call(void) {
+    gIndirectCalls++;
+}
+
+extern "C" uint32_t luauc_runtime_v1_helper_calls(void) {
+    return gHelperCalls;
+}
+
+extern "C" uint32_t luauc_runtime_v1_trampoline_calls(void) {
+    return gTrampolineCalls;
+}
+
+extern "C" uint32_t luauc_runtime_v1_direct_calls(void) {
+    return gDirectCalls;
+}
+
+extern "C" uint32_t luauc_runtime_v1_indirect_calls(void) {
+    return gIndirectCalls;
+}
+
 extern "C" uint32_t luauc_runtime_v1_call(lua_State *L, uint32_t functionRegister,
                                         int32_t parameterCount, int32_t resultCount) {
+    countRuntimeHelper();
+    gTrampolineCalls++;
     if (!L || !L->ci || !isLua(L->ci))
         luaG_runerror(L, "strict AOT call helper entered without an active Luau frame");
     if (parameterCount < LUAUC_RUNTIME_V1_MULTRET || resultCount < LUAUC_RUNTIME_V1_MULTRET)

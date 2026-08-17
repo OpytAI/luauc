@@ -12,6 +12,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -264,6 +265,67 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
     return true;
 }
 
+bool invokeQuiet(lua_State *state, int64_t input, const char *label) {
+    lua_State *thread = lua_newthread(state);
+    lua_pushvalue(state, 1);
+    lua_xmove(state, thread, 1);
+    lua_pushinteger(thread, input);
+    lua_pushstring(thread, label);
+
+    int status = lua_resume(thread, state, 2);
+    size_t yieldedSize = 0;
+    uint32_t suspensionCount = 0;
+    while (status == LUA_YIELD && suspensionCount < 64) {
+        const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yieldedSize) : nullptr;
+        if (!yielded || yieldedSize != sizeof("gc-boundary") - 1 ||
+            memcmp(yielded, "gc-boundary", sizeof("gc-boundary") - 1) != 0)
+            return false;
+        lua_settop(thread, 0);
+        lua_gc(state, LUA_GCCOLLECT, 0);
+        status = lua_resume(thread, state, 0);
+        suspensionCount++;
+    }
+    if (status != LUA_OK || lua_gettop(thread) != 2 || !lua_isnumber(thread, -2) || !lua_isstring(thread, -1))
+        return false;
+    lua_settop(state, 1);
+    return true;
+}
+
+uint64_t monotonicNanos() {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return uint64_t(now.tv_sec) * 1000000000ull + uint64_t(now.tv_nsec);
+}
+
+int compareU64(const void *lhs, const void *rhs) {
+    const uint64_t a = *static_cast<const uint64_t *>(lhs);
+    const uint64_t b = *static_cast<const uint64_t *>(rhs);
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+int runMeasure(lua_State *state, int64_t input, const char *label, uint32_t warmup, uint32_t samples) {
+    for (uint32_t index = 0; index < warmup; ++index) {
+        if (!invokeQuiet(state, input, label))
+            return 1;
+    }
+    if (samples == 0 || samples > 4096)
+        return 2;
+    uint64_t times[4096];
+    for (uint32_t index = 0; index < samples; ++index) {
+        const uint64_t start = monotonicNanos();
+        if (!invokeQuiet(state, input, label))
+            return 1;
+        times[index] = monotonicNanos() - start;
+    }
+    qsort(times, samples, sizeof(uint64_t), compareU64);
+    const uint32_t p50 = samples / 2;
+    const uint32_t p90 = (samples * 9) / 10;
+    printf("measure=p50_ns=%llu p90_ns=%llu samples=%u\n",
+           (unsigned long long)times[p50], (unsigned long long)times[p90 < samples ? p90 : samples - 1],
+           samples);
+    return 0;
+}
+
 } // namespace
 
 static GCObject *stackCollectable(lua_State *L, int index) {
@@ -435,6 +497,29 @@ int runSingleSource(const char *path) {
     return ok ? 0 : 1;
 }
 
+int runMeasureSource(const char *path, int64_t input, const char *label, uint32_t warmup,
+                     uint32_t samples) {
+    std::string source = readFile(path);
+    if (source.empty())
+        return 2;
+    lua_State *state = luaL_newstate();
+    if (!state)
+        return 2;
+    luaL_openlibs(state);
+    publishEmbedImport(state);
+    luaL_sandbox(state);
+    installWritableProxyGlobals(state);
+    if (!pushChunk(state, source, "@source.luau") || lua_pcall(state, 0, 1, 0) != LUA_OK ||
+        !lua_isfunction(state, -1)) {
+        reportStackError(state, "load source");
+        lua_close(state);
+        return 1;
+    }
+    const int status = runMeasure(state, input, label, warmup, samples);
+    lua_close(state);
+    return status;
+}
+
 int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "--barrier-strip") == 0)
         return runBarrierStrip();
@@ -442,7 +527,11 @@ int main(int argc, char **argv) {
         return runHookOnly(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--source") == 0)
         return runSingleSource(argv[2]);
-    if (argc != 5) {
+    if (argc == 7 && strcmp(argv[1], "--measure") == 0)
+        return runMeasureSource(argv[2], atoll(argv[3]), argv[4], uint32_t(atoi(argv[5])),
+                                uint32_t(atoi(argv[6])));
+    const bool measureProduct = argc == 10 && strcmp(argv[1], "--measure-product") == 0;
+    if (!measureProduct && argc != 5) {
         fprintf(stderr,
                 "usage: luauc-pinned-interpreter <lib.luau> <main.luau> <proto_identity.luau> "
                 "<userdata_hooks.luau>\n"
@@ -450,10 +539,11 @@ int main(int argc, char **argv) {
                 "       luauc-pinned-interpreter --source <file.luau>\n");
         return 2;
     }
-    std::string libSource = readFile(argv[1]);
-    std::string mainSource = readFile(argv[2]);
-    std::string protoIdentitySource = readFile(argv[3]);
-    std::string userdataHooksSource = readFile(argv[4]);
+    const int fileBase = measureProduct ? 2 : 1;
+    std::string libSource = readFile(argv[fileBase]);
+    std::string mainSource = readFile(argv[fileBase + 1]);
+    std::string protoIdentitySource = readFile(argv[fileBase + 2]);
+    std::string userdataHooksSource = readFile(argv[fileBase + 3]);
     if (libSource.empty() || mainSource.empty() || protoIdentitySource.empty() ||
         userdataHooksSource.empty()) {
         fprintf(stderr, "failed to read source corpus\n");
@@ -495,6 +585,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (measureProduct) {
+        const int status = runMeasure(state, atoll(argv[6]), argv[7], uint32_t(atoi(argv[8])),
+                                      uint32_t(atoi(argv[9])));
+        lua_close(state);
+        return status;
+    }
     bool ok = invoke(state, 1, "alpha") && invoke(state, 7, "beta") && invoke(state, -4, "gamma");
     lua_close(state);
     return ok ? 0 : 1;

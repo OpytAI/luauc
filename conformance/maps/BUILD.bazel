@@ -14,6 +14,7 @@ exports_files([
     "luauc_runtime_link_reference.json",
     "luauc_runtime_objects.json",
     "luauc_runtime_sources.json",
+    "runtime_measurement.json",
     "runtime_profile.json",
     "runtime_symbols.json",
     "wasm_features.json",
@@ -103,6 +104,12 @@ js_library(
 js_library(
     name = "runtime_symbols_json",
     srcs = ["runtime_symbols.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "runtime_measurement_json",
+    srcs = ["runtime_measurement.json"],
     visibility = ["//visibility:public"],
 )
 

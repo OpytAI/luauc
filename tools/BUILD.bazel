@@ -9,6 +9,7 @@ exports_files([
     "generate_runtime_symbols.mjs",
     "generate_wasm_features.mjs",
     "ir_ledger.mjs",
+    "measure_runtime.mjs",
     "wasm_bytes.mjs",
 ])
 
@@ -198,6 +199,45 @@ js_test(
     entry_point = "compiler_build_digest.test.mjs",
     env = {
         "LUAUC_COMPILER_BUILD_DIGEST": "$(rlocationpath //compiler:compiler_build_digest_json)",
+    },
+)
+
+js_test(
+    name = "runtime_measurement_test",
+    size = "large",
+    visibility = ["//visibility:public"],
+    data = [
+        "measure_runtime.mjs",
+        "runtime_measurement.test.mjs",
+        "//compiler:compiler_wasm",
+        "//conformance/interpreter:pinned_interpreter",
+        "//conformance/maps:runtime_measurement_json",
+        "//conformance/sources:call_graph",
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:embed_main",
+        "//conformance/sources:proto_identity",
+        "//conformance/sources:table_churn",
+        "//conformance/sources:userdata_hooks",
+        "//hosts/js:host",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+    ],
+    entry_point = "runtime_measurement.test.mjs",
+    env = {
+        "LUAUC_BASELINE_COMMIT": "adbfbd505100ad7100b56101657b2e8e4cd648ed",
+        "LUAUC_CALL_GRAPH": "$(rlocationpath //conformance/sources:call_graph)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_LIB": "$(rlocationpath //conformance/sources:embed_lib)",
+        "LUAUC_EMBED_MAIN": "$(rlocationpath //conformance/sources:embed_main)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_HOST_JS": "$(rlocationpath //hosts/js:host)",
+        "LUAUC_MEASURE_RUNTIME": "$(rlocationpath measure_runtime.mjs)",
+        "LUAUC_PINNED_INTERPRETER": "$(rlocationpath //conformance/interpreter:pinned_interpreter)",
+        "LUAUC_PROTO_IDENTITY": "$(rlocationpath //conformance/sources:proto_identity)",
+        "LUAUC_RUNTIME_MEASUREMENT": "$(rlocationpath //conformance/maps:runtime_measurement_json)",
+        "LUAUC_TABLE_CHURN": "$(rlocationpath //conformance/sources:table_churn)",
+        "LUAUC_USERDATA_HOOKS": "$(rlocationpath //conformance/sources:userdata_hooks)",
     },
 )
 
