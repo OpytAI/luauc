@@ -190,15 +190,15 @@ fn clearResult(result: *CompileResult) void {
 }
 
 fn publishDiagnosticRecord(result: *CompileResult, status: u32, module_id: u32, ir_command: u32) void {
-    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_bytes != 0) {
-        const prior: [*]u8 = @ptrFromInt(result.diagnostic_records_ptr);
-        allocator.free(prior[0..result.diagnostic_records_bytes]);
+    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_count != 0) {
+        const prior: [*]compiler_result.DiagnosticRecord = @ptrFromInt(result.diagnostic_records_ptr);
+        allocator.free(prior[0..result.diagnostic_records_count]);
         result.diagnostic_records_ptr = 0;
         result.diagnostic_records_count = 0;
         result.diagnostic_records_bytes = 0;
     }
-    const record = allocator.create(compiler_result.DiagnosticRecord) catch return;
-    record.* = .{
+    const records = allocator.alloc(compiler_result.DiagnosticRecord, 1) catch return;
+    records[0] = .{
         .code = status,
         .module_id = module_id,
         .source_start = 0,
@@ -206,7 +206,7 @@ fn publishDiagnosticRecord(result: *CompileResult, status: u32, module_id: u32, 
         .ir_command = ir_command,
         .reserved = 0,
     };
-    result.diagnostic_records_ptr = @intCast(@intFromPtr(record));
+    result.diagnostic_records_ptr = @intCast(@intFromPtr(records.ptr));
     result.diagnostic_records_count = 1;
     result.diagnostic_records_bytes = compiler_result.diagnostic_record_size;
 }
@@ -428,9 +428,9 @@ pub export fn luauc_v1_result_free(result_pointer: u32) void {
         const bytes: [*]u8 = @ptrFromInt(result.diagnostic);
         allocator.free(bytes[0..result.diagnostic_size]);
     }
-    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_bytes != 0) {
-        const bytes: [*]u8 = @ptrFromInt(result.diagnostic_records_ptr);
-        allocator.free(bytes[0..result.diagnostic_records_bytes]);
+    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_count != 0) {
+        const records: [*]compiler_result.DiagnosticRecord = @ptrFromInt(result.diagnostic_records_ptr);
+        allocator.free(records[0..result.diagnostic_records_count]);
     }
     clearResult(result);
 }

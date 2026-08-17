@@ -28,8 +28,18 @@ const Mock = struct {
     insert_append: ?Range = null,
     concat: ?Range = null,
     table_alloc: ?Range = null,
+    plain_len: ?Range = null,
     plan: struct {
-        pub fn plainLenContaining(_: @This(), _: u32) ?struct { table_len_id: u32, finish: u32 } {
+        owner: ?*const Mock = null,
+        pub fn plainLenContaining(self: @This(), id: u32) ?struct { table_len_id: u32, finish: u32 } {
+            const owner = self.owner orelse return null;
+            const pattern = owner.plain_len orelse return null;
+            return if (id >= pattern.start and id <= pattern.finish)
+                .{ .table_len_id = pattern.start, .finish = pattern.finish }
+            else
+                null;
+        }
+        pub fn instructionBlock(_: @This(), _: u32) ?u32 {
             return null;
         }
     } = .{},
@@ -81,6 +91,15 @@ const Mock = struct {
     pub fn tableAllocationPatternAt(self: Mock, start: u32) error{}!?Range {
         return matchRange(self.table_alloc, start);
     }
+    pub fn integerCreatePatternAt(_: Mock, _: u32) error{}!?struct { check: u32, finish: u32 } {
+        return null;
+    }
+    pub fn linearizedPowPattern(_: Mock, _: u32, _: anytype) error{}!?struct { finish: u32 } {
+        return null;
+    }
+    pub fn typeNamePattern(_: Mock, _: u32, _: bool) error{}!?struct { finish: u32 } {
+        return null;
+    }
 };
 
 fn matchRange(pattern: ?Range, start: u32) ?Range {
@@ -118,7 +137,7 @@ test "later family wins when the higher-priority range does not cover the id" {
     try std.testing.expectEqual(@as(u32, 2), winner.at);
 }
 
-test "all 13 cluster priorities first-win in HEAD order" {
+test "each cluster priority wins when earlier families miss" {
     const kinds = [_]plan_mod.FunctionPlan.ClusterKind{
         .constant_truthy,
         .inline_const_table_get,
@@ -135,27 +154,49 @@ test "all 13 cluster priorities first-win in HEAD order" {
         .table_alloc,
     };
     try std.testing.expectEqual(@as(usize, 13), kinds.len);
-    var commands = nopCommands(4);
-    commands[0] = abi.ir_cmd_check_readonly;
-    commands[1] = abi.ir_cmd_table_len;
-    const ctx = Mock{
-        .function = .{ .instruction_count = commands.len },
-        .commands = &commands,
-        .truthy = .{ .start = 0, .finish = 3 },
-        .const_get = .{ .pattern = .{ .start = 0, .finish = 3 }, .finish = 3 },
-        .array_get = .{ .start = 0, .finish = 3 },
-        .reload = .{ .start = 0, .finish = 3 },
-        .generic_set = .{ .pattern = .{ .start = 0, .finish = 3 }, .finish = 3 },
-        .userdata = .{ .start = 0, .finish = 3 },
-        .literal_set = .{ .start = 0, .finish = 3 },
-        .constant_load = .{ .start = 0, .finish = 3 },
-        .dup_table = .{ .start = 0, .finish = 3 },
-        .insert_append = .{ .start = 0, .finish = 3 },
-        .concat = .{ .start = 0, .finish = 3 },
-        .table_alloc = .{ .start = 0, .finish = 3 },
+    const start_commands = [_]snapshot_v1.IrCommand{
+        .nop,
+        .load_tag,
+        .nop,
+        .nop,
+        .load_tag,
+        .check_gc,
+        abi.ir_cmd_get_slot_node_addr,
+        .nop,
+        .nop,
+        abi.ir_cmd_check_readonly,
+        abi.ir_cmd_table_len,
+        .nop,
+        .nop,
     };
-    const winner = (try plan_mod.matchInstructionCluster(ctx, 0)).?;
-    try std.testing.expectEqual(plan_mod.FunctionPlan.ClusterKind.constant_truthy, winner.kind);
+    const covered = Range{ .start = 0, .finish = 3 };
+    const nested = Nested{ .pattern = covered, .finish = 3 };
+    var priority: usize = 0;
+    while (priority < kinds.len) : (priority += 1) {
+        var commands = nopCommands(4);
+        commands[0] = start_commands[priority];
+        commands[1] = abi.ir_cmd_table_len;
+        var ctx = Mock{
+            .function = .{ .instruction_count = commands.len },
+            .commands = &commands,
+            .truthy = if (priority <= 0) covered else null,
+            .const_get = if (priority <= 1) nested else null,
+            .array_get = if (priority <= 2) covered else null,
+            .reload = if (priority <= 3) covered else null,
+            .generic_set = if (priority <= 4) nested else null,
+            .userdata = if (priority <= 5) covered else null,
+            .literal_set = if (priority <= 6) covered else null,
+            .constant_load = if (priority <= 7) covered else null,
+            .dup_table = if (priority <= 8) covered else null,
+            .insert_append = if (priority <= 9) covered else null,
+            .plain_len = if (priority <= 10) covered else null,
+            .concat = if (priority <= 11) covered else null,
+            .table_alloc = if (priority <= 12) covered else null,
+        };
+        ctx.plan.owner = &ctx;
+        const winner = (try plan_mod.matchInstructionCluster(ctx, 0)).?;
+        try std.testing.expectEqual(kinds[priority], winner.kind);
+    }
 }
 
 test "table insert-append records the TABLE_LEN decoder cursor" {

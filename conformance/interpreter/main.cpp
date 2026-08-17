@@ -273,14 +273,41 @@ int runHookOnly(const char *hooksPath) {
     return ok ? 0 : 1;
 }
 
+int runSingleSource(const char *path) {
+    std::string source = readFile(path);
+    if (source.empty()) {
+        fprintf(stderr, "failed to read source\n");
+        return 2;
+    }
+    lua_State *state = luaL_newstate();
+    if (!state)
+        return 2;
+    luaL_openlibs(state);
+    publishEmbedImport(state);
+    luaL_sandbox(state);
+    installWritableProxyGlobals(state);
+    if (!pushChunk(state, source, "@source.luau") || lua_pcall(state, 0, 1, 0) != LUA_OK ||
+        !lua_isfunction(state, -1)) {
+        reportStackError(state, "load source");
+        lua_close(state);
+        return 1;
+    }
+    const bool ok = invoke(state, 1, "alpha") && invoke(state, 7, "beta") && invoke(state, -4, "gamma");
+    lua_close(state);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--hook-only") == 0)
         return runHookOnly(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--source") == 0)
+        return runSingleSource(argv[2]);
     if (argc != 5) {
         fprintf(stderr,
                 "usage: luauc-pinned-interpreter <lib.luau> <main.luau> <proto_identity.luau> "
                 "<userdata_hooks.luau>\n"
-                "       luauc-pinned-interpreter --hook-only <userdata_hooks.luau>\n");
+                "       luauc-pinned-interpreter --hook-only <userdata_hooks.luau>\n"
+                "       luauc-pinned-interpreter --source <file.luau>\n");
         return 2;
     }
     std::string libSource = readFile(argv[1]);

@@ -93,12 +93,12 @@ const FAMILY_TESTS = Object.freeze({
   compiled_call: "//conformance/tests:calls_test",
   dynamic_array_table: "//conformance/tests:tables_test",
   dynamic_hash_table: "//conformance/tests:tables_test",
-  dynamic_string: "//conformance/tests:operators_test",
+  dynamic_string: "//conformance/tests:tables_test",
   fast_builtins: "//conformance/tests:builtins_test",
   forwarded_capture: "//conformance/tests:closures_test",
   generic_iteration: "//conformance/tests:iteration_test",
   generic_table: "//conformance/tests:tables_test",
-  global_state: "//conformance/tests:operators_test",
+  global_state: "//conformance/tests:tables_test",
   mixed_table: "//conformance/tests:tables_test",
   multi_result_call: "//conformance/tests:calls_test",
   reference_capture: "//conformance/tests:closures_test",
@@ -151,7 +151,7 @@ function executedGates(sourceIds, options) {
 function classify(row, state, spec, generalArm, options) {
   const census = [...state.census_sources];
   if (census.length === 0) {
-    // Isolated Hold is unpublished; BARRIER_OBJ stays partial until PR 14 emits it.
+    // Isolated Hold is unpublished; BARRIER_OBJ stays partial until a color strip exists.
     if (spec.evidence?.kind === "isolated_hold_strip") {
       return { status: "partial", reachability: "published_hook" };
     }

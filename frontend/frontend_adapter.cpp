@@ -105,10 +105,6 @@ static uint8_t userdataNamecallBytecodeType(uint8_t type, const char *member, si
 
 // embed.vec2 contract: Unit = normalize; Mark returns payload[0].
 // Keep frontend_adapter.cpp, interpreter/main.cpp, provider_entry.c identical.
-
-// AOT guards use undef (canonical internal reject) rather than vm_exit so the snapshot never
-// asks the backend to resume bytecode. IrTranslation still emits CHECK_TAG + vm_exit in front
-// of the hook; emitCheckTag treats that userdata vm_exit as the same reject.
 static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
                            int resultReg, int sourceReg, int pcpos) {
     (void)pcpos;

@@ -56,8 +56,6 @@ const buffer = requireFamilyCommands("natural_buffer", source("LUAUC_NATURAL_BUF
 ]);
 if (!integer.length || !bit32.length || !buffer.length)
   throw new Error("natural integer/bit32/buffer sources produced empty objects");
-const seeds = [1, 4, 7];
-if (seeds.length < 3) throw new Error("natural sources need at least three seeds");
 console.log(
   `natural sources: numeric ${numeric.objectSize}, integer ${integer.length}, bit32 ${bit32.length}, buffer ${buffer.length}`,
 );
