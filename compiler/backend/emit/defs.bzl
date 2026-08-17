@@ -12,6 +12,7 @@ def backend_emit_library(name, deps = []):
             "//compiler/ir:frontend_snapshot_v1",
             "//compiler/model:model",
             "//compiler/model:runtime_abi",
+            "//compiler/backend/plan:plan",
             "//compiler/wasm:object",
         ],
     )

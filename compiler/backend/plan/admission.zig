@@ -337,17 +337,7 @@ pub noinline fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: sna
     if (block.kind == .linearized and self.function.entry_block != block_id and
         (self.plan.blockReferences(block_id) orelse return Error.UnsupportedControlFlow) == 0)
         return true;
-    return (try isBypassedStringEqualityBlock(self, block_id)) or
-        (try isBypassedStringLinearizedBlock(self, block_id, block)) or
-        (try isBypassedGenericTableLinearizedBlock(self, block_id, block)) or
-        (try isBypassedGlobalLinearizedBlock(self, block_id, block)) or
-        (try isBypassedPowLinearizedBlock(self, block_id, block)) or
-        (try isBypassedConstantArithmeticLinearizedBlock(self, block_id, block)) or
-        (try isBypassedPlainTableNamecallBlock(self, block_id)) or
-        (try isOwnedDynamicLengthFallbackBlock(self, block_id, block)) or
-        (try isOwnedSemanticTableFallbackBlock(self, block_id, block)) or
-        (try isBypassedXnextFastPreparationBlock(self, block_id)) or
-        (try isBypassedSpecializedIpairsPublishBlock(self, block_id));
+    return self.plan.isPlannedBypass(block_id);
 }
 
 // Moved from compiler/backend/emit/control.zig:497

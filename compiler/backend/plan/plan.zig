@@ -3,6 +3,8 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const recognize = @import("luauc_backend_recognize");
+const recognize_tables = @import("luauc_backend_recognize_tables");
+const recognize_calls = @import("luauc_backend_recognize_calls");
 
 const Error = model.Error;
 
@@ -70,6 +72,8 @@ pub const FunctionPlan = struct {
     cluster_index: []u32,
     clusters: []Cluster,
     continuation_sites: []u32,
+    block_index: recognize_tables.BlockIndex,
+    call_facts: recognize_calls.CallFacts,
 
     pub const ClusterKind = enum {
         constant_truthy,
@@ -459,6 +463,8 @@ pub const FunctionPlan = struct {
             .cluster_index = cluster_index,
             .clusters = &.{},
             .continuation_sites = &.{},
+            .block_index = .{},
+            .call_facts = .{},
         };
     }
 
@@ -484,6 +490,8 @@ pub const FunctionPlan = struct {
             self.allocator.free(self.clusters);
         if (self.continuation_sites.len != 0)
             self.allocator.free(self.continuation_sites);
+        self.block_index.deinit();
+        self.call_facts.deinit();
         self.facts.deinit();
         self.* = undefined;
     }
@@ -524,6 +532,21 @@ pub const FunctionPlan = struct {
             try clusters.append(self.allocator, matched);
         }
         self.clusters = try clusters.toOwnedSlice(self.allocator);
+    }
+
+    pub fn indexBlocks(self: *FunctionPlan, ctx: anytype) Error!void {
+        self.block_index.deinit();
+        self.call_facts.deinit();
+        self.block_index = try recognize_tables.indexBlocks(self.allocator, ctx);
+        self.call_facts = try recognize_calls.collectCallFacts(self.allocator, ctx);
+    }
+
+    pub fn blockKind(self: FunctionPlan, block_id: u32) recognize_tables.BlockKind {
+        return self.block_index.kind(block_id);
+    }
+
+    pub fn isPlannedBypass(self: FunctionPlan, block_id: u32) bool {
+        return self.block_index.isBypassed(block_id);
     }
 
     pub fn plainLenAt(self: FunctionPlan, instruction_id: u32) ?recognize.PlainLen {

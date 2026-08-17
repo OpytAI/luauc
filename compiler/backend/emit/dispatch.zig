@@ -541,44 +541,78 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
     return terminated;
 }
 pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
-    if (try self.stringEqualityPattern(block)) |pattern|
-        return self.emitStringEqualityBlock(block_id, block, pattern);
-    if (try self.constantPowPattern(block)) |pattern|
-        return self.emitConstantArithmeticBlock(block_id, block, pattern);
-    if (try self.constantArithmeticPattern(block)) |pattern|
-        return self.emitConstantArithmeticBlock(block_id, block, pattern);
-    if (try self.powPattern(block)) |pattern|
-        return self.emitPowBlock(block_id, block, pattern);
-    if (try self.plainTableNamecallPattern(block)) |pattern|
-        return self.emitPlainTableNamecallBlock(block_id, block, pattern);
-    if (try self.supportsOrdinaryCallFallback(block))
-        return emitDispatchBlock(self, block_id, block);
-    if (try self.isFastcallFallback(block_id, block))
-        return self.emitFastcallFallbackBlock(block_id, block);
-    if (try self.specializedIpairsPattern(block)) |pattern|
-        return self.emitGenericIterationBlock(block_id, pattern, true);
-    if (try self.genericIterationPattern(block)) |pattern|
-        return self.emitGenericIterationBlock(block_id, pattern, true);
-    if (try self.genericIterationFallbackPattern(block)) |pattern|
-        return self.emitGenericIterationBlock(block_id, pattern, false);
-    if (try self.xnextFastPreparationPattern(block)) |pattern|
-        return self.emitXnextFastPreparationBlock(block_id, block, pattern);
-    if (try self.xnextPreparationPattern(block)) |pattern|
-        return self.emitXnextPreparationBlock(block_id, pattern);
-    if (try self.globalPattern(block)) |pattern|
-        return self.emitGlobalOperationBlock(block_id, block, pattern);
-    if (try self.genericTablePattern(block)) |pattern|
-        return self.emitGenericTableOperationBlock(block_id, block, pattern);
-    if (try self.stringTablePattern(block)) |pattern|
-        return self.emitStringTableOperationBlock(block_id, block, pattern);
-    if (try self.dynamicLengthPattern(block)) |pattern|
-        return self.emitDynamicLengthBlock(block_id, block, pattern);
-    if (try self.semanticArrayOperation(block)) |operation|
-        return self.emitArrayOperationBlock(block_id, block, operation.pattern, operation.kind);
-    if (block.kind == .fallback and !try admission.supportsFallback(self, block))
-        return Error.UnsupportedControlFlow;
-
-    return emitDispatchBlock(self, block_id, block);
+    switch (self.plan.blockKind(block_id)) {
+        .string_equality => {
+            const pattern = (try self.stringEqualityPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitStringEqualityBlock(block_id, block, pattern);
+        },
+        .constant_pow => {
+            const pattern = (try self.constantPowPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitConstantArithmeticBlock(block_id, block, pattern);
+        },
+        .constant_arith => {
+            const pattern = (try self.constantArithmeticPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitConstantArithmeticBlock(block_id, block, pattern);
+        },
+        .pow => {
+            const pattern = (try self.powPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitPowBlock(block_id, block, pattern);
+        },
+        .namecall => {
+            const pattern = (try self.plainTableNamecallPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitPlainTableNamecallBlock(block_id, block, pattern);
+        },
+        .ordinary_call_fallback, .fastcall_fallback => {
+            if (self.plan.blockKind(block_id) == .fastcall_fallback)
+                return self.emitFastcallFallbackBlock(block_id, block);
+            return emitDispatchBlock(self, block_id, block);
+        },
+        .specialized_ipairs => {
+            const pattern = (try self.specializedIpairsPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericIterationBlock(block_id, pattern, true);
+        },
+        .generic_iteration => {
+            const pattern = (try self.genericIterationPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericIterationBlock(block_id, pattern, true);
+        },
+        .generic_iteration_fallback => {
+            const pattern = (try self.genericIterationFallbackPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericIterationBlock(block_id, pattern, false);
+        },
+        .xnext_fast => {
+            const pattern = (try self.xnextFastPreparationPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitXnextFastPreparationBlock(block_id, block, pattern);
+        },
+        .xnext_prep => {
+            const pattern = (try self.xnextPreparationPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitXnextPreparationBlock(block_id, pattern);
+        },
+        .global => {
+            const pattern = (try self.globalPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGlobalOperationBlock(block_id, block, pattern);
+        },
+        .generic_table => {
+            const pattern = (try self.genericTablePattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericTableOperationBlock(block_id, block, pattern);
+        },
+        .string_table => {
+            const pattern = (try self.stringTablePattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitStringTableOperationBlock(block_id, block, pattern);
+        },
+        .dynamic_length => {
+            const pattern = (try self.dynamicLengthPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitDynamicLengthBlock(block_id, block, pattern);
+        },
+        .semantic_array => {
+            const operation = (try self.semanticArrayOperation(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitArrayOperationBlock(block_id, block, operation.pattern, operation.kind);
+        },
+        .dispatch, .none => {
+            if (block.kind == .fallback and !try admission.supportsFallback(self, block))
+                return Error.UnsupportedControlFlow;
+            return emitDispatchBlock(self, block_id, block);
+        },
+    }
 }
 fn emitDispatchBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
     try self.body.localGet(self.allocator, self.dispatch_local);

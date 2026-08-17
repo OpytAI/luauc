@@ -13,12 +13,36 @@ zig_library(
 )
 
 zig_library(
+    name = "recognize_tables",
+    main = "recognize_tables.zig",
+    import_name = "luauc_backend_recognize_tables",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+    ],
+)
+
+zig_library(
+    name = "recognize_calls",
+    main = "recognize_calls.zig",
+    import_name = "luauc_backend_recognize_calls",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+    ],
+)
+
+zig_library(
     name = "plan",
     main = "plan.zig",
     import_name = "luauc_backend_plan",
     visibility = ["//visibility:public"],
     deps = [
         ":recognize",
+        ":recognize_calls",
+        ":recognize_tables",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:model",
         "//compiler/model:runtime_abi",

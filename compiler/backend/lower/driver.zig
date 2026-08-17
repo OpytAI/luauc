@@ -234,6 +234,10 @@ fn lowerFunction(
         diagnostics.recordPhase(@errorName(err), "cluster index");
         return err;
     };
+    plan.indexBlocks(context) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "block index");
+        return err;
+    };
     context.classifyBuiltinNumberLoads() catch |err| {
         diagnostics.recordPhase(@errorName(err), "value classification");
         return err;
