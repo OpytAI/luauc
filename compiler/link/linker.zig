@@ -113,6 +113,7 @@ const relocation = struct {
     const table_index_i32: u8 = 2;
     const memory_addr_sleb: u8 = 4;
     const memory_addr_i32: u8 = 5;
+    const type_index_leb: u8 = 6;
 };
 
 const symbol_flag_undefined: u32 = 0x10;
@@ -705,7 +706,7 @@ fn parseRelocations(allocator: std.mem.Allocator, payload: []const u8, expected_
         const offset = try reader.readUleb32();
         const index = try reader.readUleb32();
         const addend = switch (kind) {
-            relocation.function_index_leb, relocation.table_index_i32 => 0,
+            relocation.function_index_leb, relocation.table_index_i32, relocation.type_index_leb => 0,
             relocation.memory_addr_sleb, relocation.memory_addr_i32 => try reader.readSleb32(),
             else => return Error.UnsupportedRelocation,
         };
@@ -1222,6 +1223,11 @@ fn writePaddedSleb32(destination: []u8, value: i32) Error!void {
 fn applyRelocations(object: *ObjectModel, resolved: *const Resolved) Error!void {
     for (object.code_relocations.items) |item| switch (item.kind) {
         relocation.function_index_leb => try writePaddedUleb32(try locateBody(object.bodies.items, item.offset, 5), try symbolFunction(object, resolved, item.index)),
+        relocation.type_index_leb => {
+            if (item.index >= resolved.type_map.len)
+                return Error.UnsupportedRelocation;
+            try writePaddedUleb32(try locateBody(object.bodies.items, item.offset, 5), resolved.type_map[item.index]);
+        },
         relocation.memory_addr_sleb => {
             const address = try symbolMemoryAddress(object, resolved, item.index, item.addend);
             try writePaddedSleb32(try locateBody(object.bodies.items, item.offset, 5), @bitCast(address));

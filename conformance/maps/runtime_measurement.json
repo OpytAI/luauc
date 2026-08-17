@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generator_version": "luauc-runtime-measurement-v1",
-  "baseline_commit": "adbfbd505100ad7100b56101657b2e8e4cd648ed",
+  "baseline_commit": "8492d5957f1a5212c8c787cfffae6ea47c1ae404",
   "input": {
     "number": 7,
     "text": "beta",
@@ -11,44 +11,44 @@
   "programs": {
     "embed_product": {
       "compiled": {
-        "p50_ns": 3781414,
-        "p90_ns": 5763229,
+        "p50_ns": 1455122,
+        "p90_ns": 1857796,
         "samples": 24,
         "result_number": 641,
         "result_text": "beta:8:2/1/11:missing",
-        "helper_calls": 16080,
-        "trampoline_calls": 1632,
+        "helper_calls": 16704,
+        "trampoline_calls": 0,
         "direct_calls": 0,
-        "indirect_calls": 0
+        "indirect_calls": 888
       },
       "interpreted": {
-        "p50_ns": 978843,
-        "p90_ns": 1095277,
+        "p50_ns": 259662,
+        "p90_ns": 494005,
         "samples": 24
       }
     },
     "call_graph": {
       "compiled": {
-        "p50_ns": 134879,
-        "p90_ns": 315006,
+        "p50_ns": 91754,
+        "p90_ns": 179751,
         "samples": 24,
         "result_number": 67,
         "result_text": "beta",
-        "helper_calls": 864,
-        "trampoline_calls": 216,
-        "direct_calls": 0,
-        "indirect_calls": 0
+        "helper_calls": 1056,
+        "trampoline_calls": 0,
+        "direct_calls": 168,
+        "indirect_calls": 24
       },
       "interpreted": {
-        "p50_ns": 11824,
-        "p90_ns": 34071,
+        "p50_ns": 6083,
+        "p90_ns": 11420,
         "samples": 24
       }
     },
     "table_churn": {
       "compiled": {
-        "p50_ns": 250790,
-        "p90_ns": 740615,
+        "p50_ns": 138468,
+        "p90_ns": 275013,
         "samples": 24,
         "result_number": 8,
         "result_text": "beta",
@@ -58,8 +58,8 @@
         "indirect_calls": 0
       },
       "interpreted": {
-        "p50_ns": 13625,
-        "p90_ns": 22565,
+        "p50_ns": 9397,
+        "p90_ns": 16638,
         "samples": 24
       }
     }

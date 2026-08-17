@@ -5,8 +5,8 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "65331dc7d2821c6ec8df07225183590a5dae4a0be2ddd97b1cecf6c6391d698b",
   "input_sha256": {
-    "compiler": "9087bd598aa26010ffd9aa7e60569fab864fe6f371e23363d21e9bce3a888eed",
-    "pack": "b46dc8df7fb367efa11273ece5862101d3e6f5acb6ab9ffe8f10bd7f7f0a5135",
+    "compiler": "12d9296b24fccf63d55d8e7a126edd9ff2f7bc01639fdf212e621bdb2f129219",
+    "pack": "94fdebddc05978db9264c77c40e37f6ef4f029efe6738af06841bd3818752479",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "permitted": [
@@ -35,7 +35,7 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "9087bd598aa26010ffd9aa7e60569fab864fe6f371e23363d21e9bce3a888eed",
+      "sha256": "12d9296b24fccf63d55d8e7a126edd9ff2f7bc01639fdf212e621bdb2f129219",
       "export_names": [
         "luauc_v1_alloc",
         "luauc_v1_compile",
@@ -47,7 +47,7 @@
         "memory"
       ],
       "import_names": [],
-      "function_count": 3224,
+      "function_count": 3239,
       "memory_min": 1024,
       "features": [
         "bulk-memory",
@@ -61,7 +61,7 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "b46dc8df7fb367efa11273ece5862101d3e6f5acb6ab9ffe8f10bd7f7f0a5135",
+      "sha256": "94fdebddc05978db9264c77c40e37f6ef4f029efe6738af06841bd3818752479",
       "export_names": [
         "__stack_pointer",
         "_start",
@@ -107,6 +107,8 @@
         "luauc_runtime_v1_closure_matches_proto_id",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_concat",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_coverage_hit",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_do_len",
@@ -115,6 +117,7 @@
         "luauc_runtime_v1_dupclosure_capture",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_fastcall",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
         "luauc_runtime_v1_forg_loop_call",
         "luauc_runtime_v1_forg_loop_finish",
@@ -137,6 +140,7 @@
         "luauc_runtime_v1_newclosure_empty",
         "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
+        "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_program_arena",
         "luauc_runtime_v1_program_arena_capacity",
         "luauc_runtime_v1_program_pointer",
@@ -167,7 +171,7 @@
         "luauc_embed_v1.protected_call",
         "luauc_embed_v1.set_throw"
       ],
-      "function_count": 1044,
+      "function_count": 1048,
       "memory_min": 1024,
       "features": [
         "bulk-memory",
@@ -197,5 +201,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "58ecdfbdc7d23dd2545bc3b140b37fe6ef199b95a5f4e81be70e8d3cb2f9b604"
+  "canonical_hash": "d304d518653247d20dc29f649ecc8a1ed26ead81bde474ea9de995da7cf9b03a"
 }

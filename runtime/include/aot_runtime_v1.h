@@ -25,7 +25,14 @@ enum LuaucRuntimeStatusV1 {
     LUAUC_RUNTIME_V1_UNSUPPORTED_TYPE = 1,
     LUAUC_RUNTIME_V1_INTERNAL_ERROR = 2,
     LUAUC_RUNTIME_V1_YIELDED = 3,
+    LUAUC_RUNTIME_V1_PREPARED = 4,
 };
+
+typedef struct LuaucRuntimePreparedCallV1 {
+    uint32_t status;
+    uint32_t table_index;
+    const LuaucRuntimeProtoV1 *metadata;
+} LuaucRuntimePreparedCallV1;
 
 enum LuaucRuntimeProtoFlagsV1 {
     LUAUC_AOT_PROTO_V1_ROOT = 1u << 0,
@@ -309,6 +316,9 @@ uint32_t luauc_runtime_v1_helper_calls(void);
 uint32_t luauc_runtime_v1_trampoline_calls(void);
 uint32_t luauc_runtime_v1_direct_calls(void);
 uint32_t luauc_runtime_v1_indirect_calls(void);
+const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_call(
+    lua_State *state, uint32_t function_register, int32_t parameter_count, int32_t result_count);
+void luauc_runtime_v1_finish_compiled_call(lua_State *state);
 uint32_t luauc_runtime_v1_call(lua_State *state, uint32_t function_register, int32_t parameter_count,
                              int32_t result_count);
 void luauc_runtime_v1_prep_varargs(lua_State *state, uint32_t fixed_parameter_count);

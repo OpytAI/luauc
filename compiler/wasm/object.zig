@@ -57,6 +57,7 @@ pub const relocation = struct {
     pub const table_index_i32: u8 = 2;
     pub const memory_addr_sleb: u8 = 4;
     pub const memory_addr_i32: u8 = 5;
+    pub const type_index_leb: u8 = 6;
 };
 
 const ImportFunction = struct {
@@ -305,6 +306,18 @@ pub const Body = struct {
         });
     }
 
+    pub fn callIndirect(self: *Body, allocator: std.mem.Allocator, type_index: u32, table_index: u32) !void {
+        try self.bytes.append(allocator, 0x11);
+        const body_offset: u32 = @intCast(self.bytes.items.len);
+        try appendPaddedUleb32(&self.bytes, allocator, type_index);
+        try self.relocations.append(allocator, .{
+            .kind = relocation.type_index_leb,
+            .body_offset = body_offset,
+            .symbol_index = type_index,
+        });
+        try appendUleb(&self.bytes, allocator, table_index);
+    }
+
     fn blockOp(self: *Body, allocator: std.mem.Allocator, opcode_byte: u8) !void {
         try self.bytes.append(allocator, opcode_byte);
         try self.bytes.append(allocator, 0x40);
@@ -437,6 +450,15 @@ pub const Object = struct {
         const function_index: u32 = @intCast(self.imports.items.len + self.functions.items.len - 1);
         const symbol_index: u32 = function_index;
         return .{ .function_index = function_index, .symbol_index = symbol_index, .type_index = type_index };
+    }
+
+    pub fn pendingFunctionRef(self: *const Object, type_index: u32) !FunctionRef {
+        if (type_index >= self.types.items.len)
+            return Error.InvalidTypeIndex;
+        if (self.functions.items.len == std.math.maxInt(u32) - self.imports.items.len)
+            return Error.TooManyFunctions;
+        const function_index: u32 = @intCast(self.imports.items.len + self.functions.items.len);
+        return .{ .function_index = function_index, .symbol_index = function_index, .type_index = type_index };
     }
 
     pub fn defineData(
@@ -691,6 +713,11 @@ pub const Object = struct {
         try appendCustomSection(&output, self.allocator, "linking", linking_payload.items);
 
         if (code_relocations.items.len != 0) {
+            std.mem.sort(Body.Relocation, code_relocations.items, {}, struct {
+                fn lessThan(_: void, lhs: Body.Relocation, rhs: Body.Relocation) bool {
+                    return lhs.body_offset < rhs.body_offset;
+                }
+            }.lessThan);
             var reloc_payload: std.ArrayList(u8) = .empty;
             defer reloc_payload.deinit(self.allocator);
             try appendUleb(&reloc_payload, self.allocator, code_section_index);

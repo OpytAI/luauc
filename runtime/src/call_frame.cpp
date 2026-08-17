@@ -1825,6 +1825,82 @@ extern "C" void luauc_runtime_v1_close_upvalues(lua_State *L, uint32_t firstRegi
         luaF_close(L, first);
 }
 
+static LuaucRuntimePreparedCallV1 gPreparedCall;
+
+extern "C" const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_call(
+    lua_State *L, uint32_t functionRegister, int32_t parameterCount, int32_t resultCount) {
+    countRuntimeHelper();
+    gPreparedCall = {};
+    if (!L || !L->ci || !isLua(L->ci))
+        luaG_runerror(L, "strict AOT prepared call entered without an active Luau frame");
+    if (parameterCount < LUAUC_RUNTIME_V1_MULTRET || resultCount < LUAUC_RUNTIME_V1_MULTRET)
+        luaG_runerror(L, "strict AOT prepared call rejected %d parameters and %d results",
+                      parameterCount, resultCount);
+
+    Closure *caller = clvalue(L->ci->func);
+    Proto *callerProto = caller->l.p;
+    if (functionRegister >= callerProto->maxstacksize)
+        luaG_runerror(L, "strict AOT prepared call target is outside the compiled caller frame");
+
+    StkId function = L->base + functionRegister;
+    if (parameterCount == LUAUC_RUNTIME_V1_MULTRET) {
+        if (L->top < function + 1)
+            luaG_runerror(L, "strict AOT prepared dynamic call starts above the live stack top");
+    } else if (uint32_t(parameterCount) >= uint32_t(callerProto->maxstacksize) - functionRegister) {
+        luaG_runerror(L, "strict AOT prepared fixed call arguments exceed the compiled caller frame");
+    }
+    if (resultCount != LUAUC_RUNTIME_V1_MULTRET &&
+        uint32_t(resultCount) > uint32_t(callerProto->maxstacksize) - functionRegister)
+        luaG_runerror(L, "strict AOT prepared fixed call results exceed the compiled caller frame");
+
+    if (parameterCount != LUAUC_RUNTIME_V1_MULTRET)
+        L->top = function + parameterCount + 1;
+    const int precallStatus = luau_precall(L, function, resultCount);
+    if (precallStatus == PCRC) {
+        if (resultCount != LUA_MULTRET)
+            L->top = L->ci->top;
+        luaC_checkGC(L);
+        gPreparedCall.status = LUAUC_RUNTIME_V1_OK;
+        return &gPreparedCall;
+    }
+    if (precallStatus == PCRYIELD) {
+        if (!validCallSuspension(L) && !validScheduledReentrySuspension(L))
+            luaG_runerror(L,
+                          "strict AOT prepared call returned PCRYIELD without an installed C suspension");
+        gPreparedCall.status = LUAUC_RUNTIME_V1_YIELDED;
+        return &gPreparedCall;
+    }
+    if (precallStatus != PCRLUA)
+        luaG_runerror(L, "strict AOT prepared call received invalid precall status %d", precallStatus);
+
+    CallInfo *calleeFrame = L->ci;
+    if (!calleeFrame || !ttisfunction(calleeFrame->func) || clvalue(calleeFrame->func)->isC)
+        luaG_runerror(L, "strict AOT prepared call did not install a Luau callee frame");
+
+    Closure *callee = clvalue(calleeFrame->func);
+    const LuaucRuntimeProtoV1 *metadata =
+        callee->l.p ? static_cast<const LuaucRuntimeProtoV1 *>(callee->l.p->execdata) : nullptr;
+    if (!validAotProto(metadata))
+        luaG_runerror(L, "strict AOT prepared call rejected missing callee metadata");
+    if (callee->nupvalues != metadata->nups)
+        luaG_runerror(L, "strict AOT prepared call rejected callee closure shape");
+    validateActiveAotEntry(L, metadata, "prepared nested entry");
+
+    gPreparedCall.status = LUAUC_RUNTIME_V1_PREPARED;
+    gPreparedCall.table_index =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(metadata->entry));
+    gPreparedCall.metadata = metadata;
+    return &gPreparedCall;
+}
+
+extern "C" void luauc_runtime_v1_finish_compiled_call(lua_State *L) {
+    countRuntimeHelper();
+    if (!L || !L->ci)
+        luaG_runerror(L, "strict AOT compiled call finish requires an active frame");
+    luau_poscall(L, L->base);
+    luaC_checkGC(L);
+}
+
 static uint32_t callAotFunction(lua_State *L, StkId function, int32_t resultCount) {
     const int precallStatus = luau_precall(L, function, resultCount);
     if (precallStatus == PCRC) {

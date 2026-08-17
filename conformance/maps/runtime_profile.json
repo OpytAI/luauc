@@ -5,9 +5,9 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "65331dc7d2821c6ec8df07225183590a5dae4a0be2ddd97b1cecf6c6391d698b",
   "input_sha256": {
-    "profile": "d0a0958458a510629b1bbf87d0f4bebb8816cace20034fc2279dc91b1f0d5a21",
+    "profile": "598feca5e6cf7ebc4a82396958039026a9691aec4b69f71b70ea73bf4f8268a6",
     "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",
-    "pack": "b46dc8df7fb367efa11273ece5862101d3e6f5acb6ab9ffe8f10bd7f7f0a5135"
+    "pack": "94fdebddc05978db9264c77c40e37f6ef4f029efe6738af06841bd3818752479"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
@@ -18,8 +18,8 @@
   "identities": {
     "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
-    "object_contract_sha256": "daa259f21f18f79ff67a819272ade020c5aba56d9966c9388ace758b1c8bf662",
-    "pack_build_sha256": "1b989b23c28ba385c80e20f59aff2102fe3a9c192acdebae3a0ebcb4e00ce30f",
+    "object_contract_sha256": "396ec553d3e0cc36ff659faaccd53c1b6b6594b3a6e16fb36b3b83db773cd6d2",
+    "pack_build_sha256": "169ffde40ed03d399377f377676639e28e8b5023565c2e615a1881e1d334be89",
     "license_inventory_sha256": "62db69aaae1bfdcf018c8a83254e4aeb91f1e42d8882e8b4cd224bda6045659c"
   },
   "host_imports": [
@@ -188,6 +188,8 @@
     "luauc_runtime_v1_closure_matches_proto_id",
     "luauc_runtime_v1_compare_any",
     "luauc_runtime_v1_concat",
+    "luauc_runtime_v1_count_direct_call",
+    "luauc_runtime_v1_count_indirect_call",
     "luauc_runtime_v1_coverage_hit",
     "luauc_runtime_v1_do_arith",
     "luauc_runtime_v1_do_len",
@@ -196,6 +198,7 @@
     "luauc_runtime_v1_dupclosure_capture",
     "luauc_runtime_v1_exchange_continuation",
     "luauc_runtime_v1_fastcall",
+    "luauc_runtime_v1_finish_compiled_call",
     "luauc_runtime_v1_forg_loop",
     "luauc_runtime_v1_forg_loop_call",
     "luauc_runtime_v1_forg_loop_finish",
@@ -218,6 +221,7 @@
     "luauc_runtime_v1_newclosure_empty",
     "luauc_runtime_v1_node_slot_match",
     "luauc_runtime_v1_prep_varargs",
+    "luauc_runtime_v1_prepare_compiled_call",
     "luauc_runtime_v1_require_static",
     "luauc_runtime_v1_return",
     "luauc_runtime_v1_set_global",
@@ -444,5 +448,5 @@
       }
     ]
   },
-  "canonical_hash": "1a752f6c8f2ed5521db4f289c78bb9218a0e8cc6b96c57b9f89186bae379c958"
+  "canonical_hash": "ff31a1ad2de914d9035706fccce3a0162de0d9cc53e15037eed9bfcc43c4ed24"
 }

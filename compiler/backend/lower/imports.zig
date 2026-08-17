@@ -17,6 +17,10 @@ const get_upvalue_symbol = abi.get_upvalue_symbol;
 const set_upvalue_symbol = abi.set_upvalue_symbol;
 const close_upvalues_symbol = abi.close_upvalues_symbol;
 const call_symbol = abi.call_symbol;
+const prepare_compiled_call_symbol = abi.prepare_compiled_call_symbol;
+const finish_compiled_call_symbol = abi.finish_compiled_call_symbol;
+const count_direct_call_symbol = abi.count_direct_call_symbol;
+const count_indirect_call_symbol = abi.count_indirect_call_symbol;
 const exchange_continuation_symbol = abi.exchange_continuation_symbol;
 const set_location_symbol = abi.set_location_symbol;
 const new_table_symbol = abi.new_table_symbol;
@@ -144,6 +148,10 @@ pub const RuntimeImports = struct {
     set_upvalue: ?wasm.FunctionRef,
     close_upvalues: ?wasm.FunctionRef,
     call: ?wasm.FunctionRef,
+    prepare_compiled_call: ?wasm.FunctionRef,
+    finish_compiled_call: ?wasm.FunctionRef,
+    count_direct_call: ?wasm.FunctionRef,
+    count_indirect_call: ?wasm.FunctionRef,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
     new_table: ?wasm.FunctionRef,
@@ -221,6 +229,9 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const set_upvalue_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const close_upvalues_params = [_]wasm.ValueType{ .i32, .i32 };
     const call_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
+    const prepare_compiled_call_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
+    const finish_compiled_call_params = [_]wasm.ValueType{.i32};
+    const no_params = [_]wasm.ValueType{};
     const exchange_continuation_params = [_]wasm.ValueType{ .i32, .i32 };
     const set_location_params = [_]wasm.ValueType{ .i32, .i32 };
     const new_table_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
@@ -307,6 +318,22 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const call = if (needs.call) blk: {
         const helper_type = try object.addType(.{ .params = &call_params, .results = &status_result });
         break :blk try object.importFunction("env", call_symbol, helper_type);
+    } else null;
+    const prepare_compiled_call = if (needs.call) blk: {
+        const helper_type = try object.addType(.{ .params = &prepare_compiled_call_params, .results = &status_result });
+        break :blk try object.importFunction("env", prepare_compiled_call_symbol, helper_type);
+    } else null;
+    const finish_compiled_call = if (needs.call) blk: {
+        const helper_type = try object.addType(.{ .params = &finish_compiled_call_params, .results = &no_results });
+        break :blk try object.importFunction("env", finish_compiled_call_symbol, helper_type);
+    } else null;
+    const count_direct_call = if (needs.call) blk: {
+        const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
+        break :blk try object.importFunction("env", count_direct_call_symbol, helper_type);
+    } else null;
+    const count_indirect_call = if (needs.call) blk: {
+        const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
+        break :blk try object.importFunction("env", count_indirect_call_symbol, helper_type);
     } else null;
     const exchange_continuation = if (needs.exchange_continuation) blk: {
         const helper_type = try object.addType(.{ .params = &exchange_continuation_params, .results = &status_result });
@@ -550,6 +577,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .set_upvalue = set_upvalue,
         .close_upvalues = close_upvalues,
         .call = call,
+        .prepare_compiled_call = prepare_compiled_call,
+        .finish_compiled_call = finish_compiled_call,
+        .count_direct_call = count_direct_call,
+        .count_indirect_call = count_indirect_call,
         .exchange_continuation = exchange_continuation,
         .set_location = set_location,
         .new_table = new_table,
