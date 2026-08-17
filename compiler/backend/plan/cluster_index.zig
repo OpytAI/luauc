@@ -69,7 +69,6 @@ pub fn stampUserdataClusters(
     return clusters.toOwnedSlice(allocator);
 }
 
-/// First covering matcher wins; later families must not overwrite a hit.
 pub fn matchInstructionCluster(ctx: anytype, instruction_id: u32) Error!?Cluster {
     {
         var distance: u32 = 0;

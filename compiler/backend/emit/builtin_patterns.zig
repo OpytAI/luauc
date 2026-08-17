@@ -462,18 +462,12 @@ pub fn hasPublishedTValue(
 }
 
 pub fn compilableOwnerBlock(self: anytype, instruction_id: u32) Error!?snapshot_v1.IrBlock {
-    var owner: ?snapshot_v1.IrBlock = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (!block.kind.isCompilable() or block.isEmpty() or
-            instruction_id < block.start or instruction_id > block.finish)
-            continue;
-        if (owner != null)
-            return null;
-        owner = block;
-    }
-    return owner;
+    const block_id = self.plan.instructionBlock(instruction_id) orelse return null;
+    const block = try self.snapshot.irBlock(self.function, block_id);
+    if (!block.kind.isCompilable() or block.isEmpty() or
+        instruction_id < block.start or instruction_id > block.finish)
+        return null;
+    return block;
 }
 pub fn publishedNumberPayloadRegister(
     self: anytype,

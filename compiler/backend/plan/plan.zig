@@ -51,9 +51,6 @@ const BufferGuard = struct {
     failure_block: ?u32,
 };
 
-/// Immutable, function-scoped analysis shared by lowering, continuation admission, ownership
-/// checks, and diagnostics. Construction is linear in the serialized IR plus CFG edges; no pass
-/// rebuilds dense block matrices or searches the entire function for a local ownership query.
 pub const FunctionPlan = struct {
     allocator: std.mem.Allocator,
     instruction_blocks: []u32,
@@ -517,35 +514,26 @@ pub const FunctionPlan = struct {
     }
 
     pub fn dupTableAt(self: FunctionPlan, start: u32) ?model.DupTablePattern {
-        for (self.facts.dup_tables) |pattern| {
-            if (pattern.start == start)
-                return pattern;
-        }
-        return null;
+        return self.facts.dupTableAt(start);
     }
 
     pub fn tableAllocAt(self: FunctionPlan, start: u32) ?model.TableAllocationPattern {
-        for (self.facts.table_allocs) |alloc| {
-            if (alloc.start == start and alloc.dest_reg != snapshot_v1.no_id)
-                return .{
-                    .start = alloc.start,
-                    .finish = alloc.finish,
-                    .assist = alloc.assist,
-                    .deferred_to_later_gc = alloc.deferred_to_later_gc,
-                    .destination = alloc.dest_reg,
-                    .array_count = alloc.array_count,
-                    .node_count = alloc.node_count,
-                };
-        }
-        return null;
+        const alloc = self.facts.tableAllocAt(start) orelse return null;
+        if (alloc.dest_reg == snapshot_v1.no_id)
+            return null;
+        return .{
+            .start = alloc.start,
+            .finish = alloc.finish,
+            .assist = alloc.assist,
+            .deferred_to_later_gc = alloc.deferred_to_later_gc,
+            .destination = alloc.dest_reg,
+            .array_count = alloc.array_count,
+            .node_count = alloc.node_count,
+        };
     }
 
     pub fn tableAllocCovering(self: FunctionPlan, instruction_id: u32) ?recognize.TableAlloc {
-        for (self.facts.table_allocs) |alloc| {
-            if (instruction_id >= alloc.start and instruction_id <= alloc.finish)
-                return alloc;
-        }
-        return null;
+        return self.facts.tableAllocCovering(instruction_id);
     }
 
     pub fn clusterAt(self: FunctionPlan, instruction_id: u32) ?Cluster {

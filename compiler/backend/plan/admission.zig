@@ -286,19 +286,13 @@ pub fn isFastcallFallbackBlock(self: anytype, block: snapshot_v1.IrBlock) Error!
 
 pub noinline fn supportsGenericIterationFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
     const fallback = (try self.genericIterationFallbackPattern(block)) orelse return false;
-    var fallback_id: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (candidate.kind == block.kind and candidate.start == block.start and candidate.finish == block.finish) {
-            if (fallback_id != null)
-                return Error.UnsupportedControlFlow;
-            fallback_id = block_id;
-        }
-    }
-    const resolved_fallback_id = fallback_id orelse return Error.UnsupportedControlFlow;
+    const resolved_fallback_id = self.plan.instructionBlock(block.start) orelse return Error.UnsupportedControlFlow;
+    const fallback_block = try self.snapshot.irBlock(self.function, resolved_fallback_id);
+    if (fallback_block.kind != block.kind or fallback_block.start != block.start or
+        fallback_block.finish != block.finish)
+        return Error.UnsupportedControlFlow;
 
-    block_id = 0;
+    var block_id: u32 = 0;
     while (block_id < self.function.block_count) : (block_id += 1) {
         const candidate = try self.snapshot.irBlock(self.function, block_id);
         const fast = (try self.genericIterationPattern(candidate)) orelse continue;
@@ -314,19 +308,13 @@ pub noinline fn supportsSpecializedIpairsFallback(self: anytype, block: snapshot
     const fallback = (try self.genericIterationFallbackPattern(block)) orelse return false;
     if (fallback.aux != 0x8000_0002)
         return false;
-    var fallback_id: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (candidate.kind == block.kind and candidate.start == block.start and candidate.finish == block.finish) {
-            if (fallback_id != null)
-                return Error.UnsupportedControlFlow;
-            fallback_id = block_id;
-        }
-    }
-    const resolved_fallback = fallback_id orelse return Error.UnsupportedControlFlow;
+    const resolved_fallback = self.plan.instructionBlock(block.start) orelse return Error.UnsupportedControlFlow;
+    const fallback_block = try self.snapshot.irBlock(self.function, resolved_fallback);
+    if (fallback_block.kind != block.kind or fallback_block.start != block.start or
+        fallback_block.finish != block.finish)
+        return Error.UnsupportedControlFlow;
 
-    block_id = 0;
+    var block_id: u32 = 0;
     while (block_id < self.function.block_count) : (block_id += 1) {
         const candidate = try self.snapshot.irBlock(self.function, block_id);
         if (!candidate.kind.isCompilable() or candidate.isEmpty() or candidate.finish != candidate.start + 8)

@@ -512,17 +512,10 @@ pub noinline fn emitGenericIterationPrep(
     instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
-    var owner: ?snapshot_v1.IrBlock = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (!candidate.isEmpty() and instruction_id >= candidate.start and instruction_id <= candidate.finish) {
-            if (owner != null)
-                return Error.UnsupportedControlFlow;
-            owner = candidate;
-        }
-    }
-    const block = owner orelse return Error.UnsupportedControlFlow;
+    const owner_id = self.plan.instructionBlock(instruction_id) orelse return Error.UnsupportedControlFlow;
+    const block = try self.snapshot.irBlock(self.function, owner_id);
+    if (block.isEmpty() or instruction_id < block.start or instruction_id > block.finish)
+        return Error.UnsupportedControlFlow;
     if (!block.kind.isCompilable() or instruction_id != block.finish or instruction_value.operand_count != 3)
         return Error.UnsupportedControlFlow;
     const pc = try self.uintConstant(try self.operand(instruction_value, 0));

@@ -82,8 +82,9 @@ pub const Facts = struct {
     closure_index: []u32,
     dup_capture_index: []u32,
     table_allocs: []TableAlloc,
+    table_alloc_index: []u32,
     dup_tables: []DupTablePattern,
-    setlists: []SetList,
+    dup_table_index: []u32,
 
     pub fn deinit(self: *Facts) void {
         self.allocator.free(self.plain_lens);
@@ -93,8 +94,9 @@ pub const Facts = struct {
         self.allocator.free(self.closure_index);
         self.allocator.free(self.dup_capture_index);
         self.allocator.free(self.table_allocs);
+        self.allocator.free(self.table_alloc_index);
         self.allocator.free(self.dup_tables);
-        self.allocator.free(self.setlists);
+        self.allocator.free(self.dup_table_index);
         self.* = undefined;
     }
 
@@ -126,6 +128,29 @@ pub const Facts = struct {
             self.dup_capture_index[instruction_id] != snapshot_v1.no_id;
     }
 
+    pub fn tableAllocCovering(self: Facts, instruction_id: u32) ?TableAlloc {
+        if (instruction_id >= self.table_alloc_index.len)
+            return null;
+        const index = self.table_alloc_index[instruction_id];
+        if (index == snapshot_v1.no_id)
+            return null;
+        return self.table_allocs[index];
+    }
+
+    pub fn tableAllocAt(self: Facts, start: u32) ?TableAlloc {
+        const alloc = self.tableAllocCovering(start) orelse return null;
+        return if (alloc.start == start) alloc else null;
+    }
+
+    pub fn dupTableAt(self: Facts, start: u32) ?DupTablePattern {
+        if (start >= self.dup_table_index.len)
+            return null;
+        const index = self.dup_table_index[start];
+        if (index == snapshot_v1.no_id)
+            return null;
+        return self.dup_tables[index];
+    }
+
 };
 
 pub fn recognize(
@@ -145,8 +170,6 @@ pub fn recognize(
     defer table_allocs.deinit(allocator);
     var dup_tables: std.ArrayList(DupTablePattern) = .empty;
     defer dup_tables.deinit(allocator);
-    var setlists: std.ArrayList(SetList) = .empty;
-    defer setlists.deinit(allocator);
 
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
@@ -195,8 +218,7 @@ pub fn recognize(
         }
 
         if (instruction.command == ir_cmd_setlist)
-            if (try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction)) |decoded|
-                try setlists.append(allocator, decoded);
+            _ = try setListAt(snapshot, function, proto, slices.instruction_blocks, instruction_id, instruction);
 
         if (instruction.command == ir_cmd_table_len)
             if (try plainLenAt(snapshot, function, proto, slices, instruction_id, instruction)) |decoded|
@@ -238,8 +260,6 @@ pub fn recognize(
     errdefer allocator.free(table_alloc_slice);
     const dup_table_slice = try dup_tables.toOwnedSlice(allocator);
     errdefer allocator.free(dup_table_slice);
-    const setlist_slice = try setlists.toOwnedSlice(allocator);
-    errdefer allocator.free(setlist_slice);
 
     const plain_len_index = try allocator.alloc(u32, function.instruction_count);
     errdefer allocator.free(plain_len_index);
@@ -268,6 +288,21 @@ pub fn recognize(
             dup_capture_index[cursor] = @intCast(index);
     }
 
+    const table_alloc_index = try allocator.alloc(u32, function.instruction_count);
+    errdefer allocator.free(table_alloc_index);
+    @memset(table_alloc_index, snapshot_v1.no_id);
+    for (table_alloc_slice, 0..) |alloc, index| {
+        var cursor = alloc.start;
+        while (cursor <= alloc.finish) : (cursor += 1)
+            table_alloc_index[cursor] = @intCast(index);
+    }
+
+    const dup_table_index = try allocator.alloc(u32, function.instruction_count);
+    errdefer allocator.free(dup_table_index);
+    @memset(dup_table_index, snapshot_v1.no_id);
+    for (dup_table_slice, 0..) |pattern, index|
+        dup_table_index[pattern.start] = @intCast(index);
+
     return .{
         .allocator = allocator,
         .plain_lens = plain_len_slice,
@@ -277,8 +312,9 @@ pub fn recognize(
         .closure_index = closure_index,
         .dup_capture_index = dup_capture_index,
         .table_allocs = table_alloc_slice,
+        .table_alloc_index = table_alloc_index,
         .dup_tables = dup_table_slice,
-        .setlists = setlist_slice,
+        .dup_table_index = dup_table_index,
     };
 }
 

@@ -75,20 +75,15 @@ pub fn requireSingleCompilableBlockRange(self: anytype, start: u32, finish: u32)
         return Error.UnsupportedControlFlow;
 }
 pub fn requireSingleCallBlockRange(self: anytype, start: u32, finish: u32) Error!void {
-    var owner: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (block.isEmpty() or block.finish < start or block.start > finish)
-            continue;
-        const supported = block.kind.isCompilable() or
-            (block.kind == .fallback and
-                ((try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block))));
-        if (owner != null or !supported or block.start > start or block.finish < finish)
-            return Error.UnsupportedControlFlow;
-        owner = block_id;
-    }
-    if (owner == null)
+    const owner_id = self.plan.instructionBlock(start) orelse return Error.UnsupportedControlFlow;
+    const finish_id = self.plan.instructionBlock(finish) orelse return Error.UnsupportedControlFlow;
+    if (owner_id != finish_id)
+        return Error.UnsupportedControlFlow;
+    const block = try self.snapshot.irBlock(self.function, owner_id);
+    const supported = block.kind.isCompilable() or
+        (block.kind == .fallback and
+            ((try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block))));
+    if (block.isEmpty() or !supported or block.start > start or block.finish < finish)
         return Error.UnsupportedControlFlow;
 }
 pub fn loadedTValueRegister(self: anytype, instruction_id: u32) Error!?u32 {
