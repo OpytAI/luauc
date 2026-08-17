@@ -319,6 +319,9 @@ records.push({
 });
 
 const generated = generateLinkConformance(records);
+if (process.env.LUAUC_WRITE_LINK_CONFORMANCE) {
+  writeFileSync(process.env.LUAUC_WRITE_LINK_CONFORMANCE, `${JSON.stringify(generated, null, 2)}\n`);
+}
 if (generated.canonical_hash !== checked.canonical_hash) {
   throw new Error(
     `link_conformance.json drifted (checked ${checked.canonical_hash}, generated ${generated.canonical_hash})`,

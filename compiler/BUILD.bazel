@@ -81,6 +81,12 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
+zig_test(
+    name = "compiler_result_v1_layout_test",
+    main = "compiler_result_v1_layout_test.zig",
+    deps = ["//schema:compiler_result_v1"],
+)
+
 build_test(
     name = "compiler_build_test",
     targets = [":compiler_wasm"],

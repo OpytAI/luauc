@@ -22,7 +22,7 @@
     "//compiler:compiler_api_test",
     "//compiler:compiler_build_test",
     "//schema:source_package_v1_test",
-    "//schema:compiler_result_v1_test",
+    "//compiler:compiler_result_v1_layout_test",
     "//compiler/ir:frontend_snapshot_v1_test",
     "//compiler/link:linker_test",
     "//compiler/wasm:object_test",
