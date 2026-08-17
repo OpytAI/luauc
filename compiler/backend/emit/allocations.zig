@@ -3,7 +3,6 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
-const recognize = @import("luauc_backend_recognize");
 const Error = model.Error;
 const TableAllocationPattern = model.TableAllocationPattern;
 const DupTablePattern = model.DupTablePattern;
@@ -43,7 +42,7 @@ const lop_call = abi.lop_call;
 const lop_fastcall2k = abi.lop_fastcall2k;
 
 pub noinline fn tableAllocationPatternAt(self: anytype, start: u32) Error!?TableAllocationPattern {
-    return recognize.tableAllocationAt(self.snapshot, self.function, self.proto, self.plan.instruction_blocks, start);
+    return self.plan.tableAllocAt(start);
 }
 pub fn isDeferredTableInitializationCommand(_: anytype, command: snapshot_v1.IrCommand) bool {
     return switch (command) {
@@ -236,7 +235,7 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
     try self.body.localSet(self.allocator, self.slots[result_id].second);
 }
 pub noinline fn dupTablePatternAt(self: anytype, start: u32) Error!?DupTablePattern {
-    return recognize.dupTableAt(self.snapshot, self.function, self.proto, self.plan.instruction_blocks, start);
+    return self.plan.dupTableAt(start);
 }
 pub noinline fn emitDupTable(self: anytype, pattern: DupTablePattern) Error!void {
     try self.body.localGet(self.allocator, 0);

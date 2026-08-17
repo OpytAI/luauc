@@ -327,7 +327,7 @@ fn userdataReadWidth(command: snapshot_v1.IrCommand) ?u32 {
 const vec2_userdata_tag: u32 = 12;
 const vec2_byte_size: u32 = 8;
 
-fn plannedUserdataByteSize(self: anytype, pointer: snapshot_v1.IrOperand) Error!?u32 {
+fn plannedUserdataByteSize(self: anytype, pointer: snapshot_v1.IrOperand, read_id: u32) Error!?u32 {
     if (pointer.kind != .instruction or pointer.value >= self.function.instruction_count)
         return null;
     if (self.plan.clusterAt(pointer.value)) |cluster| {
@@ -343,7 +343,7 @@ fn plannedUserdataByteSize(self: anytype, pointer: snapshot_v1.IrOperand) Error!
         const tag = self.uintConstant(try self.operand(produced, 1)) catch return null;
         if (tag == vec2_userdata_tag)
             return vec2_byte_size;
-        return plannedUserdataByteSize(self, try self.operand(produced, 0));
+        return plannedUserdataByteSize(self, try self.operand(produced, 0), read_id);
     }
     var instruction_id: u32 = 0;
     while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
@@ -353,6 +353,8 @@ fn plannedUserdataByteSize(self: anytype, pointer: snapshot_v1.IrOperand) Error!
         const source = try self.operand(candidate, 0);
         if (source.kind != pointer.kind or source.value != pointer.value)
             continue;
+        if (!self.plan.checkDominatesRead(instruction_id, read_id))
+            continue;
         const tag = self.uintConstant(try self.operand(candidate, 1)) catch continue;
         if (tag == vec2_userdata_tag)
             return vec2_byte_size;
@@ -360,7 +362,7 @@ fn plannedUserdataByteSize(self: anytype, pointer: snapshot_v1.IrOperand) Error!
     return null;
 }
 
-fn userdataPointerChecked(self: anytype, pointer: snapshot_v1.IrOperand) Error!bool {
+fn userdataPointerChecked(self: anytype, pointer: snapshot_v1.IrOperand, read_id: u32) Error!bool {
     if (pointer.kind != .instruction)
         return false;
     if (self.plan.clusterAt(pointer.value)) |cluster| {
@@ -376,7 +378,8 @@ fn userdataPointerChecked(self: anytype, pointer: snapshot_v1.IrOperand) Error!b
         if (candidate.command != ir_cmd_check_userdata_tag or candidate.operand_count < 1)
             continue;
         const source = try self.operand(candidate, 0);
-        if (source.kind == pointer.kind and source.value == pointer.value)
+        if (source.kind == pointer.kind and source.value == pointer.value and
+            self.plan.checkDominatesRead(instruction_id, read_id))
             return true;
     }
     return false;
@@ -389,9 +392,9 @@ pub noinline fn emitBufferRead(self: anytype, instruction_id: u32, instruction_v
         const pointer = try self.operand(instruction_value, 0);
         const offset = try self.uintConstant(try self.operand(instruction_value, 1));
         const width = userdataReadWidth(instruction_value.command) orelse return Error.UnsupportedCommand;
-        if (!try userdataPointerChecked(self, pointer))
+        if (!try userdataPointerChecked(self, pointer, instruction_id))
             return Error.UnsupportedControlFlow;
-        const byte_size = (try plannedUserdataByteSize(self, pointer)) orelse return Error.UnsupportedControlFlow;
+        const byte_size = (try plannedUserdataByteSize(self, pointer, instruction_id)) orelse return Error.UnsupportedControlFlow;
         if (offset > byte_size or width > byte_size - offset)
             return Error.UnsupportedControlFlow;
         try self.emitPointerValue(pointer);

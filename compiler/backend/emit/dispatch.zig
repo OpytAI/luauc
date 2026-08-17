@@ -65,11 +65,16 @@ const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
 const tvalue_extra_offset = abi.tvalue_extra_offset;
 
 pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
-    return emitInstructionInner(self, instruction_id, block_kind) catch |err| {
+    const result = emitInstructionInner(self, instruction_id, block_kind) catch |err| {
         const failed = self.instruction(instruction_id) catch return err;
         diagnostics.recordInstruction(@errorName(err), instruction_id, @intFromEnum(failed.command));
         return err;
     };
+    if (self.plan.clusterAt(instruction_id) == null) {
+        const instruction_value = self.instruction(instruction_id) catch return result;
+        self.plan.noteLowered(instruction_value.command);
+    }
+    return result;
 }
 
 fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
@@ -112,36 +117,28 @@ fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
         .table_alloc => try self.emitTableAllocation(
             (try self.tableAllocationPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
         ),
+        .integer_create => {
+            const pattern = (try self.integerCreatePatternAt(cluster.at)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.emitIntegerCreate(pattern);
+        },
+        .linearized_pow => {
+            const block = try self.snapshot.irBlock(
+                self.function,
+                self.plan.instructionBlock(cluster.at) orelse return Error.UnsupportedControlFlow,
+            );
+            const pattern = (try self.linearizedPowPattern(cluster.at, block)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.emitSavedPcLocation(pattern.marker);
+            try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
+        },
+        .type_name => {
+            const command = (try self.instruction(cluster.at)).command;
+            const pattern = (try self.typeNamePattern(cluster.at, command == ir_cmd_get_typeof)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.emitTypeName(pattern);
+        },
     }
-}
-
-fn coveringIntegerCreate(self: anytype, instruction_id: u32) Error!?model.IntegerCreatePattern {
-    var distance: u32 = 0;
-    while (distance <= 6 and distance <= instruction_id) : (distance += 1) {
-        if (try self.integerCreatePatternAt(instruction_id - distance)) |pattern| {
-            if (instruction_id <= pattern.finish)
-                return pattern;
-        }
-    }
-    return null;
-}
-
-fn coveringTypeName(self: anytype, instruction_id: u32) Error!?model.TypeNamePattern {
-    const command = (try self.instruction(instruction_id)).command;
-    if (command == ir_cmd_get_type or command == ir_cmd_get_typeof)
-        return self.typeNamePattern(instruction_id, command == ir_cmd_get_typeof);
-    var distance: u32 = 1;
-    while (distance <= 4 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        const start_command = (try self.instruction(start)).command;
-        if (start_command == ir_cmd_get_type or start_command == ir_cmd_get_typeof) {
-            if (try self.typeNamePattern(start, start_command == ir_cmd_get_typeof)) |pattern| {
-                if (instruction_id <= pattern.finish)
-                    return pattern;
-            }
-        }
-    }
-    return null;
 }
 
 fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
@@ -153,24 +150,16 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                     return Error.UnsupportedControlFlow;
                 try self.emitUserdataAllocationInstruction(instruction_id, instruction_value, pattern);
             },
+            .integer_create => if (instruction_id == cluster.at)
+                try emitPlannedCluster(self, cluster),
+            .linearized_pow => if (instruction_id == cluster.at)
+                try emitPlannedCluster(self, cluster),
+            .type_name => if (instruction_value.command == ir_cmd_get_type or
+                instruction_value.command == ir_cmd_get_typeof)
+                try emitPlannedCluster(self, cluster),
             else => if (instruction_id == cluster.finish) try emitPlannedCluster(self, cluster),
         }
-        return false;
-    }
-    if (try coveringIntegerCreate(self, instruction_id)) |pattern| {
-        if (instruction_id == pattern.check)
-            try self.emitIntegerCreate(pattern);
-        return false;
-    }
-    if (try self.linearizedPowPattern(instruction_id, try self.snapshot.irBlock(self.function, self.plan.instructionBlock(instruction_id) orelse return Error.UnsupportedControlFlow))) |pattern| {
-        try self.emitSavedPcLocation(pattern.marker);
-        try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
-        return false;
-    }
-    if (try coveringTypeName(self, instruction_id)) |pattern| {
-        const command = instruction_value.command;
-        if (command == ir_cmd_get_type or command == ir_cmd_get_typeof)
-            try self.emitTypeName(pattern);
+        self.plan.noteLoweredRange(self.snapshot, self.function, cluster.start, cluster.finish);
         return false;
     }
     switch (instruction_value.command) {
@@ -357,7 +346,8 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                 {} else if (instruction_id + 2 < self.function.instruction_count and
                     (try self.instruction(instruction_id + 2)).command == .newclosure)
                 {
-                    _ = try self.newClosurePattern(instruction_id + 2);
+                    if (self.plan.closureContaining(instruction_id + 2) == null)
+                        return Error.UnsupportedControlFlow;
                 } else if (instruction_id + 1 >= self.function.instruction_count or
                     ((try self.instruction(instruction_id + 1)).command != .call and
                         (try self.instruction(instruction_id + 1)).command != .cmp_any and
@@ -529,17 +519,6 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             return Error.InvalidBlockTermination;
         if (self.plan.clusterAt(instruction_id)) |_| {
             terminated = try self.emitInstruction(instruction_id, block.kind);
-            continue;
-        }
-        if (try self.integerCreatePatternAt(instruction_id)) |pattern| {
-            try self.emitIntegerCreate(pattern);
-            instruction_id = pattern.finish;
-            continue;
-        }
-        if (try self.linearizedPowPattern(instruction_id, block)) |pattern| {
-            try self.emitSavedPcLocation(pattern.marker);
-            try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
-            instruction_id = pattern.finish;
             continue;
         }
         if (try self.globalHeadPatternAt(instruction_id, block)) |pattern| {

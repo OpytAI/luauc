@@ -178,14 +178,10 @@ pub noinline fn supportsLengthFallback(self: anytype, block: snapshot_v1.IrBlock
 }
 
 pub noinline fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
-    return (try supportsArithmeticFallback(self, block)) or (try supportsComparisonFallback(self, block)) or
-        (try supportsMaterializedComparisonFallback(self, block)) or
-        (try supportsLengthFallback(self, block)) or
-        (try supportsGenericIterationFallback(self, block)) or
-        (try supportsSpecializedIpairsFallback(self, block)) or
-        (try self.xnextPreparationPattern(block) != null) or
-        (try supportsOrdinaryCallFallback(self, block)) or (try isFastcallFallbackBlock(self, block)) or
-        (try supportsNamecallFallback(self, block)) or (try supportsGeneralTableFallback(self, block));
+    if (block.kind != .fallback or block.isEmpty())
+        return false;
+    const block_id = self.plan.instructionBlock(block.start) orelse return false;
+    return self.plan.supportsFallback(block_id);
 }
 
 pub noinline fn supportsNamecallFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
@@ -284,13 +280,8 @@ pub noinline fn isBypassedXnextFastPreparationBlock(self: anytype, block_id: u32
 }
 
 pub fn isFastcallFallbackBlock(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (candidate.start == block.start and candidate.finish == block.finish and candidate.kind == block.kind)
-            return self.isFastcallFallback(block_id, block);
-    }
-    return false;
+    const block_id = self.plan.instructionBlock(block.start) orelse return false;
+    return self.plan.blockKind(block_id) == .fastcall_fallback;
 }
 
 pub noinline fn supportsGenericIterationFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
@@ -487,30 +478,5 @@ pub noinline fn supportsGeneralTableFallback(
     return target_block.kind.isCompilable() and !target_block.isEmpty();
 }
 
-pub fn isRequireImportInstruction(
-    snapshot: snapshot_v1.Snapshot,
-    function: snapshot_v1.IrFunction,
-    proto: snapshot_v1.Proto,
-    instruction_value: snapshot_v1.IrInstruction,
-) Error!bool {
-    if (instruction_value.command != .get_cached_import or instruction_value.operand_count != 4)
-        return false;
-    const import_operand = try snapshot.irOperand(instruction_value, 1);
-    const descriptor_operand = try snapshot.irOperand(instruction_value, 2);
-    if (import_operand.kind != .vm_const or descriptor_operand.kind != .constant)
-        return false;
-    const import = try snapshot.vmConstant(proto, import_operand.value);
-    if (import.kind != .import or import.payload1 != 1)
-        return false;
-    const item = try snapshot.vmConstantItem(import.payload0);
-    if (item.value != snapshot_v1.no_id)
-        return false;
-    const name_constant = try snapshot.vmConstant(proto, item.key);
-    if (name_constant.kind != .string or !std.mem.eql(u8, try snapshot.string(name_constant.payload0), "require"))
-        return false;
-    const descriptor = try snapshot.irConstant(function, descriptor_operand.value);
-    const encoded = descriptor.importValue() orelse return false;
-    const expected = (@as(u32, 1) << 30) | (item.key << 20);
-    return encoded == expected;
-}
+pub const isRequireImportInstruction = model.isRequireImportInstruction;
 

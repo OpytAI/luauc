@@ -29,7 +29,7 @@ pub const Context = struct {
     snapshot: snapshot_v1.Snapshot,
     proto: snapshot_v1.Proto,
     function: snapshot_v1.IrFunction,
-    plan: *const FunctionPlan,
+    plan: *FunctionPlan,
     slots: []const ValueSlot,
     builtin_number_sources: []u32,
     coverage_site_ids: []const u32,

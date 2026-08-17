@@ -1,6 +1,12 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 load(":defs.bzl", "backend_emit_library")
 
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = glob(["*.zig"], exclude = ["*.test.zig"]),
+    visibility = ["//visibility:public"],
+)
+
 exports_files(
     ["dispatch.zig"],
     visibility = ["//visibility:public"],
@@ -12,10 +18,7 @@ js_library(
     visibility = ["//visibility:public"],
 )
 
-backend_emit_library(
-    name = "allocations",
-    deps = ["//compiler/backend/plan:recognize"],
-)
+backend_emit_library(name = "allocations")
 backend_emit_library(name = "builtin_patterns")
 backend_emit_library(
     name = "calls",

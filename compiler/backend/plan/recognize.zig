@@ -40,6 +40,7 @@ pub const TableAlloc = struct {
     array_count: u32,
     node_count: u32,
     deferred_to_later_gc: bool,
+    assist: bool,
     check_gc_id: ?u32,
 };
 
@@ -157,6 +158,7 @@ pub fn recognize(
                 .array_count = pattern.array_count,
                 .node_count = pattern.node_count,
                 .deferred_to_later_gc = pattern.deferred_to_later_gc,
+                .assist = pattern.assist,
                 .check_gc_id = null,
             };
             try attachDeferredGc(snapshot, function, slices.instruction_blocks, &alloc);
@@ -178,6 +180,7 @@ pub fn recognize(
                 .array_count = array_count,
                 .node_count = node_count,
                 .deferred_to_later_gc = true,
+                .assist = false,
                 .check_gc_id = null,
             };
             try attachDeferredGc(snapshot, function, slices.instruction_blocks, &alloc);

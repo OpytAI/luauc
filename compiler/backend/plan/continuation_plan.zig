@@ -7,9 +7,8 @@ const abi = @import("luauc_backend_runtime_abi");
 
 const Error = model.Error;
 
-/// Record snapshot-visible continuation sites after FunctionPlan.init. Region
-/// validation still runs at emit time because it depends on emitBlock matchers
-/// until PR 11. Does not import emit Context.
+/// Record snapshot-visible continuation sites and admit their regions.
+/// Does not import emit Context.
 pub fn planContinuations(
     allocator: std.mem.Allocator,
     snapshot: snapshot_v1.Snapshot,
@@ -36,4 +35,134 @@ pub fn planContinuations(
     if (plan.continuation_sites.len != 0)
         plan.allocator.free(plan.continuation_sites);
     plan.continuation_sites = try sites.toOwnedSlice(allocator);
+
+    var regions: std.ArrayList(FunctionPlan.ContinuationRegion) = .empty;
+    errdefer regions.deinit(allocator);
+    var block_id: u32 = 0;
+    while (block_id < function.block_count) : (block_id += 1) {
+        const block = try snapshot.irBlock(function, block_id);
+        if (block.isEmpty())
+            continue;
+        try regions.append(allocator, .{
+            .block_id = block_id,
+            .suffix_start = block.start,
+            .block_finish = block.finish,
+            .admitted = try admitRegion(allocator, snapshot, function, plan, block_id, block.start, block.finish),
+        });
+    }
+    for (plan.continuation_sites) |site| {
+        const site_block = plan.instructionBlock(site) orelse continue;
+        const block = try snapshot.irBlock(function, site_block);
+        if (block.isEmpty() or site >= block.finish)
+            continue;
+        const suffix = site + 1;
+        if (suffix > block.finish)
+            continue;
+        try regions.append(allocator, .{
+            .block_id = site_block,
+            .suffix_start = suffix,
+            .block_finish = block.finish,
+            .admitted = try admitRegion(allocator, snapshot, function, plan, site_block, suffix, block.finish),
+        });
+    }
+    if (plan.continuation_regions.len != 0)
+        plan.allocator.free(plan.continuation_regions);
+    plan.continuation_regions = try regions.toOwnedSlice(allocator);
+}
+
+fn admitRegion(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    plan: *FunctionPlan,
+    continuation_block_id: u32,
+    suffix_start: u32,
+    block_finish: u32,
+) Error!bool {
+    if (continuation_block_id >= function.block_count or
+        suffix_start > block_finish or block_finish >= function.instruction_count)
+        return false;
+
+    const reachable_blocks = try allocator.alloc(bool, function.block_count);
+    defer allocator.free(reachable_blocks);
+    @memset(reachable_blocks, false);
+    const reachable_instructions = try allocator.alloc(bool, function.instruction_count);
+    defer allocator.free(reachable_instructions);
+    @memset(reachable_instructions, false);
+
+    var pending_blocks: std.ArrayList(u32) = .empty;
+    defer pending_blocks.deinit(allocator);
+
+    reachable_blocks[continuation_block_id] = true;
+    var instruction_id = suffix_start;
+    while (instruction_id <= block_finish) : (instruction_id += 1) {
+        reachable_instructions[instruction_id] = true;
+        const instruction_value = try snapshot.irInstruction(function, instruction_id);
+        var operand_id: u32 = 0;
+        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
+            const operand_value = try snapshot.irOperand(instruction_value, operand_id);
+            if (operand_value.kind != .block)
+                continue;
+            if (operand_value.value >= function.block_count)
+                return false;
+            if (operand_value.value == continuation_block_id)
+                continue;
+            try pending_blocks.append(allocator, operand_value.value);
+        }
+    }
+
+    while (pending_blocks.items.len != 0) {
+        const block_id = pending_blocks.items[pending_blocks.items.len - 1];
+        pending_blocks.items.len -= 1;
+        if (block_id >= function.block_count)
+            return false;
+        if (reachable_blocks[block_id])
+            continue;
+        const block = try snapshot.irBlock(function, block_id);
+        if (block.isEmpty())
+            continue;
+        if (!block.kind.isCompilable() and
+            (block.kind != .fallback or !plan.supportsFallback(block_id)))
+            continue;
+        reachable_blocks[block_id] = true;
+        instruction_id = block.start;
+        while (instruction_id <= block.finish) : (instruction_id += 1) {
+            if (instruction_id >= function.instruction_count)
+                return false;
+            reachable_instructions[instruction_id] = true;
+        }
+        const successors = plan.successorSlice(block_id) orelse return false;
+        for (successors) |target| {
+            if (target != continuation_block_id)
+                try pending_blocks.append(allocator, target);
+        }
+    }
+
+    var region_dominators = try plan.regionDominators(allocator, reachable_blocks, &.{continuation_block_id});
+    defer region_dominators.deinit();
+
+    instruction_id = 0;
+    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        if (!reachable_instructions[instruction_id])
+            continue;
+        const instruction_value = try snapshot.irInstruction(function, instruction_id);
+        var operand_id: u32 = 0;
+        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
+            const operand_value = try snapshot.irOperand(instruction_value, operand_id);
+            if (operand_value.kind != .instruction)
+                continue;
+            if (operand_value.value >= function.instruction_count or
+                !reachable_instructions[operand_value.value])
+                return false;
+            const producer_block = plan.instructionBlock(operand_value.value) orelse return false;
+            const consumer_block = plan.instructionBlock(instruction_id) orelse return false;
+            if (producer_block == consumer_block) {
+                if (operand_value.value >= instruction_id)
+                    return false;
+            } else if (!region_dominators.dominates(producer_block, consumer_block)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }

@@ -72,8 +72,11 @@ pub const FunctionPlan = struct {
     cluster_index: []u32,
     clusters: []Cluster,
     continuation_sites: []u32,
+    continuation_regions: []ContinuationRegion,
     block_index: recognize_tables.BlockIndex,
     call_facts: recognize_calls.CallFacts,
+    import_needs: model.ImportNeeds,
+    lowered_commands: std.StaticBitSet(256),
 
     pub const ClusterKind = enum {
         constant_truthy,
@@ -89,6 +92,9 @@ pub const FunctionPlan = struct {
         plain_len,
         concat,
         table_alloc,
+        integer_create,
+        linearized_pow,
+        type_name,
     };
 
     pub const Cluster = struct {
@@ -96,6 +102,13 @@ pub const FunctionPlan = struct {
         start: u32,
         at: u32,
         finish: u32,
+    };
+
+    pub const ContinuationRegion = struct {
+        block_id: u32,
+        suffix_start: u32,
+        block_finish: u32,
+        admitted: bool,
     };
 
     pub const RegionDominators = struct {
@@ -125,6 +138,7 @@ pub const FunctionPlan = struct {
         allocator: std.mem.Allocator,
         snapshot: snapshot_v1.Snapshot,
         function: snapshot_v1.IrFunction,
+        static_package: bool,
     ) Error!FunctionPlan {
         const block_count: usize = @intCast(function.block_count);
         const instruction_count: usize = @intCast(function.instruction_count);
@@ -452,6 +466,9 @@ pub const FunctionPlan = struct {
         );
         errdefer if (userdata_clusters.len != 0) allocator.free(userdata_clusters);
 
+        var import_needs = model.ImportNeeds{};
+        try model.scanImportNeedsFor(snapshot, function, static_package, &import_needs);
+
         return .{
             .allocator = allocator,
             .instruction_blocks = instruction_blocks,
@@ -472,8 +489,11 @@ pub const FunctionPlan = struct {
             .cluster_index = cluster_index,
             .clusters = userdata_clusters,
             .continuation_sites = &.{},
+            .continuation_regions = &.{},
             .block_index = .{},
             .call_facts = .{},
+            .import_needs = import_needs,
+            .lowered_commands = std.StaticBitSet(256).initEmpty(),
         };
     }
 
@@ -499,6 +519,8 @@ pub const FunctionPlan = struct {
             self.allocator.free(self.clusters);
         if (self.continuation_sites.len != 0)
             self.allocator.free(self.continuation_sites);
+        if (self.continuation_regions.len != 0)
+            self.allocator.free(self.continuation_regions);
         self.block_index.deinit();
         self.call_facts.deinit();
         self.facts.deinit();
@@ -509,6 +531,22 @@ pub const FunctionPlan = struct {
         for (self.facts.dup_tables) |pattern| {
             if (pattern.start == start)
                 return pattern;
+        }
+        return null;
+    }
+
+    pub fn tableAllocAt(self: FunctionPlan, start: u32) ?model.TableAllocationPattern {
+        for (self.facts.table_allocs) |alloc| {
+            if (alloc.start == start and alloc.dest_reg != snapshot_v1.no_id)
+                return .{
+                    .start = alloc.start,
+                    .finish = alloc.finish,
+                    .assist = alloc.assist,
+                    .deferred_to_later_gc = alloc.deferred_to_later_gc,
+                    .destination = alloc.dest_reg,
+                    .array_count = alloc.array_count,
+                    .node_count = alloc.node_count,
+                };
         }
         return null;
     }
@@ -580,6 +618,54 @@ pub const FunctionPlan = struct {
                 return true;
         }
         return false;
+    }
+
+    pub fn supportsFallback(self: FunctionPlan, block_id: u32) bool {
+        return self.block_index.supportsFallback(block_id);
+    }
+
+    pub fn blockDominates(self: FunctionPlan, dominator: u32, block: u32) bool {
+        if (dominator >= self.dominators.enter.len or block >= self.dominators.enter.len or
+            self.dominators.immediate[dominator] == snapshot_v1.no_id or
+            self.dominators.immediate[block] == snapshot_v1.no_id)
+            return false;
+        return self.dominators.enter[dominator] <= self.dominators.enter[block] and
+            self.dominators.exit[block] <= self.dominators.exit[dominator];
+    }
+
+    pub fn checkDominatesRead(self: FunctionPlan, check_id: u32, read_id: u32) bool {
+        const check_block = self.instructionBlock(check_id) orelse return false;
+        const read_block = self.instructionBlock(read_id) orelse return false;
+        if (check_block == read_block)
+            return check_id < read_id;
+        return self.blockDominates(check_block, read_block);
+    }
+
+    pub fn noteLowered(self: *FunctionPlan, command: snapshot_v1.IrCommand) void {
+        self.lowered_commands.set(@intFromEnum(command));
+    }
+
+    pub fn noteLoweredRange(
+        self: *FunctionPlan,
+        snapshot: snapshot_v1.Snapshot,
+        function: snapshot_v1.IrFunction,
+        start: u32,
+        finish: u32,
+    ) void {
+        var instruction_id = start;
+        while (instruction_id <= finish and instruction_id < function.instruction_count) : (instruction_id += 1) {
+            const instruction = snapshot.irInstruction(function, instruction_id) catch continue;
+            self.noteLowered(instruction.command);
+        }
+    }
+
+    pub fn continuationAdmitted(self: FunctionPlan, block_id: u32, suffix_start: u32, finish: u32) ?bool {
+        for (self.continuation_regions) |region| {
+            if (region.block_id == block_id and region.suffix_start == suffix_start and
+                region.block_finish == finish)
+                return region.admitted;
+        }
+        return null;
     }
 
     pub fn plainLenAt(self: FunctionPlan, instruction_id: u32) ?recognize.PlainLen {
@@ -1179,7 +1265,7 @@ fn stampUserdataClusters(
     return clusters.toOwnedSlice(allocator);
 }
 
-/// §3.2 winner: first covering *At matcher in HEAD emitInstructionInner order.
+/// First covering matcher wins; later families must not overwrite a hit.
 pub fn matchInstructionCluster(ctx: anytype, instruction_id: u32) Error!?FunctionPlan.Cluster {
     {
         var distance: u32 = 0;
@@ -1367,6 +1453,60 @@ pub fn matchInstructionCluster(ctx: anytype, instruction_id: u32) Error!?Functio
                         .at = pattern.start,
                         .finish = pattern.finish,
                     };
+            }
+        }
+    }
+    {
+        var distance: u32 = 0;
+        while (distance <= 6 and distance <= instruction_id) : (distance += 1) {
+            if (try ctx.integerCreatePatternAt(instruction_id - distance)) |pattern| {
+                if (instruction_id <= pattern.finish)
+                    return .{
+                        .kind = .integer_create,
+                        .start = if (pattern.check >= 5) pattern.check - 5 else pattern.check,
+                        .at = pattern.check,
+                        .finish = pattern.finish,
+                    };
+            }
+        }
+    }
+    if (ctx.plan.instructionBlock(instruction_id)) |block_id| {
+        if (@hasField(@TypeOf(ctx), "snapshot")) {
+            const block = try ctx.snapshot.irBlock(ctx.function, block_id);
+            if (try ctx.linearizedPowPattern(instruction_id, block)) |pattern|
+                return .{
+                    .kind = .linearized_pow,
+                    .start = instruction_id,
+                    .at = instruction_id,
+                    .finish = pattern.finish,
+                };
+        }
+    }
+    {
+        const command = (try ctx.instruction(instruction_id)).command;
+        if (command == abi.ir_cmd_get_type or command == abi.ir_cmd_get_typeof) {
+            if (try ctx.typeNamePattern(instruction_id, command == abi.ir_cmd_get_typeof)) |pattern|
+                return .{
+                    .kind = .type_name,
+                    .start = instruction_id,
+                    .at = instruction_id,
+                    .finish = pattern.finish,
+                };
+        }
+        var distance: u32 = 1;
+        while (distance <= 4 and distance <= instruction_id) : (distance += 1) {
+            const start = instruction_id - distance;
+            const start_command = (try ctx.instruction(start)).command;
+            if (start_command == abi.ir_cmd_get_type or start_command == abi.ir_cmd_get_typeof) {
+                if (try ctx.typeNamePattern(start, start_command == abi.ir_cmd_get_typeof)) |pattern| {
+                    if (instruction_id <= pattern.finish)
+                        return .{
+                            .kind = .type_name,
+                            .start = start,
+                            .at = start,
+                            .finish = pattern.finish,
+                        };
+                }
             }
         }
     }

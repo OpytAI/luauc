@@ -54,12 +54,11 @@ fn lowerFunction(
     if (!entry_block.kind.isCompilable() or entry_block.isEmpty())
         return Error.UnsupportedControlFlow;
 
-    var plan = FunctionPlan.init(allocator, snapshot, function) catch |err| {
+    var plan = FunctionPlan.init(allocator, snapshot, function, static_package != null) catch |err| {
         diagnostics.recordPhase(@errorName(err), "function planning");
         return err;
     };
     defer plan.deinit();
-    try continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan);
 
     const slots = try allocator.alloc(ValueSlot, function.instruction_count);
     defer allocator.free(slots);
@@ -238,6 +237,7 @@ fn lowerFunction(
         diagnostics.recordPhase(@errorName(err), "block index");
         return err;
     };
+    try continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan);
     context.classifyBuiltinNumberLoads() catch |err| {
         diagnostics.recordPhase(@errorName(err), "value classification");
         return err;
@@ -362,10 +362,15 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     defer allocator.free(proto_id_by_bytecode_id);
 
     var needs = runtime_imports.ImportNeeds{};
-    runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs) catch |err| {
-        diagnostics.recordPhase(@errorName(err), "runtime import planning");
-        return err;
-    };
+    {
+        const function = try snapshot.irFunction(function_id);
+        var plan = FunctionPlan.init(allocator, snapshot, function, false) catch |err| {
+            diagnostics.recordPhase(@errorName(err), "runtime import planning");
+            return err;
+        };
+        defer plan.deinit();
+        needs = plan.import_needs;
+    }
     var object = wasm.Object.init(allocator);
     defer object.deinit();
     var string_keys = StringKeyPool{};
@@ -385,8 +390,12 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
 
     var needs = runtime_imports.ImportNeeds{};
     var function_id: u32 = 0;
-    while (function_id < snapshot.header.ir_function_count) : (function_id += 1)
-        try runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs);
+    while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
+        const function = try snapshot.irFunction(function_id);
+        var plan = try FunctionPlan.init(allocator, snapshot, function, false);
+        needs.merge(plan.import_needs);
+        plan.deinit();
+    }
 
     var object = wasm.Object.init(allocator);
     defer object.deinit();
@@ -807,7 +816,10 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
 
         var function_id: u32 = 0;
         while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
-            try runtime_imports.scanImportNeeds(snapshot, function_id, true, &needs);
+            const function = try snapshot.irFunction(function_id);
+            var plan = try FunctionPlan.init(allocator, snapshot, function, true);
+            needs.merge(plan.import_needs);
+            plan.deinit();
         }
     }
     if (total_functions == 0)

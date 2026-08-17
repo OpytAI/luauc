@@ -38,12 +38,15 @@ pub const BlockIndex = struct {
     allocator: std.mem.Allocator = undefined,
     facts: []BlockFact = &.{},
     bypassed: []bool = &.{},
+    fallback_supported: []bool = &.{},
 
     pub fn deinit(self: *BlockIndex) void {
         if (self.facts.len != 0)
             self.allocator.free(self.facts);
         if (self.bypassed.len != 0)
             self.allocator.free(self.bypassed);
+        if (self.fallback_supported.len != 0)
+            self.allocator.free(self.fallback_supported);
         self.* = .{};
     }
 
@@ -53,6 +56,10 @@ pub const BlockIndex = struct {
 
     pub fn isBypassed(self: BlockIndex, block_id: u32) bool {
         return block_id < self.bypassed.len and self.bypassed[block_id];
+    }
+
+    pub fn supportsFallback(self: BlockIndex, block_id: u32) bool {
+        return block_id < self.fallback_supported.len and self.fallback_supported[block_id];
     }
 };
 
@@ -64,6 +71,9 @@ pub fn indexBlocks(allocator: std.mem.Allocator, ctx: anytype) Error!BlockIndex 
     const bypassed = try allocator.alloc(bool, block_count);
     errdefer allocator.free(bypassed);
     @memset(bypassed, false);
+    const fallback_supported = try allocator.alloc(bool, block_count);
+    errdefer allocator.free(fallback_supported);
+    @memset(fallback_supported, false);
 
     var block_id: u32 = 0;
     while (block_id < ctx.function.block_count) : (block_id += 1) {
@@ -71,6 +81,7 @@ pub fn indexBlocks(allocator: std.mem.Allocator, ctx: anytype) Error!BlockIndex 
         if (block.isEmpty())
             continue;
         facts[block_id] = try classifyBlock(ctx, block_id, block);
+        fallback_supported[block_id] = try classifyFallbackSupport(ctx, facts[block_id], block);
     }
 
     block_id = 0;
@@ -89,6 +100,22 @@ pub fn indexBlocks(allocator: std.mem.Allocator, ctx: anytype) Error!BlockIndex 
         .allocator = allocator,
         .facts = facts,
         .bypassed = bypassed,
+        .fallback_supported = fallback_supported,
+    };
+}
+
+fn classifyFallbackSupport(ctx: anytype, fact: BlockFact, block: snapshot_v1.IrBlock) Error!bool {
+    if (block.kind != .fallback or block.isEmpty())
+        return false;
+    return switch (fact.kind) {
+        .ordinary_call_fallback, .fastcall_fallback, .xnext_prep, .generic_iteration_fallback, .namecall => true,
+        else => (try ctx.supportsArithmeticFallback(block)) or
+            (try ctx.supportsComparisonFallback(block)) or
+            (try ctx.supportsMaterializedComparisonFallback(block)) or
+            (try ctx.supportsLengthFallback(block)) or
+            (try ctx.supportsSpecializedIpairsFallback(block)) or
+            (try ctx.supportsNamecallFallback(block)) or
+            (try ctx.supportsGeneralTableFallback(block)),
     };
 }
 
