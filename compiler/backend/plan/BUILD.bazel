@@ -1,0 +1,26 @@
+load("@rules_zig//zig:defs.bzl", "zig_library")
+
+zig_library(
+    name = "recognize",
+    main = "recognize.zig",
+    import_name = "luauc_backend_recognize",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "plan",
+    main = "plan.zig",
+    import_name = "luauc_backend_plan",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":recognize",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)

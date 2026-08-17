@@ -1,0 +1,13 @@
+import "./scalar.test.mjs";
+import "./operators.test.mjs";
+import "./calls.test.mjs";
+import "./closures.test.mjs";
+import "./tables.test.mjs";
+import "./iteration.test.mjs";
+import "./namecall.test.mjs";
+import "./malformed_graph.test.mjs";
+import "./builtins.test.mjs";
+import "./buffers.test.mjs";
+import "./proto_identity.test.mjs";
+import "./userdata.test.mjs";
+import "./coverage.test.mjs";

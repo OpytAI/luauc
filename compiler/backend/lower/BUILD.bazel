@@ -1,0 +1,146 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library", "zig_static_library")
+
+zig_library(
+    name = "imports",
+    main = "imports.zig",
+    import_name = "luauc_backend_imports",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+        "//compiler/wasm:object",
+    ],
+)
+
+zig_library(
+    name = "context",
+    main = "context.zig",
+    import_name = "luauc_backend_context",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        "//compiler/backend/emit:allocations",
+        "//compiler/backend/emit:builtin_patterns",
+        "//compiler/backend/emit:calls",
+        "//compiler/backend/emit:closures",
+        "//compiler/backend/emit:control",
+        "//compiler/backend/emit:core",
+        "//compiler/backend/emit:dispatch",
+        "//compiler/backend/emit:iteration",
+        "//compiler/backend/emit:memory",
+        "//compiler/backend/emit:namecall",
+        "//compiler/backend/emit:operators",
+        "//compiler/backend/emit:scalar",
+        "//compiler/backend/emit:tables",
+        "//compiler/backend/emit:table_values",
+        "//compiler/backend/plan:plan",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:diagnostics",
+        "//compiler/model:model",
+        "//compiler/model:static_package_v1",
+        "//compiler/wasm:object",
+    ],
+)
+
+zig_library(
+    name = "continuations",
+    main = "continuations.zig",
+    import_name = "luauc_backend_continuations",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":context",
+        "//compiler/backend/plan:plan",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:diagnostics",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "driver",
+    main = "driver.zig",
+    import_name = "luauc_backend_driver",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":context",
+        ":continuations",
+        ":imports",
+        "//compiler/backend/plan:plan",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:diagnostics",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+        "//compiler/model:static_package_v1",
+        "//compiler/wasm:object",
+    ],
+)
+
+zig_library(
+    name = "backend",
+    main = "lower.zig",
+    import_name = "luauc_backend",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":driver",
+        "//compiler/model:diagnostics",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "component_api",
+    main = "component_api.zig",
+    import_name = "luauc_backend_component_api",
+    visibility = ["//visibility:public"],
+)
+
+zig_static_library(
+    name = "component",
+    main = "component.zig",
+    tags = ["manual"],
+    deps = [
+        ":backend",
+        ":component_api",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+zig_binary(
+    name = "backend_raw",
+    srcs = ["backend_host.zig"],
+    linkopts = [
+        "-fno-entry",
+        "--initial-memory=33554432",
+        "--max-memory=268435456",
+        "--export=luauc_backend_v1_alloc",
+        "--export=luauc_backend_v1_compile",
+        "--export=luauc_backend_v1_compile_package",
+        "--export=luauc_backend_v1_compile_static_package",
+        "--export=luauc_backend_v1_dealloc",
+        "--export=luauc_backend_v1_free",
+    ],
+    main = "backend_host.zig",
+    tags = ["manual"],
+    deps = [
+        ":component",
+        ":component_api",
+    ],
+)
+
+zig_configure_binary(
+    name = "backend_wasm",
+    actual = ":backend_raw",
+    mode = "release_small",
+    target = "//platforms:wasm32_wasi",
+    threaded = "single",
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "backend_build_test",
+    targets = [":backend_wasm"],
+    visibility = ["//visibility:public"],
+)

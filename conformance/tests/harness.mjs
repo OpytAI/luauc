@@ -10,14 +10,14 @@ const packageFunctionSymbols = (count) => Array.from(
 );
 const packageSymbols = packageFunctionSymbols(3);
 
-function runfile(relative, variable) {
+export function runfile(relative, variable) {
   if (!relative) throw new Error(`${variable} is not set`);
   if (relative.startsWith("/")) return relative;
   if (!process.env.RUNFILES_DIR) throw new Error("RUNFILES_DIR is not set");
   return join(process.env.RUNFILES_DIR, relative);
 }
 
-async function instantiateZeroImport(path, label) {
+export async function instantiateZeroImport(path, label) {
   const module = await WebAssembly.compile(readFileSync(path));
   const imports = WebAssembly.Module.imports(module);
   if (imports.length !== 0) throw new Error(`${label} is not zero-import: ${JSON.stringify(imports)}`);
@@ -36,7 +36,7 @@ const wasmLd = runfile(process.env.LUAUC_WASM_LD, "LUAUC_WASM_LD");
 
 const encoder = new TextEncoder();
 
-function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans = null) {
+export function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans = null) {
   const api = frontend.exports;
   api.luauc_frontend_v1_init();
   const source = encoder.encode(sourceText);
@@ -94,7 +94,7 @@ function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans 
   return snapshot;
 }
 
-function backendObject(snapshot, functionId) {
+export function backendObject(snapshot, functionId) {
   const api = backend.exports;
   const snapshotPointer = api.luauc_backend_v1_alloc(snapshot.length);
   const resultPointer = api.luauc_backend_v1_alloc(24);
@@ -120,7 +120,7 @@ function backendObject(snapshot, functionId) {
   return object;
 }
 
-function backendPackage(snapshot) {
+export function backendPackage(snapshot) {
   const api = backend.exports;
   const snapshotPointer = api.luauc_backend_v1_alloc(snapshot.length);
   const resultPointer = api.luauc_backend_v1_alloc(24);
@@ -146,7 +146,7 @@ function backendPackage(snapshot) {
   return object;
 }
 
-function staticPackageFrame(moduleName, snapshot) {
+export function staticPackageFrame(moduleName, snapshot) {
   const name = Buffer.from(moduleName);
   const sourceName = Buffer.from(`@${moduleName}.luau`);
   const headerSize = 24;
@@ -173,7 +173,7 @@ function staticPackageFrame(moduleName, snapshot) {
   return frame;
 }
 
-function backendStaticPackage(frame) {
+export function backendStaticPackage(frame) {
   const api = backend.exports;
   const framePointer = api.luauc_backend_v1_alloc(frame.length);
   const resultPointer = api.luauc_backend_v1_alloc(24);
@@ -199,7 +199,7 @@ function backendStaticPackage(frame) {
   return object;
 }
 
-function snapshotSection(snapshot, wantedKind) {
+export function snapshotSection(snapshot, wantedKind) {
   const sectionCount = snapshot.readUInt32LE(204);
   for (let index = 0; index < sectionCount; index++) {
     const descriptor = 224 + index * 32;
@@ -213,7 +213,7 @@ function snapshotSection(snapshot, wantedKind) {
   throw new Error(`snapshot is missing section ${wantedKind}`);
 }
 
-function snapshotShape(snapshot) {
+export function snapshotShape(snapshot) {
   const protos = snapshotSection(snapshot, 3);
   const bytecode = snapshotSection(snapshot, 5);
   const lineinfo = snapshotSection(snapshot, 11);
@@ -302,7 +302,7 @@ function snapshotShape(snapshot) {
   };
 }
 
-function capturedSnapshotOffsets(snapshot) {
+export function capturedSnapshotOffsets(snapshot) {
   const protos = snapshotSection(snapshot, 3);
   const functions = snapshotSection(snapshot, 15);
   const blocks = snapshotSection(snapshot, 16);
@@ -334,7 +334,7 @@ function capturedSnapshotOffsets(snapshot) {
   };
 }
 
-function referenceSnapshotOffsets(snapshot) {
+export function referenceSnapshotOffsets(snapshot) {
   const protos = snapshotSection(snapshot, 3);
   const functions = snapshotSection(snapshot, 15);
   const blocks = snapshotSection(snapshot, 16);
@@ -372,7 +372,7 @@ function referenceSnapshotOffsets(snapshot) {
   };
 }
 
-function expectPackageRejection(snapshot, label) {
+export function expectPackageRejection(snapshot, label) {
   try {
     backendPackage(snapshot);
   } catch {
@@ -381,7 +381,7 @@ function expectPackageRejection(snapshot, label) {
   throw new Error(`package mutation was accepted: ${label}`);
 }
 
-function executeForwardedCapturePackageShape() {
+export function executeForwardedCapturePackageShape() {
   const name = "forwarded-capture-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_FORWARDED_CAPTURE_SOURCE, "LUAUC_FORWARDED_CAPTURE_SOURCE"),
@@ -407,7 +407,7 @@ function executeForwardedCapturePackageShape() {
   return { objectSize: first.length };
 }
 
-async function executeRecursiveCallPackageShape() {
+export async function executeRecursiveCallPackageShape() {
   const name = "recursive-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_RECURSIVE_CALL_SOURCE, "LUAUC_RECURSIVE_CALL_SOURCE"),
@@ -491,7 +491,7 @@ async function executeRecursiveCallPackageShape() {
   return { objectSize: first.length, functionCount: generatedFunctions.length };
 }
 
-async function executeCoveragePackageShape() {
+export async function executeCoveragePackageShape() {
   const name = "coverage-package-shape";
   const source = "return function(value) if value > 0 then return value + 1 end return value - 1 end";
   const firstSnapshot = frontendSnapshot(source, "@aot/coverage_shape.luau", 1);
@@ -533,7 +533,7 @@ async function executeCoveragePackageShape() {
   return { objectSize: first.length, sites: irSites };
 }
 
-function executeUserdataHooksPackageShape() {
+export function executeUserdataHooksPackageShape() {
   const name = "userdata-hooks-package-shape";
   const source = readFileSync(
     runfile(process.env.LUAUC_USERDATA_HOOKS_SOURCE, "LUAUC_USERDATA_HOOKS_SOURCE"),
@@ -568,7 +568,7 @@ function executeUserdataHooksPackageShape() {
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
 
-function executeEmbedNamecallFamilyPackageShape() {
+export function executeEmbedNamecallFamilyPackageShape() {
   const name = "embed-namecall-family-package-shape";
   const source = readFileSync(
     runfile(process.env.LUAUC_EMBED_LIB_SOURCE, "LUAUC_EMBED_LIB_SOURCE"),
@@ -930,7 +930,7 @@ function executeEmbedNamecallFamilyPackageShape() {
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
 
-async function executeTableInsertAppendPackageShape() {
+export async function executeTableInsertAppendPackageShape() {
   const name = "table-clone-append-package-shape";
   const snapshot = frontendSnapshot(
     "return function(value) local first = { count = 17, kind = 'seed', ready = true } local second = { count = 17, kind = 'seed', ready = true } table.insert(first, value) return first, second end",
@@ -1037,7 +1037,7 @@ async function executeTableInsertAppendPackageShape() {
   return { objectSize: object.length };
 }
 
-async function executePreloadedFieldAndInvertedCompare() {
+export async function executePreloadedFieldAndInvertedCompare() {
   const name = "preloaded-field-and-inverted-compare";
   const snapshot = frontendSnapshot(
     "return function(target, other) target.generated_by = 'agent-plan' return target ~= other end",
@@ -1054,7 +1054,7 @@ async function executePreloadedFieldAndInvertedCompare() {
   return { objectSize: object.length };
 }
 
-async function executeLinearizedStringFieldWrites() {
+export async function executeLinearizedStringFieldWrites() {
   const name = "linearized-string-field-writes";
   const snapshot = frontendSnapshot(
     `local inputPath = arg[1]
@@ -1095,7 +1095,7 @@ assert(sys.fs.write(outputPath, json.encode(plan)))`,
   return { objectSize: object.length };
 }
 
-async function executePlainTableNamecallPackageShape() {
+export async function executePlainTableNamecallPackageShape() {
   const name = "plain-table-namecall-package-shape";
   const snapshot = frontendSnapshot(
     "return function(amount) local receiver = { value = 10 } function receiver:bump(delta) return delta + 10 end return receiver:bump(amount) end",
@@ -1250,7 +1250,7 @@ async function executePlainTableNamecallPackageShape() {
   return { objectSize: productObject.length };
 }
 
-async function executeYieldCallPackage() {
+export async function executeYieldCallPackage() {
   const name = "yield-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_YIELD_CALL_SOURCE, "LUAUC_YIELD_CALL_SOURCE"),
@@ -1292,7 +1292,7 @@ async function executeYieldCallPackage() {
   return { objectSize: first.length, functionCount: functionSymbols.length };
 }
 
-async function executeDynamicArrayTablePackage() {
+export async function executeDynamicArrayTablePackage() {
   const name = "dynamic-array-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE, "LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE"),
@@ -1331,7 +1331,7 @@ async function executeDynamicArrayTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeDynamicHashTablePackage() {
+export async function executeDynamicHashTablePackage() {
   const name = "dynamic-hash-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_DYNAMIC_HASH_TABLE_SOURCE, "LUAUC_DYNAMIC_HASH_TABLE_SOURCE"),
@@ -1380,7 +1380,7 @@ async function executeDynamicHashTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeDynamicStringPackage() {
+export async function executeDynamicStringPackage() {
   const name = "dynamic-string-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_DYNAMIC_STRING_SOURCE, "LUAUC_DYNAMIC_STRING_SOURCE"),
@@ -1431,7 +1431,7 @@ async function executeDynamicStringPackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGenericIterationPackage() {
+export async function executeGenericIterationPackage() {
   const name = "generic-iteration-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_GENERIC_ITERATION_SOURCE, "LUAUC_GENERIC_ITERATION_SOURCE"),
@@ -1490,7 +1490,7 @@ async function executeGenericIterationPackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGenericTablePackage() {
+export async function executeGenericTablePackage() {
   const name = "generic-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_GENERIC_TABLE_SOURCE, "LUAUC_GENERIC_TABLE_SOURCE"),
@@ -1561,7 +1561,7 @@ async function executeGenericTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGeneralDynamicObjectGraph() {
+export async function executeGeneralDynamicObjectGraph() {
   const name = "general-dynamic-object-graph";
   const source = `return function(object, key, value)
     object[key] = value
@@ -1607,7 +1607,7 @@ end`;
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executePowMetamethodGraph() {
+export async function executePowMetamethodGraph() {
   const name = "pow-metamethod-graph";
   const snapshot = frontendSnapshot(
     "return function(left, right) return left ^ right end",
@@ -1641,7 +1641,7 @@ async function executePowMetamethodGraph() {
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executeRepeatedPowMetamethodGraph() {
+export async function executeRepeatedPowMetamethodGraph() {
   const name = "repeated-pow-metamethod-graph";
   const snapshot = frontendSnapshot(
     "return function(left, right) local value = left ^ right; value = value ^ right; value = value ^ right; return value end",
@@ -1685,7 +1685,7 @@ async function executeRepeatedPowMetamethodGraph() {
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executeMixedTablePackage() {
+export async function executeMixedTablePackage() {
   const name = "mixed-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_MIXED_TABLE_SOURCE, "LUAUC_MIXED_TABLE_SOURCE"),
@@ -1770,7 +1770,7 @@ async function executeMixedTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGlobalStatePackage() {
+export async function executeGlobalStatePackage() {
   const name = "global-state-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_GLOBAL_STATE_SOURCE, "LUAUC_GLOBAL_STATE_SOURCE"),
@@ -1844,7 +1844,7 @@ async function executeGlobalStatePackage() {
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executeFastBuiltinsPackage() {
+export async function executeFastBuiltinsPackage() {
   const name = "fast-builtins-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_FAST_BUILTINS_SOURCE, "LUAUC_FAST_BUILTINS_SOURCE"),
@@ -1969,7 +1969,7 @@ async function executeFastBuiltinsPackage() {
   return { objectSize: first.length, functionCount: shape.functionCount };
 }
 
-async function executeBufferScalarMatrixPackage() {
+export async function executeBufferScalarMatrixPackage() {
   const name = "buffer-scalar-matrix-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_BUFFER_SCALAR_MATRIX_SOURCE, "LUAUC_BUFFER_SCALAR_MATRIX_SOURCE"),
@@ -2070,7 +2070,7 @@ async function executeBufferScalarMatrixPackage() {
   return { objectSize: first.length, functionCount: 9 };
 }
 
-function linkObject(object, name) {
+export function linkObject(object, name) {
   const directory = mkdtempSync(join(process.env.TEST_TMPDIR || tmpdir(), `luau-aot-${name}-`));
   const objectPath = join(directory, `${name}.o`);
   const wasmPath = join(directory, `${name}.wasm`);
@@ -2095,7 +2095,7 @@ function linkObject(object, name) {
   return bytes;
 }
 
-function linkPackage(object, functionSymbols = packageSymbols, extraExports = []) {
+export function linkPackage(object, functionSymbols = packageSymbols, extraExports = []) {
   const directory = mkdtempSync(join(process.env.TEST_TMPDIR || tmpdir(), "luau-aot-package-"));
   const objectPath = join(directory, "package.o");
   const wasmPath = join(directory, "package.wasm");
@@ -2121,7 +2121,7 @@ function linkPackage(object, functionSymbols = packageSymbols, extraExports = []
   return bytes;
 }
 
-async function executeCase(name, source, inputs) {
+export async function executeCase(name, source, inputs) {
   const snapshot = frontendSnapshot(source, `@aot/${name}.luau`);
   const functions = snapshotSection(snapshot, 15);
   const constants = snapshotSection(snapshot, 19);
@@ -2260,7 +2260,7 @@ async function executeCase(name, source, inputs) {
   return { objectSize: object.length, interrupts };
 }
 
-async function executeSilentRoot() {
+export async function executeSilentRoot() {
   const name = "silent-root";
   const source = readFileSync(
     runfile(process.env.LUAUC_SILENT_SOURCE, "LUAUC_SILENT_SOURCE"),
@@ -2321,7 +2321,7 @@ async function executeSilentRoot() {
   return { objectSize: object.length, interrupts };
 }
 
-async function executeSlowAdd() {
+export async function executeSlowAdd() {
   const name = "slow-add";
   const source = readFileSync(
     runfile(process.env.LUAUC_SLOW_ADD_SOURCE, "LUAUC_SLOW_ADD_SOURCE"),
@@ -2408,7 +2408,7 @@ async function executeSlowAdd() {
   return { objectSize: object.length, interrupts, helperCalls };
 }
 
-async function executeCompiledCallPackage() {
+export async function executeCompiledCallPackage() {
   const name = "compiled-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_COMPILED_CALL_SOURCE, "LUAUC_COMPILED_CALL_SOURCE"),
@@ -2553,7 +2553,7 @@ async function executeCompiledCallPackage() {
   return { objectSize: first.length, nestedCalls, interrupts };
 }
 
-async function executeCapturedCallPackage() {
+export async function executeCapturedCallPackage() {
   const name = "captured-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_CAPTURED_CALL_SOURCE, "LUAUC_CAPTURED_CALL_SOURCE"),
@@ -2760,7 +2760,7 @@ async function executeCapturedCallPackage() {
   return { objectSize: first.length, nestedCalls, captureCount, interrupts };
 }
 
-async function executeReferenceCapturePackage() {
+export async function executeReferenceCapturePackage() {
   const name = "reference-capture-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_REFERENCE_CAPTURE_SOURCE, "LUAUC_REFERENCE_CAPTURE_SOURCE"),
@@ -3048,7 +3048,7 @@ async function executeReferenceCapturePackage() {
   return { objectSize: first.length, referenceClosures, closes, upvalueWrites, interrupts };
 }
 
-async function executeMultiResultCallPackage() {
+export async function executeMultiResultCallPackage() {
   const name = "multi-result-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_MULTI_RESULT_CALL_SOURCE, "LUAUC_MULTI_RESULT_CALL_SOURCE"),
@@ -3195,7 +3195,7 @@ async function executeMultiResultCallPackage() {
   return { objectSize: first.length, nestedCalls, pairReturns, interrupts };
 }
 
-async function executeProtoIdentityControlPackageShape() {
+export async function executeProtoIdentityControlPackageShape() {
   const name = "Proto identity control";
   const source = readFileSync(
     runfile(process.env.LUAUC_PROTO_IDENTITY_SOURCE, "LUAUC_PROTO_IDENTITY_SOURCE"),
@@ -3254,89 +3254,3 @@ async function executeProtoIdentityControlPackageShape() {
   return { objectSize: firstObject.length, functionCount: shape.functionCount };
 }
 
-const scalar = await executeCase(
-  "scalar",
-  "return function(n) return n * 2 + 1 end",
-  [
-    [1, 3],
-    [4, 9],
-    [7, 15],
-  ],
-);
-const loop = await executeCase(
-  "loop",
-  "return function(n) local sum = 0 for i = 1, n do sum += i end return sum end",
-  [
-    [1, 1],
-    [4, 10],
-    [7, 28],
-  ],
-);
-const silent = await executeSilentRoot();
-const slowAdd = await executeSlowAdd();
-const compiledCall = await executeCompiledCallPackage();
-const capturedCall = await executeCapturedCallPackage();
-const referenceCapture = await executeReferenceCapturePackage();
-const multiResultCall = await executeMultiResultCallPackage();
-const forwardedCapture = executeForwardedCapturePackageShape();
-const recursiveCall = await executeRecursiveCallPackageShape();
-const coverage = await executeCoveragePackageShape();
-const tableInsertAppend = await executeTableInsertAppendPackageShape();
-const preloadedFieldCompare = await executePreloadedFieldAndInvertedCompare();
-const linearizedStringFields = await executeLinearizedStringFieldWrites();
-const plainTableNamecall = await executePlainTableNamecallPackageShape();
-const yieldCall = await executeYieldCallPackage();
-const dynamicArrayTable = await executeDynamicArrayTablePackage();
-const dynamicHashTable = await executeDynamicHashTablePackage();
-const dynamicString = await executeDynamicStringPackage();
-const genericIteration = await executeGenericIterationPackage();
-const genericTable = await executeGenericTablePackage();
-const generalDynamicObject = await executeGeneralDynamicObjectGraph();
-const powMetamethod = await executePowMetamethodGraph();
-const repeatedPowMetamethod = await executeRepeatedPowMetamethodGraph();
-const mixedTable = await executeMixedTablePackage();
-const globalState = await executeGlobalStatePackage();
-const fastBuiltins = await executeFastBuiltinsPackage();
-const bufferScalarMatrix = await executeBufferScalarMatrixPackage();
-const embedNamecallFamily = executeEmbedNamecallFamilyPackageShape();
-const protoIdentityControl = await executeProtoIdentityControlPackageShape();
-const userdataHooks = executeUserdataHooksPackageShape();
-for (const command of [105, 141, 147, 148])
-  if (!userdataHooks.commandCounts.get(command))
-    throw new Error(`Phase E hook did not execute command ${command} in the userdata-hooks snapshot`);
-if (!embedNamecallFamily.commandCounts.get(172))
-  throw new Error("compile-only MARK_DEAD is missing from the embed snapshot");
-
-console.log(
-  `frontend -> IR -> relocatable wasm: scalar ${scalar.objectSize} bytes, loop ${loop.objectSize} bytes; ` +
-    `silent root ${silent.objectSize} bytes, slow add ${slowAdd.objectSize} bytes; ` +
-    `compiled call package ${compiledCall.objectSize} bytes/${compiledCall.nestedCalls} nested calls; ` +
-    `captured call package ${capturedCall.objectSize} bytes/${capturedCall.captureCount} captures; ` +
-    `reference capture package ${referenceCapture.objectSize} bytes/${referenceCapture.closes} closes; ` +
-    `forwarded capture package ${forwardedCapture.objectSize} bytes; ` +
-    `recursive call package ${recursiveCall.objectSize} bytes/${recursiveCall.functionCount} functions; ` +
-    `coverage package ${coverage.objectSize} bytes/${coverage.sites} sites; ` +
-    `table.insert append package ${tableInsertAppend.objectSize} bytes; ` +
-    `preloaded field/inverted compare ${preloadedFieldCompare.objectSize} bytes; ` +
-    `linearized string fields ${linearizedStringFields.objectSize} bytes; ` +
-    `plain table NAMECALL package ${plainTableNamecall.objectSize} bytes; ` +
-    `yield call package ${yieldCall.objectSize} bytes/${yieldCall.functionCount} functions; ` +
-    `dynamic array table ${dynamicArrayTable.objectSize} bytes/${dynamicArrayTable.functionCount} functions; ` +
-    `dynamic hash table ${dynamicHashTable.objectSize} bytes/${dynamicHashTable.functionCount} functions; ` +
-    `dynamic string ${dynamicString.objectSize} bytes/${dynamicString.functionCount} functions; ` +
-    `generic iteration ${genericIteration.objectSize} bytes/${genericIteration.functionCount} functions; ` +
-    `generic table ${genericTable.objectSize} bytes/${genericTable.functionCount} functions; ` +
-    `general dynamic object ${generalDynamicObject.objectSize} bytes/${generalDynamicObject.functionCount} functions; ` +
-    `pow metamethod ${powMetamethod.objectSize} bytes/${powMetamethod.functionCount} functions; ` +
-    `repeated pow metamethod ${repeatedPowMetamethod.objectSize} bytes/${repeatedPowMetamethod.functionCount} functions; ` +
-    `mixed table ${mixedTable.objectSize} bytes/${mixedTable.functionCount} functions; ` +
-    `global state ${globalState.objectSize} bytes/${globalState.functionCount} functions; ` +
-    `fast builtins ${fastBuiltins.objectSize} bytes/${fastBuiltins.functionCount} functions; ` +
-    `buffer scalar matrix ${bufferScalarMatrix.objectSize} bytes/${bufferScalarMatrix.functionCount} functions; ` +
-    `embed NAMECALL family ${embedNamecallFamily.objectSize} bytes/${embedNamecallFamily.functionCount} functions; ` +
-    `Proto identity control ${protoIdentityControl.objectSize} bytes/${protoIdentityControl.functionCount} functions; ` +
-    `userdata hooks ${userdataHooks.objectSize} bytes/${userdataHooks.functionCount} functions; ` +
-    `multi-result package ${multiResultCall.objectSize} bytes/${multiResultCall.pairReturns} pair returns; ` +
-    `interrupt calls ${scalar.interrupts}/${loop.interrupts}/${silent.interrupts}/${slowAdd.interrupts}; ` +
-    `slow helpers ${slowAdd.helperCalls}`,
-);

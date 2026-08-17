@@ -3,122 +3,122 @@
   "sources": [
     {
       "source": "buffer_scalar_matrix",
-      "path": "compiler/backend/buffer_scalar_matrix.luau",
-      "bazel_data": "//compiler/backend:buffer_scalar_matrix.luau",
+      "path": "conformance/sources/buffer_scalar_matrix.luau",
+      "bazel_data": "//conformance/sources:buffer_scalar_matrix",
       "hook": false
     },
     {
       "source": "captured_call",
-      "path": "compiler/backend/captured_call.luau",
-      "bazel_data": "//compiler/backend:captured_call.luau",
+      "path": "conformance/sources/captured_call.luau",
+      "bazel_data": "//conformance/sources:captured_call",
       "hook": false
     },
     {
       "source": "compiled_call",
-      "path": "compiler/backend/compiled_call.luau",
-      "bazel_data": "//compiler/backend:compiled_call.luau",
+      "path": "conformance/sources/compiled_call.luau",
+      "bazel_data": "//conformance/sources:compiled_call",
       "hook": false
     },
     {
       "source": "dynamic_array_table",
-      "path": "compiler/backend/dynamic_array_table.luau",
-      "bazel_data": "//compiler/backend:dynamic_array_table.luau",
+      "path": "conformance/sources/dynamic_array_table.luau",
+      "bazel_data": "//conformance/sources:dynamic_array_table",
       "hook": false
     },
     {
       "source": "dynamic_hash_table",
-      "path": "compiler/backend/dynamic_hash_table.luau",
-      "bazel_data": "//compiler/backend:dynamic_hash_table.luau",
+      "path": "conformance/sources/dynamic_hash_table.luau",
+      "bazel_data": "//conformance/sources:dynamic_hash_table",
       "hook": false
     },
     {
       "source": "dynamic_string",
-      "path": "compiler/backend/dynamic_string.luau",
-      "bazel_data": "//compiler/backend:dynamic_string.luau",
+      "path": "conformance/sources/dynamic_string.luau",
+      "bazel_data": "//conformance/sources:dynamic_string",
       "hook": false
     },
     {
       "source": "fast_builtins",
-      "path": "compiler/backend/fast_builtins.luau",
-      "bazel_data": "//compiler/backend:fast_builtins.luau",
+      "path": "conformance/sources/fast_builtins.luau",
+      "bazel_data": "//conformance/sources:fast_builtins",
       "hook": false
     },
     {
       "source": "forwarded_capture",
-      "path": "compiler/backend/forwarded_capture.luau",
-      "bazel_data": "//compiler/backend:forwarded_capture.luau",
+      "path": "conformance/sources/forwarded_capture.luau",
+      "bazel_data": "//conformance/sources:forwarded_capture",
       "hook": false
     },
     {
       "source": "generic_iteration",
-      "path": "compiler/backend/generic_iteration.luau",
-      "bazel_data": "//compiler/backend:generic_iteration.luau",
+      "path": "conformance/sources/generic_iteration.luau",
+      "bazel_data": "//conformance/sources:generic_iteration",
       "hook": false
     },
     {
       "source": "generic_table",
-      "path": "compiler/backend/generic_table.luau",
-      "bazel_data": "//compiler/backend:generic_table.luau",
+      "path": "conformance/sources/generic_table.luau",
+      "bazel_data": "//conformance/sources:generic_table",
       "hook": false
     },
     {
       "source": "global_state",
-      "path": "compiler/backend/global_state.luau",
-      "bazel_data": "//compiler/backend:global_state.luau",
+      "path": "conformance/sources/global_state.luau",
+      "bazel_data": "//conformance/sources:global_state",
       "hook": false
     },
     {
       "source": "mixed_table",
-      "path": "compiler/backend/mixed_table.luau",
-      "bazel_data": "//compiler/backend:mixed_table.luau",
+      "path": "conformance/sources/mixed_table.luau",
+      "bazel_data": "//conformance/sources:mixed_table",
       "hook": false
     },
     {
       "source": "multi_result_call",
-      "path": "compiler/backend/multi_result_call.luau",
-      "bazel_data": "//compiler/backend:multi_result_call.luau",
+      "path": "conformance/sources/multi_result_call.luau",
+      "bazel_data": "//conformance/sources:multi_result_call",
       "hook": false
     },
     {
       "source": "reference_capture",
-      "path": "compiler/backend/reference_capture.luau",
-      "bazel_data": "//compiler/backend:reference_capture.luau",
+      "path": "conformance/sources/reference_capture.luau",
+      "bazel_data": "//conformance/sources:reference_capture",
       "hook": false
     },
     {
       "source": "recursive_call",
-      "path": "compiler/backend/recursive_call.luau",
-      "bazel_data": "//compiler/backend:recursive_call.luau",
+      "path": "conformance/sources/recursive_call.luau",
+      "bazel_data": "//conformance/sources:recursive_call",
       "hook": false
     },
     {
       "source": "silent_return",
-      "path": "compiler/backend/silent_return.luau",
-      "bazel_data": "//compiler/backend:silent_return.luau",
+      "path": "conformance/sources/silent_return.luau",
+      "bazel_data": "//conformance/sources:silent_return",
       "hook": false
     },
     {
       "source": "slow_add",
-      "path": "compiler/backend/slow_add.luau",
-      "bazel_data": "//compiler/backend:slow_add.luau",
+      "path": "conformance/sources/slow_add.luau",
+      "bazel_data": "//conformance/sources:slow_add",
       "hook": false
     },
     {
       "source": "table_clone_append",
-      "path": "compiler/backend/table_clone_append.luau",
-      "bazel_data": "//compiler/backend:table_clone_append.luau",
+      "path": "conformance/sources/table_clone_append.luau",
+      "bazel_data": "//conformance/sources:table_clone_append",
       "hook": false
     },
     {
       "source": "table_namecall",
-      "path": "compiler/backend/table_namecall.luau",
-      "bazel_data": "//compiler/backend:table_namecall.luau",
+      "path": "conformance/sources/table_namecall.luau",
+      "bazel_data": "//conformance/sources:table_namecall",
       "hook": false
     },
     {
       "source": "yield_call",
-      "path": "compiler/backend/yield_call.luau",
-      "bazel_data": "//compiler/backend:yield_call.luau",
+      "path": "conformance/sources/yield_call.luau",
+      "bazel_data": "//conformance/sources:yield_call",
       "hook": false
     },
     {

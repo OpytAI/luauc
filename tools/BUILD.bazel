@@ -62,7 +62,7 @@ js_test(
         "ir_coverage.test.mjs",
         "ir_ledger.mjs",
         "//compiler/backend:backend_wasm",
-        "//compiler/backend:ir_ledger_luau",
+        "//conformance/sources:ir_ledger_luau",
         "//compiler/backend/emit:dispatch_zig",
         "//conformance/maps:bazel_label_allowlist_json",
         "//conformance/maps:general_arms_fixture_json",

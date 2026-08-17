@@ -14,19 +14,19 @@ js_library(
 
 backend_emit_library(
     name = "allocations",
-    deps = ["//compiler/backend:recognize"],
+    deps = ["//compiler/backend/plan:recognize"],
 )
 backend_emit_library(name = "builtin_patterns")
 backend_emit_library(
     name = "calls",
-    deps = ["//compiler/backend:imports"],
+    deps = ["//compiler/backend/lower:imports"],
 )
 backend_emit_library(name = "closures")
 backend_emit_library(name = "control")
 backend_emit_library(name = "core")
 backend_emit_library(
     name = "dispatch",
-    deps = ["//compiler/backend:diagnostics"],
+    deps = ["//compiler/model:diagnostics"],
 )
 backend_emit_library(name = "iteration")
 backend_emit_library(name = "memory")
