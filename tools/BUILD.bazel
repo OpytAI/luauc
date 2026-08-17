@@ -54,6 +54,43 @@ js_test(
 )
 
 js_test(
+    name = "ir_coverage_test",
+    size = "large",
+    data = [
+        "generate_general_arms.mjs",
+        "generate_ir_coverage.mjs",
+        "ir_coverage.test.mjs",
+        "ir_ledger.mjs",
+        "//compiler/backend:backend_wasm",
+        "//compiler/backend:ir_ledger_luau",
+        "//compiler/backend/emit:dispatch_zig",
+        "//conformance/maps:bazel_label_allowlist_json",
+        "//conformance/maps:general_arms_fixture_json",
+        "//conformance/maps:general_arms_json",
+        "//conformance/maps:ir_command_forms_json",
+        "//conformance/maps:ir_coverage_json",
+        "//conformance/maps:ir_ledger_corpus_json",
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:embed_main",
+        "//conformance/sources:proto_identity",
+        "//conformance/sources:userdata_hooks",
+        "//frontend:frontend_wasm",
+    ],
+    entry_point = "ir_coverage.test.mjs",
+    env = {
+        "LUAUC_BACKEND_WASM": "$(rlocationpath //compiler/backend:backend_wasm)",
+        "LUAUC_BAZEL_LABEL_ALLOWLIST": "$(rlocationpath //conformance/maps:bazel_label_allowlist_json)",
+        "LUAUC_DISPATCH_ZIG": "$(rlocationpath //compiler/backend/emit:dispatch_zig)",
+        "LUAUC_FRONTEND_WASM": "$(rlocationpath //frontend:frontend_wasm)",
+        "LUAUC_GENERAL_ARMS": "$(rlocationpath //conformance/maps:general_arms_json)",
+        "LUAUC_GENERAL_ARMS_FIXTURE": "$(rlocationpath //conformance/maps:general_arms_fixture_json)",
+        "LUAUC_IR_COMMAND_FORMS": "$(rlocationpath //conformance/maps:ir_command_forms_json)",
+        "LUAUC_IR_COVERAGE": "$(rlocationpath //conformance/maps:ir_coverage_json)",
+        "LUAUC_IR_LEDGER_CORPUS": "$(rlocationpath //conformance/maps:ir_ledger_corpus_json)",
+    },
+)
+
+js_test(
     name = "runtime_archive_test",
     data = [
         "//conformance/maps:runtime_objects_json",

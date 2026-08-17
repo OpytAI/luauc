@@ -1,4 +1,16 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load(":defs.bzl", "backend_emit_library")
+
+exports_files(
+    ["dispatch.zig"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "dispatch_zig",
+    srcs = ["dispatch.zig"],
+    visibility = ["//visibility:public"],
+)
 
 backend_emit_library(
     name = "allocations",

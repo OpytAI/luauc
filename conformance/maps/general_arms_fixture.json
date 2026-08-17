@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "true": [
+    "TABLE_LEN",
+    "GET_TABLE",
+    "GET_CACHED_IMPORT"
+  ],
+  "false": [
+    "FORGLOOP",
+    "FORGLOOP_FALLBACK",
+    "FALLBACK_GETTABLEKS",
+    "FALLBACK_SETTABLEKS",
+    "FALLBACK_GETGLOBAL",
+    "FALLBACK_SETGLOBAL",
+    "INVOKE_FASTCALL"
+  ]
+}

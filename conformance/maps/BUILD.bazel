@@ -1,6 +1,11 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 
 exports_files([
+    "bazel_label_allowlist.json",
+    "general_arms.json",
+    "general_arms_fixture.json",
+    "ir_command_forms.json",
+    "ir_ledger_corpus.json",
     "luauc_ir_coverage.json",
     "luauc_layout.json",
     "luauc_runtime_link_reference.json",
@@ -14,6 +19,48 @@ js_library(
         "luauc_ir_coverage.json",
         "luauc_layout.json",
     ],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "ir_coverage_json",
+    srcs = ["luauc_ir_coverage.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "ir_command_forms_json",
+    srcs = ["ir_command_forms.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "ir_ledger_corpus_json",
+    srcs = ["ir_ledger_corpus.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "general_arms_json",
+    srcs = ["general_arms.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "general_arms_fixture_json",
+    srcs = ["general_arms_fixture.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "bazel_label_allowlist_json",
+    srcs = ["bazel_label_allowlist.json"],
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "ir_coverage_up_to_date",
+    actual = "//tools:ir_coverage_test",
     visibility = ["//visibility:public"],
 )
 

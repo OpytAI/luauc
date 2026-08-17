@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "labels": [
+    "//compiler/backend:backend_build_test",
+    "//compiler/backend:frontend_to_wasm_test",
+    "//compiler:compiler_api_test",
+    "//compiler:compiler_build_test",
+    "//compiler:source_package_v1_test",
+    "//compiler/ir:frontend_snapshot_v1_test",
+    "//compiler/link:linker_test",
+    "//compiler/wasm:object_test",
+    "//compiler/wasm:scalar_fixture_object_build_test",
+    "//compiler/wasm:scalar_fixture_test",
+    "//compiler/wasm:scalar_fixture_wasm_ld_reference_test",
+    "//conformance/interpreter:pinned_interpreter",
+    "//frontend:frontend_build_test",
+    "//frontend:frontend_snapshot_test",
+    "//hosts/js:cli_test",
+    "//hosts/js:embed_test",
+    "//hosts/wasmtime:build_test",
+    "//hosts/wasmtime:parity_test",
+    "//runtime:runtime_archive_build_test",
+    "//schema:runtime_profile_v1_test",
+    "//tools:ir_coverage_test",
+    "//tools:layout_manifest_test",
+    "//tools:layout_probe_build_test",
+    "//tools:runtime_archive_test"
+  ]
+}

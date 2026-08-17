@@ -1,8 +1,38 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
-load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_library", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library", "zig_static_library")
 
-exports_files(glob(["*.luau"]))
+exports_files(
+    glob(["*.luau"]),
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "ir_ledger_luau",
+    srcs = [
+        "buffer_scalar_matrix.luau",
+        "captured_call.luau",
+        "compiled_call.luau",
+        "dynamic_array_table.luau",
+        "dynamic_hash_table.luau",
+        "dynamic_string.luau",
+        "fast_builtins.luau",
+        "forwarded_capture.luau",
+        "generic_iteration.luau",
+        "generic_table.luau",
+        "global_state.luau",
+        "mixed_table.luau",
+        "multi_result_call.luau",
+        "reference_capture.luau",
+        "recursive_call.luau",
+        "silent_return.luau",
+        "slow_add.luau",
+        "table_clone_append.luau",
+        "table_namecall.luau",
+        "yield_call.luau",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 zig_library(
     name = "runtime_abi",
