@@ -36,6 +36,7 @@
     "//hosts/wasmtime:parity_test",
     "//runtime:runtime_archive_build_test",
     "//schema:runtime_profile_v1_test",
+    "//tools:forbidden_link_test",
     "//tools:ir_coverage_test",
     "//tools:layout_manifest_test",
     "//tools:layout_probe_build_test",

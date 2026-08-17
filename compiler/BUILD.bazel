@@ -58,6 +58,7 @@ zig_binary(
         "//compiler/backend:component",
         "//frontend:adapter_wasm32_wasi",
         "//frontend:host_stubs_wasm32_wasi",
+        "//frontend:luau_execute_stub_wasm32_wasi",
         "@luau//:aot_frontend_wasm32_wasi",
     ],
 )

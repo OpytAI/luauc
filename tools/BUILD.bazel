@@ -91,6 +91,24 @@ js_test(
 )
 
 js_test(
+    name = "forbidden_link_test",
+    data = [
+        "forbidden_link.test.mjs",
+        "//conformance/maps:forbidden_link_json",
+        "//frontend:luau_execute_stub_wasm32_wasi",
+        "//runtime:runtime_archive_wasm32",
+        "@luau//:aot_frontend_interp_wasm32_wasi",
+    ],
+    entry_point = "forbidden_link.test.mjs",
+    env = {
+        "LUAUC_EXECUTE_STUB_OBJECT": "$(rlocationpath //frontend:luau_execute_stub_wasm32_wasi)",
+        "LUAUC_FORBIDDEN_LINK": "$(rlocationpath //conformance/maps:forbidden_link_json)",
+        "LUAUC_FRONTEND_INTERP_ARCHIVE": "$(rlocationpath @luau//:aot_frontend_interp_wasm32_wasi)",
+        "LUAUC_RUNTIME_ARCHIVE": "$(rlocationpath //runtime:runtime_archive_wasm32)",
+    },
+)
+
+js_test(
     name = "runtime_archive_test",
     data = [
         "//conformance/maps:runtime_objects_json",

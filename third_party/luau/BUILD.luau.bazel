@@ -385,7 +385,7 @@ luauc_cpp_archive(
 # between the standalone frontend and the complete compiler.
 luauc_cpp_archive(
     name = "aot_frontend_interp_wasm32_wasi",
-    srcs = INTERP_SRCS,
+    srcs = [src for src in INTERP_SRCS if src != "VM/src/lvmexecute.cpp"],
     copts = [
         "-fno-exceptions",
         "-fno-math-errno",

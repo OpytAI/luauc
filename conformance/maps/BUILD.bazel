@@ -2,6 +2,7 @@ load("@aspect_rules_js//js:defs.bzl", "js_library")
 
 exports_files([
     "bazel_label_allowlist.json",
+    "forbidden_link.json",
     "general_arms.json",
     "general_arms_fixture.json",
     "ir_command_forms.json",
@@ -55,6 +56,12 @@ js_library(
 js_library(
     name = "bazel_label_allowlist_json",
     srcs = ["bazel_label_allowlist.json"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "forbidden_link_json",
+    srcs = ["forbidden_link.json"],
     visibility = ["//visibility:public"],
 )
 

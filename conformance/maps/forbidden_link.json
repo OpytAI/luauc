@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "compiler_frontend_archive": "@luau//:aot_frontend_interp_wasm32_wasi",
+  "compiler_frontend_forbidden_member_basenames": ["lvmexecute.cpp"],
+  "compiler_stub_object": "//frontend:luau_execute_stub_wasm32_wasi",
+  "compiler_stub_must_define": [
+    "luau_execute",
+    "luau_finishop",
+    "luau_precall",
+    "luau_poscall",
+    "luau_callhook"
+  ],
+  "runtime_pack_forbidden_object_basenames": ["lvmexecute.cpp", "lvmload.cpp"],
+  "dispatcher_object_substrings": ["luau_opnames", "VM_PROTECT", "luau_execute_imp"]
+}
