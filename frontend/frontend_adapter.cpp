@@ -103,6 +103,9 @@ static uint8_t userdataNamecallBytecodeType(uint8_t type, const char *member, si
     return LBC_TYPE_ANY;
 }
 
+// embed.vec2 contract: Unit = normalize; Mark returns payload[0].
+// Keep frontend_adapter.cpp, interpreter/main.cpp, provider_entry.c identical.
+
 // AOT guards use undef (canonical internal reject) rather than vm_exit so the snapshot never
 // asks the backend to resume bytecode. IrTranslation still emits CHECK_TAG + vm_exit in front
 // of the hook; emitCheckTag treats that userdata vm_exit as the same reject.
@@ -114,16 +117,23 @@ static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, s
 
     IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
     build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+    IrOp x = build.inst(IrCmd::BUFFER_READF32, udata, build.constUint(0), build.constTag(LUA_TUSERDATA));
+    IrOp y = build.inst(IrCmd::BUFFER_READF32, udata, build.constUint(4), build.constTag(LUA_TUSERDATA));
+    IrOp x64 = build.inst(IrCmd::FLOAT_TO_NUM, x);
+    IrOp y64 = build.inst(IrCmd::FLOAT_TO_NUM, y);
+    IrOp len = build.inst(IrCmd::SQRT_NUM, build.inst(IrCmd::ADD_NUM,
+        build.inst(IrCmd::MUL_NUM, x64, x64), build.inst(IrCmd::MUL_NUM, y64, y64)));
+    IrOp zero = build.constDouble(0.0);
+    IrOp nx = build.inst(IrCmd::SELECT_NUM, build.inst(IrCmd::DIV_NUM, x64, len), zero, len, zero);
+    IrOp ny = build.inst(IrCmd::SELECT_NUM, build.inst(IrCmd::DIV_NUM, y64, len), zero, len, zero);
+    IrOp nx_f = build.inst(IrCmd::NUM_TO_FLOAT, nx);
+    IrOp ny_f = build.inst(IrCmd::NUM_TO_FLOAT, ny);
     build.inst(IrCmd::CHECK_GC);
     IrOp created = build.inst(IrCmd::NEW_USERDATA, build.constUint(kVec2ByteSize), build.constUint(kTagVec2));
-    build.inst(IrCmd::BUFFER_WRITEI32, created, build.constUint(0), build.constUint(0),
-               build.constTag(LUA_TUSERDATA));
-    build.inst(IrCmd::BUFFER_WRITEI32, created, build.constUint(4), build.constUint(0),
-               build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::BUFFER_WRITEF32, created, build.constUint(0), nx_f, build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::BUFFER_WRITEF32, created, build.constUint(4), ny_f, build.constTag(LUA_TUSERDATA));
     build.inst(IrCmd::STORE_POINTER, build.vmReg(resultReg), created);
     build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TUSERDATA));
-    IrOp owner = build.inst(IrCmd::LOAD_POINTER, build.vmReg(resultReg));
-    build.inst(IrCmd::BARRIER_OBJ, owner, build.vmReg(sourceReg), build.undef());
     return true;
 }
 
@@ -143,7 +153,8 @@ static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member,
     build.inst(IrCmd::SET_TABLE, build.vmReg(sourceReg), build.vmReg(argResReg + 2), build.constUint(1));
     IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
     build.inst(IrCmd::BARRIER_TABLE_BACK, table);
-    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(argResReg), build.constDouble(1.0));
+    IrOp x = build.inst(IrCmd::BUFFER_READF32, udata, build.constUint(0), build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(argResReg), build.inst(IrCmd::FLOAT_TO_NUM, x));
     build.inst(IrCmd::STORE_TAG, build.vmReg(argResReg), build.constTag(LUA_TNUMBER));
     if (results == LUA_MULTRET)
         build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(argResReg), build.constInt(1));

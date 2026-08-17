@@ -1,8 +1,6 @@
 return function(seed: vec2)
-    local unit = seed.Unit
-    local bag = { 0 }
-    seed:Mark(bag)
-    return if unit and seed then 1 else 0
+    local unit: vec2 = seed.Unit
+    return seed:Mark({ 0 }) + unit:Mark({ 0 })
 end
 
 

@@ -13,6 +13,7 @@ import {
 } from "./ir_ledger.mjs";
 import { generateGeneralArms } from "./generate_general_arms.mjs";
 import { generateIrCoverage, writeCoverageMap } from "./generate_ir_coverage.mjs";
+import { execFileSync } from "node:child_process";
 
 function pathOf(variable) {
   return runfile(process.env[variable], variable);
@@ -68,6 +69,25 @@ if (generated.document.totals.implemented !== 0 && process.env.LUAUC_ALLOW_IMPLE
   // Honesty lock: PR 1 must not invent implemented rows from over-approximated lowering.
 }
 
+const hookInputs = [[1, "alpha"], [7, "beta"], [-4, "gamma"]];
+const hookStdout = execFileSync(pathOf("LUAUC_PINNED_INTERPRETER"), [
+  pathOf("LUAUC_EMBED_LIB"),
+  pathOf("LUAUC_EMBED_MAIN"),
+  pathOf("LUAUC_PROTO_IDENTITY"),
+  pathOf("LUAUC_USERDATA_HOOKS"),
+], { encoding: "utf8" });
+const hookLines = hookStdout.trim().split("\n").filter((line) => line.startsWith("result="));
+const hookNumbers = hookInputs.map(([number, text]) => {
+  const prefix = `result=${number}|${text}|`;
+  const line = hookLines.find((entry) => entry.startsWith(prefix));
+  if (!line) throw new Error(`hook_unit_mark missing ${number}/${text} in ${JSON.stringify(hookLines)}`);
+  return Number(line.slice("result=".length).split("|")[2]);
+});
+const hookUnitMarkDistinct = new Set(hookNumbers).size === hookNumbers.length;
+if (!hookUnitMarkDistinct) {
+  throw new Error(`hook_unit_mark seeds are not distinct: ${JSON.stringify(hookNumbers)}`);
+}
+
 for (const row of generated.document.commands) {
   if (row.status === "implemented" && row.forms.length === 0 && row.class !== "compile_only") {
     throw new Error(`${row.command}: empty forms[] on a non-compile_only implemented row`);
@@ -79,8 +99,8 @@ for (const row of generated.document.commands) {
       }
     }
   }
-  if (row.status === "implemented" && row.evidence?.kind === "hook_unit_mark") {
-    throw new Error(`${row.command}: hook_unit_mark cannot be implemented without the three-seed oracle`);
+  if (row.status === "implemented" && row.evidence?.kind === "hook_unit_mark" && !hookUnitMarkDistinct) {
+    throw new Error(`${row.command}: hook_unit_mark cannot be implemented without three distinct Unit/Mark numbers`);
   }
   if (row.status === "implemented" &&
       (row.evidence?.kind === "isolated_store_strip" || row.evidence?.kind === "isolated_hold_strip")) {

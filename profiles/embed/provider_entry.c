@@ -2,6 +2,7 @@
 #include "lua.h"
 #include "lualib.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,11 +95,27 @@ static int embedNewIter(lua_State *L) {
 
 enum { kEmbedVec2Tag = 12 };
 
+// embed.vec2 contract: Unit = normalize; Mark returns payload[0].
+// Keep frontend_adapter.cpp, interpreter/main.cpp, provider_entry.c identical.
+static void embedVec2Normalize(float *dst, const float *src) {
+    const float x = src ? src[0] : 0;
+    const float y = src ? src[1] : 0;
+    const float len = sqrtf(x * x + y * y);
+    if (len == 0) {
+        dst[0] = 0;
+        dst[1] = 0;
+        return;
+    }
+    dst[0] = x / len;
+    dst[1] = y / len;
+}
+
 static int embedVec2Mark(lua_State *L) {
     luaL_checktype(L, 2, LUA_TTABLE);
     lua_pushvalue(L, 1);
     lua_rawseti(L, 2, 1);
-    lua_pushnumber(L, 1);
+    float *src = (float *)lua_touserdatatagged(L, 1, kEmbedVec2Tag);
+    lua_pushnumber(L, src ? src[0] : 0);
     return 1;
 }
 
@@ -106,9 +123,9 @@ static int embedVec2Index(lua_State *L) {
     size_t key_size = 0;
     const char *key = luaL_checklstring(L, 2, &key_size);
     if (key_size == 4 && memcmp(key, "Unit", 4) == 0) {
+        float *src = (float *)lua_touserdatatagged(L, 1, kEmbedVec2Tag);
         float *payload = (float *)lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag);
-        payload[0] = 0;
-        payload[1] = 0;
+        embedVec2Normalize(payload, src);
         return 1;
     }
     if (key_size == 4 && memcmp(key, "Mark", 4) == 0) {

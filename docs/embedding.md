@@ -58,6 +58,12 @@ luauc-embed-wasmtime run <artifact> <number> <text>...
 
 The product package is four modules: `lib`, `main`, `proto_identity`, and `userdata_hooks`.
 
+`embed.vec2` is the published userdata contract. `.Unit` normalizes `(x, y)` by Euclidean
+length (zero length becomes `(0, 0)`). `:Mark(bag)` writes the receiver into `bag[1]` and
+returns the seed's first payload component. Frontend hooks, the pinned interpreter, and the
+embed pack implement that contract identically. Observe it as `seed:Mark + unit:Mark` so a
+zero Unit cannot hide behind `seed:Mark` alone.
+
 The parity gate reuses one compiled Wasmtime `Module` but creates fresh compiler instances for repeat
 compilation. It compares the artifact digest and every runtime result with JavaScript, then compares
 the same result transcript with a separately linked pinned Luau interpreter. The interpreter exists

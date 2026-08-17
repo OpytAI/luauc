@@ -310,10 +310,20 @@ pub noinline fn emitUnalignedMemoryOp(self: anytype, opcode: u8) Error!void {
     try self.body.opcode(self.allocator, 0); // offset
 }
 pub noinline fn emitBufferRead(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    if (!try self.bufferOperationOwnedByRange(instruction_id, instruction_value))
-        return Error.UnsupportedControlFlow;
     try self.requireOperandCount(instruction_value, 3);
-    try self.emitBufferAddress(try self.operand(instruction_value, 0), try self.operand(instruction_value, 1));
+    const tag = try self.operand(instruction_value, 2);
+    if (tag.kind == .constant and (try self.constant(tag.value)).tagValue() == lua_tag_userdata) {
+        const pointer = try self.operand(instruction_value, 0);
+        const offset = try self.uintConstant(try self.operand(instruction_value, 1));
+        try self.emitPointerValue(pointer);
+        const data_offset = std.math.add(u32, userdata_data_offset, offset) catch return Error.ResourceLimit;
+        try self.body.i32Const(self.allocator, @intCast(data_offset));
+        try self.body.opcode(self.allocator, 0x6a); // i32.add
+    } else {
+        if (!try self.bufferOperationOwnedByRange(instruction_id, instruction_value))
+            return Error.UnsupportedControlFlow;
+        try self.emitBufferAddress(try self.operand(instruction_value, 0), try self.operand(instruction_value, 1));
+    }
     switch (instruction_value.command) {
         ir_cmd_buffer_readi8 => try self.emitUnalignedMemoryOp(0x2c), // i32.load8_s
         ir_cmd_buffer_readu8 => try self.emitUnalignedMemoryOp(0x2d), // i32.load8_u
