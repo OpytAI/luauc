@@ -3,7 +3,6 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
-
 const Error = model.Error;
 const TableAllocationPattern = model.TableAllocationPattern;
 const DupTablePattern = model.DupTablePattern;
@@ -12,6 +11,7 @@ const ConstantTruthyFallbackPattern = model.ConstantTruthyFallbackPattern;
 const LiteralFieldSetPattern = model.LiteralFieldSetPattern;
 const TableInsertAppendPattern = model.TableInsertAppendPattern;
 const UserdataAllocationPattern = model.UserdataAllocationPattern;
+const ir_cmd_setlist = abi.ir_cmd_setlist;
 const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
 const ir_cmd_new_table = abi.ir_cmd_new_table;
@@ -42,97 +42,24 @@ const lop_call = abi.lop_call;
 const lop_fastcall2k = abi.lop_fastcall2k;
 
 pub noinline fn tableAllocationPatternAt(self: anytype, start: u32) Error!?TableAllocationPattern {
-    if (self.function.instruction_count < 3 or start > self.function.instruction_count - 3)
-        return null;
-    const allocation = try self.instruction(start);
-    const store_pointer = try self.instruction(start + 1);
-    const store_tag = try self.instruction(start + 2);
-    if (allocation.command != ir_cmd_new_table or allocation.operand_count != 2 or
-        store_pointer.command != .store_pointer or store_pointer.operand_count != 2 or
-        store_tag.command != .store_tag or store_tag.operand_count != 2)
-        return null;
-    var finish = start + 2;
-    var assist = false;
-    if (start + 3 < self.function.instruction_count) {
-        const possible_check = try self.instruction(start + 3);
-        if (possible_check.command == .check_gc and possible_check.operand_count == 0) {
-            finish = start + 3;
-            assist = true;
-        } else if (possible_check.command == .nop and possible_check.operand_count == 0) {
-            // Const-prop turns a redundant CHECK_GC into this exact adjacent marker.
-            finish = start + 3;
-        }
-    }
-    self.requireSingleCompilableBlockRange(start, finish) catch return null;
-    const destination = try self.operand(store_pointer, 0);
-    const pointer = try self.operand(store_pointer, 1);
-    const tag_destination = try self.operand(store_tag, 0);
-    const tag = try self.operand(store_tag, 1);
-    if (destination.kind != .vm_reg or destination.value >= self.proto.max_stack_size or
-        pointer.kind != .instruction or pointer.value != start or
-        tag_destination.kind != .vm_reg or tag_destination.value != destination.value or
-        tag.kind != .constant or (try self.constant(tag.value)).tagValue() != lua_tag_table)
-        return null;
-    const node_count = try self.uintConstant(try self.operand(allocation, 1));
-    const deferred_to_later_gc = finish == start + 2;
-    return .{
-        .start = start,
-        .finish = finish,
-        .assist = assist,
-        .deferred_to_later_gc = deferred_to_later_gc,
-        .destination = destination.value,
-        .array_count = try self.uintConstant(try self.operand(allocation, 0)),
-        .node_count = node_count,
-    };
+    return self.plan.tableAllocAt(start);
 }
 pub fn isDeferredTableInitializationCommand(_: anytype, command: snapshot_v1.IrCommand) bool {
     return switch (command) {
-        .nop,
-        .substitute,
-        .mark_used,
-        .mark_dead,
-        .load_tag,
-        .load_pointer,
-        .load_int,
-        .load_int64,
-        .load_float,
-        .load_double,
-        .load_tvalue,
-        .store_tag,
-        .store_pointer,
-        .store_extra,
-        .store_int,
-        .store_int64,
-        .store_double,
-        .store_vector,
+        ir_cmd_setlist,
         .store_tvalue,
         .store_split_tvalue,
-        ir_cmd_new_table,
+        .store_tag,
+        .store_pointer,
+        .store_double,
+        .store_vector,
+        ir_cmd_get_slot_node_addr,
+        ir_cmd_check_slot_match,
+        ir_cmd_check_readonly,
+        ir_cmd_barrier_table_forward,
         => true,
         else => false,
     };
-}
-pub fn checkGcClosesDeferredTableAllocation(self: anytype, instruction_id: u32) Error!bool {
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (!block.kind.isCompilable() or block.isEmpty() or instruction_id < block.start or instruction_id > block.finish)
-            continue;
-        var cursor = block.start;
-        var owns_deferred = false;
-        while (cursor < instruction_id) : (cursor += 1) {
-            const candidate = try self.instruction(cursor);
-            if (candidate.command == .check_gc)
-                owns_deferred = false;
-            if (try self.tableAllocationPatternAt(cursor)) |pattern| {
-                if (pattern.deferred_to_later_gc)
-                    owns_deferred = true;
-                cursor = pattern.finish;
-            }
-        }
-        return owns_deferred;
-    }
-    return false;
 }
 pub fn userdataWriteWidth(_: anytype, command: snapshot_v1.IrCommand) ?u32 {
     return if (command == ir_cmd_buffer_writei8)
@@ -201,18 +128,6 @@ pub noinline fn userdataAllocationPatternAt(self: anytype, start: u32) Error!?Us
     }
     return null;
 }
-pub noinline fn userdataAllocationPatternContaining(self: anytype, instruction_id: u32) Error!?UserdataAllocationPattern {
-    var cursor = instruction_id + 1;
-    while (cursor != 0) {
-        cursor -= 1;
-        const candidate = try self.instruction(cursor);
-        if (candidate.command != .check_gc)
-            continue;
-        if (try self.userdataAllocationPatternAt(cursor)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub fn materializedConstantTag(_: anytype, kind: snapshot_v1.VmConstantKind) ?u8 {
     return switch (kind) {
         .nil => @intCast(lua_tag_nil),
@@ -256,14 +171,6 @@ pub noinline fn constantLoadPatternAt(self: anytype, start: u32) Error!?Constant
         .constant_id = constant_operand.value,
     };
 }
-pub noinline fn constantLoadPatternContaining(self: anytype, instruction_id: u32) Error!?ConstantLoadPattern {
-    if (try self.constantLoadPatternAt(instruction_id)) |pattern|
-        return pattern;
-    if (instruction_id != 0)
-        if (try self.constantLoadPatternAt(instruction_id - 1)) |pattern|
-            if (pattern.finish == instruction_id) return pattern;
-    return null;
-}
 pub noinline fn emitConstantLoad(self: anytype, pattern: ConstantLoadPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
@@ -306,14 +213,6 @@ pub noinline fn constantTruthyFallbackPatternAt(self: anytype, start: u32) Error
         .true_value = true_value,
     };
 }
-pub noinline fn constantTruthyFallbackPatternContaining(self: anytype, instruction_id: u32) Error!?ConstantTruthyFallbackPattern {
-    var distance: u32 = 0;
-    while (distance < 3 and distance <= instruction_id) : (distance += 1) {
-        if (try self.constantTruthyFallbackPatternAt(instruction_id - distance)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruthyFallbackPattern) Error!void {
     try self.emitTValueTruthy(pattern.true_value);
     try self.body.ifVoid(self.allocator);
@@ -336,62 +235,7 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
     try self.body.localSet(self.allocator, self.slots[result_id].second);
 }
 pub noinline fn dupTablePatternAt(self: anytype, start: u32) Error!?DupTablePattern {
-    const prefix = [_]snapshot_v1.IrCommand{
-        .load_pointer, ir_cmd_dup_table, .store_pointer, .store_tag,
-    };
-    const prefix_len: u32 = @intCast(prefix.len);
-    if (!try self.commandRangeMatches(start, &prefix))
-        return null;
-    var finish = start + prefix_len - 1;
-    var assist = false;
-
-    const load = try self.instruction(start);
-    const duplicate = try self.instruction(start + 1);
-    const store_pointer = try self.instruction(start + 2);
-    const store_tag = try self.instruction(start + 3);
-    if (start + prefix_len < self.function.instruction_count) {
-        const possible_gc = try self.instruction(start + prefix_len);
-        if (possible_gc.command == .check_gc or possible_gc.command == .nop) {
-            if (possible_gc.operand_count != 0)
-                return null;
-            finish += 1;
-            assist = possible_gc.command == .check_gc;
-        }
-    }
-    self.requireSingleCompilableBlockRange(start, finish) catch return null;
-    if (load.operand_count != 1 or duplicate.operand_count != 1 or
-        store_pointer.operand_count != 2 or store_tag.operand_count != 2)
-        return null;
-
-    const constant_operand = try self.operand(load, 0);
-    if (constant_operand.kind != .vm_const or constant_operand.value >= self.proto.vm_constant_count or
-        (try self.snapshot.vmConstant(self.proto, constant_operand.value)).kind != .table)
-        return null;
-    const duplicate_source = try self.operand(duplicate, 0);
-    const destination = try self.operand(store_pointer, 0);
-    const stored_pointer = try self.operand(store_pointer, 1);
-    const tag_destination = try self.operand(store_tag, 0);
-    const tag = try self.operand(store_tag, 1);
-    if (duplicate_source.kind != .instruction or duplicate_source.value != start or
-        stored_pointer.kind != .instruction or stored_pointer.value != start + 1 or
-        tag_destination.kind != .vm_reg or tag_destination.value != destination.value or
-        tag.kind != .constant or (try self.constant(tag.value)).tagValue() != lua_tag_table)
-        return null;
-    return .{
-        .start = start,
-        .finish = finish,
-        .assist = assist,
-        .destination = try self.vmRegisterIndex(destination),
-        .constant_id = constant_operand.value,
-    };
-}
-pub noinline fn dupTablePatternContaining(self: anytype, instruction_id: u32) Error!?DupTablePattern {
-    var distance: u32 = 0;
-    while (distance < 5 and distance <= instruction_id) : (distance += 1) {
-        if (try self.dupTablePatternAt(instruction_id - distance)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
+    return self.plan.dupTableAt(start);
 }
 pub noinline fn emitDupTable(self: anytype, pattern: DupTablePattern) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -570,8 +414,28 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         const value = try self.operand(suffix, 1);
         const barrier_tag = try self.operand(suffix, 2);
         if (barrier_pointer.kind != .instruction or barrier_pointer.value != pointer.value or
-            value.kind != .vm_reg or value.value >= self.proto.max_stack_size or
-            barrier_tag.kind != .constant or (try self.constant(barrier_tag.value)).tagValue() != lua_tag_string or
+            value.kind != .vm_reg or value.value >= self.proto.max_stack_size)
+            return null;
+        if (barrier_tag.kind == .undef) {
+            const load = try self.instruction(stored.value);
+            if (load.command != .load_tvalue or load.operand_count != 1)
+                return null;
+            const source = try self.operand(load, 0);
+            if (source.kind != .vm_reg or source.value != value.value)
+                return null;
+            self.requireSingleCompilableBlockRange(start, store_id + 1) catch return null;
+            if ((try self.stringFallbackRejoin(fallback.value, .set, pc_value, value.value, table, key_operand.value)) == null)
+                return null;
+            return .{
+                .start = start,
+                .finish = store_id + 1,
+                .pc = pc_value,
+                .table = table,
+                .value = value.value,
+                .key = key,
+            };
+        }
+        if (barrier_tag.kind != .constant or (try self.constant(barrier_tag.value)).tagValue() != lua_tag_string or
             stored.value + 1 >= start)
             return null;
         const publication = try self.instruction(stored.value + 1);
@@ -671,7 +535,8 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
             if (guarded_table.kind != .vm_reg or guarded_table.value != table or
                 checked_tag.kind != .instruction or checked_tag.value != publication_id + 2 or
                 required_tag.kind != .constant or (try self.constant(required_tag.value)).tagValue() != lua_tag_table or
-                exit.kind != .vm_exit or loaded_table.kind != .vm_reg or loaded_table.value != table or
+                ((exit.kind != .vm_exit) and (exit.kind != .block or exit.value != fallback.value)) or
+                loaded_table.kind != .vm_reg or loaded_table.value != table or
                 pointer.value != publication_id + 4)
                 return null;
         }
@@ -690,15 +555,38 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         return null;
     return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_destination.value, .key = key };
 }
-pub noinline fn literalFieldSetPatternContaining(self: anytype, instruction_id: u32) Error!?LiteralFieldSetPattern {
-    var distance: u32 = 0;
-    while (distance < 7 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if ((try self.instruction(start)).command == ir_cmd_get_slot_node_addr)
-            if (try self.literalFieldSetPatternAt(start)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
+pub noinline fn guardedLiteralFieldSetPatternAt(self: anytype, start: u32) Error!?LiteralFieldSetPattern {
+    if (start + 3 >= self.function.instruction_count)
+        return null;
+    const load_tag = try self.instruction(start);
+    const check_tag = try self.instruction(start + 1);
+    const load_pointer = try self.instruction(start + 2);
+    if (load_tag.command != .load_tag or load_tag.operand_count != 1 or
+        check_tag.command != .check_tag or check_tag.operand_count != 3 or
+        load_pointer.command != .load_pointer or load_pointer.operand_count != 1 or
+        (try self.instruction(start + 3)).command != ir_cmd_get_slot_node_addr)
+        return null;
+
+    const pattern = (try self.literalFieldSetPatternAt(start + 3)) orelse return null;
+    const table = try self.operand(load_tag, 0);
+    const checked = try self.operand(check_tag, 0);
+    const tag = try self.operand(check_tag, 1);
+    const guard_fallback = try self.operand(check_tag, 2);
+    const pointer_table = try self.operand(load_pointer, 0);
+    const slot = try self.instruction(pattern.start);
+    const match = try self.instruction(pattern.start + 1);
+    const slot_pointer = try self.operand(slot, 0);
+    const semantic_fallback = try self.operand(match, 2);
+    if (table.kind != .vm_reg or table.value != pattern.table or
+        checked.kind != .instruction or checked.value != start or
+        tag.kind != .constant or (try self.constant(tag.value)).tagValue() != lua_tag_table or
+        guard_fallback.kind != .block or semantic_fallback.kind != .block or
+        guard_fallback.value != semantic_fallback.value or
+        pointer_table.kind != .vm_reg or pointer_table.value != table.value or
+        slot_pointer.kind != .instruction or slot_pointer.value != start + 2)
+        return null;
+    self.requireSingleCompilableBlockRange(start, pattern.finish) catch return null;
+    return pattern;
 }
 pub noinline fn emitLiteralFieldSet(self: anytype, pattern: LiteralFieldSetPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -792,25 +680,36 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
         const readonly = try self.instruction(start);
         if (readonly.operand_count != 2 or
             (try self.operand(readonly, 0)).kind != .instruction or
-            (try self.operand(readonly, 0)).value != length_pointer.value or
-            (try self.operand(readonly, 1)).kind != .vm_exit)
+            (try self.operand(readonly, 0)).value != length_pointer.value)
+            return null;
+        const failure = try self.operand(readonly, 1);
+        if (!try self.guardFailureIsBuiltin(failure, "table", "insert"))
             return null;
         if (number) {
-            const exit = try self.operand(readonly, 1);
-            if (exit.value < 2)
-                return null;
-            const fast_pc = exit.value - 2;
-            const fast_word = try self.snapshot.bytecodeWord(self.proto, fast_pc);
-            if (@as(u8, @truncate(fast_word)) != lop_fastcall2k or
-                ((fast_word >> 8) & 0xff) != 52 or ((fast_word >> 16) & 0xff) != table_register)
-                return null;
-            const call_pc = std.math.add(u32, fast_pc, ((fast_word >> 24) & 0xff) + 1) catch return null;
-            if (call_pc >= self.proto.code_count)
-                return null;
-            const call_word = try self.snapshot.bytecodeWord(self.proto, call_pc);
-            if (@as(u8, @truncate(call_word)) != lop_call or ((call_word >> 16) & 0xff) != 3)
-                return null;
-            source = ((call_word >> 8) & 0xff) + 2;
+            if (failure.kind == .block) {
+                const fallback_block = (try self.guardFailureBlock(failure)) orelse return null;
+                const call = try self.instruction(fallback_block.finish - 1);
+                const function_register = self.vmRegisterIndex(try self.operand(call, 0)) catch return null;
+                if ((self.intConstant(try self.operand(call, 1)) catch return null) != 2 or
+                    (self.intConstant(try self.operand(call, 2)) catch return null) != 0)
+                    return null;
+                source = std.math.add(u32, function_register, 2) catch return null;
+            } else {
+                if (failure.value < 2)
+                    return null;
+                const fast_pc = failure.value - 2;
+                const fast_word = try self.snapshot.bytecodeWord(self.proto, fast_pc);
+                if (@as(u8, @truncate(fast_word)) != lop_fastcall2k or
+                    ((fast_word >> 8) & 0xff) != 52 or ((fast_word >> 16) & 0xff) != table_register)
+                    return null;
+                const call_pc = std.math.add(u32, fast_pc, ((fast_word >> 24) & 0xff) + 1) catch return null;
+                if (call_pc >= self.proto.code_count)
+                    return null;
+                const call_word = try self.snapshot.bytecodeWord(self.proto, call_pc);
+                if (@as(u8, @truncate(call_word)) != lop_call or ((call_word >> 16) & 0xff) != 3)
+                    return null;
+                source = ((call_word >> 8) & 0xff) + 2;
+            }
             if (source >= self.proto.max_stack_size)
                 return null;
         }
@@ -824,20 +723,6 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
         .source = source,
         .constant_number = constant_number,
     };
-}
-pub noinline fn tableInsertAppendPatternContaining(self: anytype, instruction_id: u32) Error!?TableInsertAppendPattern {
-    if ((try self.instruction(instruction_id)).command == ir_cmd_check_readonly and
-        instruction_id + 1 < self.function.instruction_count)
-        if (try self.tableInsertAppendPatternAt(instruction_id + 1)) |pattern|
-            if (pattern.start == instruction_id) return pattern;
-    var distance: u32 = 0;
-    while (distance < 7 and distance <= instruction_id) : (distance += 1) {
-        const candidate = instruction_id - distance;
-        if ((try self.instruction(candidate)).command == ir_cmd_table_len)
-            if (try self.tableInsertAppendPatternAt(candidate)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
 }
 pub noinline fn emitTableInsertAppend(self: anytype, pattern: TableInsertAppendPattern) Error!void {
     if (pattern.constant_number) |value| {

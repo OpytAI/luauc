@@ -1,16 +1,51 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("//runtime:runtime_symbols.bzl", "AOT_GENERATED_RUNTIME_SYMBOLS")
 load("//profiles:defs.bzl", "luauc_runtime_profile")
 load(":defs.bzl", "raw_pack")
 
+exports_files([
+    "BUILD.bazel",
+    "embed_v1.policy.json",
+    "embed_alt_v1.policy.json",
+])
+
+js_library(
+    name = "embed_build_src",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "embed_v1_policy_src",
+    srcs = ["embed_v1.policy.json"],
+    visibility = ["//visibility:public"],
+)
+
 PACK_EXPORTS = [
     "__stack_pointer",
     "luauc_embed_v1_alloc",
+    "luauc_embed_v1_barrier_probe",
     "luauc_embed_v1_context_create",
     "luauc_embed_v1_context_destroy",
     "luauc_embed_v1_coverage",
     "luauc_embed_v1_dealloc",
+    "luauc_embed_v1_gc_finish_mark",
+    "luauc_embed_v1_gc_finish_sweep",
+    "luauc_embed_v1_gc_isblack",
+    "luauc_embed_v1_gc_isdead",
+    "luauc_embed_v1_gc_restart",
+    "luauc_embed_v1_gc_state",
+    "luauc_embed_v1_gc_step",
+    "luauc_embed_v1_gc_stop",
+    "luauc_embed_v1_direct_calls",
+    "luauc_embed_v1_helper_calls",
+    "luauc_embed_v1_indirect_calls",
     "luauc_embed_v1_invoke",
+    "luauc_embed_v1_reset_counts",
+    "luauc_embed_v1_trampoline_calls",
+    "luauc_embed_v1_last_error",
+    "luauc_embed_v1_last_error_size",
     "luauc_embed_v1_protected_call_run",
     "luauc_runtime_v1_program_arena",
     "luauc_runtime_v1_program_arena_capacity",

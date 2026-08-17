@@ -57,6 +57,7 @@ pub const relocation = struct {
     pub const table_index_i32: u8 = 2;
     pub const memory_addr_sleb: u8 = 4;
     pub const memory_addr_i32: u8 = 5;
+    pub const type_index_leb: u8 = 6;
 };
 
 const ImportFunction = struct {
@@ -282,6 +283,14 @@ pub const Body = struct {
         try self.opU32(allocator, 0x0d, depth);
     }
 
+    pub fn brTable(self: *Body, allocator: std.mem.Allocator, labels: []const u32, default_label: u32) !void {
+        try self.bytes.append(allocator, 0x0e);
+        try appendUleb(&self.bytes, allocator, labels.len);
+        for (labels) |label|
+            try appendUleb(&self.bytes, allocator, label);
+        try appendUleb(&self.bytes, allocator, default_label);
+    }
+
     pub fn return_(self: *Body, allocator: std.mem.Allocator) !void {
         try self.bytes.append(allocator, 0x0f);
     }
@@ -303,6 +312,18 @@ pub const Body = struct {
             .body_offset = body_offset,
             .symbol_index = function.symbol_index,
         });
+    }
+
+    pub fn callIndirect(self: *Body, allocator: std.mem.Allocator, type_index: u32, table_index: u32) !void {
+        try self.bytes.append(allocator, 0x11);
+        const body_offset: u32 = @intCast(self.bytes.items.len);
+        try appendPaddedUleb32(&self.bytes, allocator, type_index);
+        try self.relocations.append(allocator, .{
+            .kind = relocation.type_index_leb,
+            .body_offset = body_offset,
+            .symbol_index = type_index,
+        });
+        try appendUleb(&self.bytes, allocator, table_index);
     }
 
     fn blockOp(self: *Body, allocator: std.mem.Allocator, opcode_byte: u8) !void {
@@ -439,6 +460,15 @@ pub const Object = struct {
         return .{ .function_index = function_index, .symbol_index = symbol_index, .type_index = type_index };
     }
 
+    pub fn pendingFunctionRef(self: *const Object, type_index: u32) !FunctionRef {
+        if (type_index >= self.types.items.len)
+            return Error.InvalidTypeIndex;
+        if (self.functions.items.len == std.math.maxInt(u32) - self.imports.items.len)
+            return Error.TooManyFunctions;
+        const function_index: u32 = @intCast(self.imports.items.len + self.functions.items.len);
+        return .{ .function_index = function_index, .symbol_index = function_index, .type_index = type_index };
+    }
+
     pub fn defineData(
         self: *Object,
         segment_name: []const u8,
@@ -533,10 +563,11 @@ pub const Object = struct {
 
         const has_data = self.data_segments.items.len != 0;
         const has_table_relocations = self.hasTableRelocations();
-        if (self.imports.items.len != 0 or has_data or has_table_relocations) {
+        const needs_function_table = has_table_relocations or self.hasCallIndirect();
+        if (self.imports.items.len != 0 or has_data or needs_function_table) {
             var import_payload: std.ArrayList(u8) = .empty;
             defer import_payload.deinit(self.allocator);
-            const infrastructure_imports: usize = @as(usize, @intFromBool(has_data)) + @as(usize, @intFromBool(has_table_relocations));
+            const infrastructure_imports: usize = @as(usize, @intFromBool(has_data)) + @as(usize, @intFromBool(needs_function_table));
             try appendUleb(&import_payload, self.allocator, self.imports.items.len + infrastructure_imports);
             if (has_data) {
                 try appendName(&import_payload, self.allocator, "env");
@@ -551,7 +582,7 @@ pub const Object = struct {
                 try import_payload.append(self.allocator, 0x00);
                 try appendUleb(&import_payload, self.allocator, function_import.type_index);
             }
-            if (has_table_relocations) {
+            if (needs_function_table) {
                 try appendName(&import_payload, self.allocator, "env");
                 try appendName(&import_payload, self.allocator, "__indirect_function_table");
                 try import_payload.append(self.allocator, 0x01);
@@ -571,7 +602,7 @@ pub const Object = struct {
         try appendSection(&output, self.allocator, 3, function_payload.items);
         section_index += 1;
 
-        if (has_table_relocations) {
+        if (needs_function_table) {
             var element_payload: std.ArrayList(u8) = .empty;
             defer element_payload.deinit(self.allocator);
             try appendUleb(&element_payload, self.allocator, 1);
@@ -691,6 +722,11 @@ pub const Object = struct {
         try appendCustomSection(&output, self.allocator, "linking", linking_payload.items);
 
         if (code_relocations.items.len != 0) {
+            std.mem.sort(Body.Relocation, code_relocations.items, {}, struct {
+                fn lessThan(_: void, lhs: Body.Relocation, rhs: Body.Relocation) bool {
+                    return lhs.body_offset < rhs.body_offset;
+                }
+            }.lessThan);
             var reloc_payload: std.ArrayList(u8) = .empty;
             defer reloc_payload.deinit(self.allocator);
             try appendUleb(&reloc_payload, self.allocator, code_section_index);
@@ -727,6 +763,14 @@ pub const Object = struct {
         for (self.data_segments.items) |segment|
             for (segment.relocations.items) |item|
                 if (item.kind == relocation.table_index_i32)
+                    return true;
+        return false;
+    }
+
+    fn hasCallIndirect(self: *const Object) bool {
+        for (self.functions.items) |function|
+            for (function.relocations) |item|
+                if (item.kind == relocation.type_index_leb)
                     return true;
         return false;
     }

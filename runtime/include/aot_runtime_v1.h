@@ -25,7 +25,14 @@ enum LuaucRuntimeStatusV1 {
     LUAUC_RUNTIME_V1_UNSUPPORTED_TYPE = 1,
     LUAUC_RUNTIME_V1_INTERNAL_ERROR = 2,
     LUAUC_RUNTIME_V1_YIELDED = 3,
+    LUAUC_RUNTIME_V1_PREPARED = 4,
 };
+
+typedef struct LuaucRuntimePreparedCallV1 {
+    uint32_t status;
+    uint32_t table_index;
+    const LuaucRuntimeProtoV1 *metadata;
+} LuaucRuntimePreparedCallV1;
 
 enum LuaucRuntimeProtoFlagsV1 {
     LUAUC_AOT_PROTO_V1_ROOT = 1u << 0,
@@ -181,6 +188,7 @@ uint32_t luauc_runtime_v1_builtin_type_error(lua_State *state, const char *built
                                            size_t builtin_name_length, uint32_t argument_index,
                                            uint32_t expected_tag, uint32_t source_register);
 double luauc_runtime_v1_builtin_number(lua_State *state, uint32_t source_register);
+void luauc_runtime_v1_forn_prepare(lua_State *state, uint32_t base_register);
 void luauc_runtime_v1_buffer_bounds_error(lua_State *state);
 uint32_t luauc_runtime_v1_exchange_continuation(lua_State *state, uint32_t next);
 void luauc_runtime_v1_new_table(lua_State *state, uint32_t destination_register, uint32_t array_count,
@@ -233,6 +241,7 @@ int32_t luauc_runtime_v1_fastcall(lua_State *state, uint32_t builtin_id,
 uint32_t luauc_runtime_v1_type_name(lua_State *state, uint32_t destination_register,
                                   uint32_t source_register, uint32_t custom_name);
 double luauc_runtime_v1_libm(uint32_t builtin_id, double first, double second);
+// May allocate, raise, or call Luau: a linearized #t with a metatable falls through to do_len.
 void luauc_runtime_v1_table_len(lua_State *state, uint32_t destination_register,
                               uint32_t table_register);
 void luauc_runtime_v1_concat(lua_State *state, uint32_t destination_register, uint32_t source_start,
@@ -249,9 +258,22 @@ uint32_t luauc_runtime_v1_check_userdata_tag(lua_State *state, const void *userd
                                            uint32_t expected_tag);
 void luauc_runtime_v1_barrier_object(lua_State *state, void *owner, uint32_t source_register);
 void luauc_runtime_v1_barrier_table_back(lua_State *state, void *table);
+void luauc_runtime_v1_set_userdata_metatable(lua_State *state, void *owner,
+                                             uint32_t source_register);
+void luauc_runtime_v1_table_store(lua_State *state, uint32_t table_register, uint32_t index,
+                                  uint32_t source_register);
+uint32_t luauc_runtime_v1_gc_step(lua_State *state);
+uint32_t luauc_runtime_v1_gc_state(lua_State *state);
+uint32_t luauc_runtime_v1_gc_isblack(lua_State *state, int stack_index);
+uint32_t luauc_runtime_v1_gc_isdead(lua_State *state, uint32_t object);
+uint32_t luauc_runtime_v1_gc_stop(lua_State *state);
+uint32_t luauc_runtime_v1_gc_restart(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *state);
+uint32_t luauc_runtime_v1_barrier_probe(lua_State *state, uint32_t kind);
 void luauc_runtime_v1_barrier_table_forward(lua_State *state, void *table,
                                            uint32_t source_register);
-void *luauc_runtime_v1_hash_node_addr(lua_State *state, void *table, uint32_t hash);
+void *luauc_runtime_v1_hash_node_addr(lua_State *state, uint32_t table_register, uint32_t hash);
 void *luauc_runtime_v1_slot_node_addr(lua_State *state, void *table, uint32_t key_constant);
 uint32_t luauc_runtime_v1_node_slot_match(lua_State *state, void *node, uint32_t key_constant);
 void *luauc_runtime_v1_try_get_tm(lua_State *state, void *table, uint32_t event);
@@ -273,6 +295,12 @@ uint32_t luauc_runtime_v1_compare_any(lua_State *state, uint32_t lhs_register, u
                                     uint32_t operation);
 void luauc_runtime_v1_dupclosure(lua_State *state, uint32_t destination_register,
                                uint32_t child_proto_id);
+void luauc_runtime_v1_dupclosure_capture(lua_State *state, uint32_t destination_register,
+                                        uint32_t child_proto_id, uint32_t capture_index,
+                                        uint32_t capture_kind, uint32_t source_index,
+                                        uint32_t check_gc);
+void luauc_runtime_v1_newclosure_empty(lua_State *state, uint32_t destination_register,
+                                     uint32_t child_proto_id, uint32_t check_gc);
 void luauc_runtime_v1_newclosure_capture(lua_State *state, uint32_t destination_register,
                                        uint32_t child_proto_id, uint32_t capture_index,
                                        uint32_t capture_kind, uint32_t source_index,
@@ -281,6 +309,16 @@ void luauc_runtime_v1_get_upvalue(lua_State *state, uint32_t destination_registe
                                 uint32_t upvalue_index);
 void luauc_runtime_v1_set_upvalue(lua_State *state, uint32_t upvalue_index, uint32_t source_register);
 void luauc_runtime_v1_close_upvalues(lua_State *state, uint32_t first_register);
+void luauc_runtime_v1_reset_counts(void);
+void luauc_runtime_v1_count_direct_call(void);
+void luauc_runtime_v1_count_indirect_call(void);
+uint32_t luauc_runtime_v1_helper_calls(void);
+uint32_t luauc_runtime_v1_trampoline_calls(void);
+uint32_t luauc_runtime_v1_direct_calls(void);
+uint32_t luauc_runtime_v1_indirect_calls(void);
+const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_call(
+    lua_State *state, uint32_t function_register, int32_t parameter_count, int32_t result_count);
+void luauc_runtime_v1_finish_compiled_call(lua_State *state, uint32_t status);
 uint32_t luauc_runtime_v1_call(lua_State *state, uint32_t function_register, int32_t parameter_count,
                              int32_t result_count);
 void luauc_runtime_v1_prep_varargs(lua_State *state, uint32_t fixed_parameter_count);

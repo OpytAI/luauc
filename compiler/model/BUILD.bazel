@@ -1,0 +1,36 @@
+load("@rules_zig//zig:defs.bzl", "zig_library")
+
+zig_library(
+    name = "runtime_abi",
+    main = "runtime_abi.zig",
+    import_name = "luauc_backend_runtime_abi",
+    visibility = ["//visibility:public"],
+    deps = ["//compiler/ir:frontend_snapshot_v1"],
+)
+
+zig_library(
+    name = "static_package_v1",
+    main = "static_package_v1.zig",
+    import_name = "luauc_backend_static_package_v1",
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "diagnostics",
+    main = "diagnostics.zig",
+    import_name = "luauc_backend_diagnostics",
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "model",
+    main = "model.zig",
+    import_name = "luauc_backend_model",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":runtime_abi",
+        ":static_package_v1",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)

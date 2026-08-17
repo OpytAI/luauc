@@ -7,11 +7,13 @@
 #include "lbuiltins.h"
 #include "lvm.h"
 
+#include "lapi.h"
 #include "ldebug.h"
 #include "ldo.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "lmem.h"
+#include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
@@ -24,6 +26,16 @@
 #include <string.h>
 
 static_assert(LUAUC_RUNTIME_V1_MULTRET == LUA_MULTRET, "Luau MULTRET sentinel drift");
+static_assert(sizeof(TValue) == 16, "strict AOT TValue layout mismatch");
+
+static uint32_t gHelperCalls;
+static uint32_t gTrampolineCalls;
+static uint32_t gDirectCalls;
+static uint32_t gIndirectCalls;
+
+static void countRuntimeHelper() {
+    gHelperCalls++;
+}
 
 static constexpr uint32_t AOT_FASTCALL_NO_OPERAND = UINT32_MAX;
 static constexpr uint64_t AOT_COVERAGE_MAX_HITS = (UINT64_C(1) << 23) - 1;
@@ -331,6 +343,7 @@ static void configurePinnedRuntimeFlags(lua_State *L) {
 }
 
 static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
+    countRuntimeHelper();
     if (!L || !L->ci || L->ci <= L->base_ci || !isLua(L->ci) ||
         !(L->ci->flags & LUA_CALLINFO_NATIVE))
         luaG_runerror(L, "strict AOT %s requires an active native Luau frame", operation);
@@ -936,6 +949,16 @@ extern "C" uint32_t luauc_runtime_v1_check_safe_env(lua_State *L) {
     return environment->safeenv ? LUAUC_RUNTIME_V1_OK : LUAUC_RUNTIME_V1_UNSUPPORTED_TYPE;
 }
 
+extern "C" void luauc_runtime_v1_forn_prepare(lua_State *L, uint32_t baseRegister) {
+    Proto *proto = activeAotFrameProto(L, "numeric loop preparation");
+    if (baseRegister > proto->maxstacksize || proto->maxstacksize - baseRegister < 3 ||
+        L->base + baseRegister + 3 > L->top)
+        luaG_runerror(L, "strict AOT numeric loop preparation exceeds the live frame");
+
+    TValue *loop = L->base + baseRegister;
+    luaV_prepareFORN(L, loop, loop + 1, loop + 2);
+}
+
 extern "C" int32_t luauc_runtime_v1_fastcall(lua_State *L, uint32_t builtinId,
                                            uint32_t destinationRegister, uint32_t sourceRegister,
                                            uint32_t argumentTwo, uint32_t argumentThree,
@@ -1161,10 +1184,20 @@ extern "C" void luauc_runtime_v1_array_get(lua_State *L, uint32_t destinationReg
     setobj2s(L, destination, &table->array[index - 1]);
 }
 
+extern "C" void luauc_runtime_v1_do_len(lua_State *L, uint32_t destinationRegister,
+                                      uint32_t sourceRegister);
+
 extern "C" void luauc_runtime_v1_table_len(lua_State *L, uint32_t destinationRegister,
                                          uint32_t tableRegister) {
     Proto *proto = activeAotFrameProto(L, "table length");
-    LuaTable *table = activeAotPlainTable(L, proto, tableRegister, false, "table length");
+    TValue *value = activeAotRegister(L, proto, tableRegister, "table length");
+    if (!ttistable(value))
+        luaG_runerror(L, "strict AOT table length requires a table value");
+    LuaTable *table = hvalue(value);
+    if (table->metatable) {
+        luauc_runtime_v1_do_len(L, destinationRegister, tableRegister);
+        return;
+    }
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "table length");
     setnvalue(destination, double(luaH_getn(table)));
 }
@@ -1177,9 +1210,11 @@ extern "C" void luauc_runtime_v1_concat(lua_State *L, uint32_t destinationRegist
         luaG_runerror(L, "strict AOT concatenation rejected the compiled register range");
 
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "concatenation");
+    if (L->top < L->base + sourceStart + count)
+        L->top = L->base + sourceStart + count;
+    if (L->top <= destination)
+        L->top = destination + 1;
     TValue *source = L->base + sourceStart;
-    if (destination >= L->top || source + count > L->top)
-        luaG_runerror(L, "strict AOT concatenation requires a published live register range");
 
     // luaV_concat can call __concat and reallocate the stack. Preserve top as an offset, gray a
     // black thread before the operation publishes new strings into its register range, and carry no
@@ -1513,6 +1548,16 @@ static Proto *findDirectAotChild(Proto *parent, uint32_t childProtoId) {
     return nullptr;
 }
 
+static void bindAotClosureTemplateEnvs(lua_State *L, Proto *proto, LuaTable *env);
+
+static Closure *findAotClosureTemplate(Proto *parent, Proto *child) {
+    for (int index = 0; index < parent->sizek; ++index) {
+        if (ttisfunction(&parent->k[index]) && clvalue(&parent->k[index])->l.p == child)
+            return clvalue(&parent->k[index]);
+    }
+    return nullptr;
+}
+
 extern "C" void luauc_runtime_v1_dupclosure(lua_State *L, uint32_t destinationRegister,
                                           uint32_t childProtoId) {
     if (!L || !L->ci || !isLua(L->ci))
@@ -1529,14 +1574,125 @@ extern "C" void luauc_runtime_v1_dupclosure(lua_State *L, uint32_t destinationRe
     if (child->nups != 0)
         luaG_runerror(L, "strict AOT DUPCLOSURE does not support captured upvalues");
 
-    // The active parent closure roots the published Proto graph. Run incremental GC before the
-    // allocation, gray a black thread, then make the new white Closure visible in its VM register.
-    luaC_checkGC(L);
-    luaC_threadbarrier(L);
+    Closure *kcl = findAotClosureTemplate(parent, child);
+    if (!kcl)
+        luaG_runerror(L, "strict AOT DUPCLOSURE is missing a proto-k template");
+
+    // Pinned LOP_DUPCLOSURE: reuse the template iff it still shares the parent env.
+    Closure *ncl = (kcl->env == parentClosure->env) ? kcl : luaF_newLclosure(L, 0, parentClosure->env, child);
+    setclvalue(L, L->base + destinationRegister, ncl);
+    if (L->top <= L->base + destinationRegister)
+        L->top = L->base + destinationRegister + 1;
+    ncl->preload = 0;
+    if (kcl != ncl)
+        luaC_checkGC(L);
+}
+
+extern "C" void luauc_runtime_v1_dupclosure_capture(lua_State *L, uint32_t destinationRegister,
+                                                  uint32_t childProtoId, uint32_t captureIndex,
+                                                  uint32_t captureKind, uint32_t sourceIndex,
+                                                  uint32_t checkGc) {
+    if (!L || !L->ci || !isLua(L->ci))
+        luaG_runerror(L, "strict AOT DUPCLOSURE entered without an active Luau frame");
+
+    Closure *parentClosure = clvalue(L->ci->func);
+    Proto *parent = parentClosure->l.p;
+    if (destinationRegister >= parent->maxstacksize)
+        luaG_runerror(L, "strict AOT DUPCLOSURE destination is outside the compiled frame");
+    if (checkGc > 1)
+        luaG_runerror(L, "strict AOT DUPCLOSURE rejected invalid GC marker %u", checkGc);
+
+    Proto *child = findDirectAotChild(parent, childProtoId);
+    if (!child)
+        luaG_runerror(L, "strict AOT DUPCLOSURE rejected non-child Proto %u", childProtoId);
+    if (child->nups == 0 || captureIndex >= child->nups)
+        luaG_runerror(L, "strict AOT DUPCLOSURE capture is outside the child closure");
+    if (checkGc != 0 && captureIndex + 1 != child->nups)
+        luaG_runerror(L, "strict AOT DUPCLOSURE GC marker precedes the final capture");
+
+    switch (captureKind) {
+    case LUAUC_AOT_CAPTURE_V1_VAL:
+        if (sourceIndex >= parent->maxstacksize)
+            luaG_runerror(L, "strict AOT DUPCLOSURE capture register is outside the parent frame");
+        break;
+    case LUAUC_AOT_CAPTURE_V1_UPVAL:
+        if (sourceIndex >= parent->nups || sourceIndex >= parentClosure->nupvalues)
+            luaG_runerror(L, "strict AOT DUPCLOSURE source upvalue is outside the parent closure");
+        break;
+    default:
+        luaG_runerror(L, "strict AOT DUPCLOSURE rejected capture kind %u", captureKind);
+    }
+
+    Closure *kcl = findAotClosureTemplate(parent, child);
+    if (!kcl)
+        luaG_runerror(L, "strict AOT DUPCLOSURE is missing a proto-k template");
+
+    Closure *ncl;
+    if (captureIndex == 0) {
+        ncl = (kcl->env == parentClosure->env) ? kcl : luaF_newLclosure(L, child->nups, parentClosure->env, child);
+        setclvalue(L, L->base + destinationRegister, ncl);
+        if (L->top <= L->base + destinationRegister)
+            L->top = L->base + destinationRegister + 1;
+    } else {
+        TValue *destination = L->base + destinationRegister;
+        if (L->top <= destination || !isLfunction(destination))
+            luaG_runerror(L, "strict AOT DUPCLOSURE lost its published closure");
+        ncl = clvalue(destination);
+        if (ncl->l.p != child || ncl->nupvalues != child->nups)
+            luaG_runerror(L, "strict AOT DUPCLOSURE resumed with a different child closure");
+    }
+
+    TValue *uv = captureKind == LUAUC_AOT_CAPTURE_V1_VAL ? L->base + sourceIndex
+                                                        : &parentClosure->l.uprefs[sourceIndex];
+    if (ncl == kcl && luaO_rawequalObj(&ncl->l.uprefs[captureIndex], uv)) {
+        // Pin LOP_DUPCLOSURE: matching preload slots stay on the shared template.
+    } else if (ncl == kcl && kcl->preload == 0) {
+        ncl = luaF_newLclosure(L, child->nups, parentClosure->env, child);
+        setclvalue(L, L->base + destinationRegister, ncl);
+        if (L->top <= L->base + destinationRegister)
+            L->top = L->base + destinationRegister + 1;
+        for (uint32_t prior = 0; prior < captureIndex; ++prior) {
+            setobj(L, &ncl->l.uprefs[prior], &kcl->l.uprefs[prior]);
+            luaC_barrier(L, ncl, &kcl->l.uprefs[prior]);
+        }
+        setobj(L, &ncl->l.uprefs[captureIndex], uv);
+        luaC_barrier(L, ncl, uv);
+    } else {
+        setobj(L, &ncl->l.uprefs[captureIndex], uv);
+        luaC_barrier(L, ncl, uv);
+    }
+
+    if (captureIndex + 1 == child->nups) {
+        ncl->preload = 0;
+        if (kcl != ncl)
+            luaC_checkGC(L);
+    }
+}
+
+extern "C" void luauc_runtime_v1_newclosure_empty(lua_State *L, uint32_t destinationRegister,
+                                                 uint32_t childProtoId, uint32_t checkGc) {
+    if (!L || !L->ci || !isLua(L->ci))
+        luaG_runerror(L, "strict AOT NEWCLOSURE entered without an active Luau frame");
+
+    Closure *parentClosure = clvalue(L->ci->func);
+    Proto *parent = parentClosure->l.p;
+    if (destinationRegister >= parent->maxstacksize)
+        luaG_runerror(L, "strict AOT NEWCLOSURE destination is outside the compiled frame");
+    if (checkGc > 1)
+        luaG_runerror(L, "strict AOT NEWCLOSURE rejected invalid GC marker %u", checkGc);
+
+    Proto *child = findDirectAotChild(parent, childProtoId);
+    if (!child)
+        luaG_runerror(L, "strict AOT NEWCLOSURE rejected non-child Proto %u", childProtoId);
+    if (child->nups != 0)
+        luaG_runerror(L, "strict AOT empty NEWCLOSURE received captured upvalues");
+
     Closure *closure = luaF_newLclosure(L, 0, parentClosure->env, child);
     setclvalue(L, L->base + destinationRegister, closure);
     if (L->top <= L->base + destinationRegister)
         L->top = L->base + destinationRegister + 1;
+    if (checkGc != 0)
+        luaC_checkGC(L);
 }
 
 extern "C" void luauc_runtime_v1_newclosure_capture(lua_State *L, uint32_t destinationRegister,
@@ -1669,6 +1825,88 @@ extern "C" void luauc_runtime_v1_close_upvalues(lua_State *L, uint32_t firstRegi
         luaF_close(L, first);
 }
 
+static LuaucRuntimePreparedCallV1 gPreparedCall;
+
+extern "C" const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_call(
+    lua_State *L, uint32_t functionRegister, int32_t parameterCount, int32_t resultCount) {
+    countRuntimeHelper();
+    gPreparedCall = {};
+    if (!L || !L->ci || !isLua(L->ci))
+        luaG_runerror(L, "strict AOT prepared call entered without an active Luau frame");
+    if (parameterCount < LUAUC_RUNTIME_V1_MULTRET || resultCount < LUAUC_RUNTIME_V1_MULTRET)
+        luaG_runerror(L, "strict AOT prepared call rejected %d parameters and %d results",
+                      parameterCount, resultCount);
+
+    Closure *caller = clvalue(L->ci->func);
+    Proto *callerProto = caller->l.p;
+    if (functionRegister >= callerProto->maxstacksize)
+        luaG_runerror(L, "strict AOT prepared call target is outside the compiled caller frame");
+
+    StkId function = L->base + functionRegister;
+    if (parameterCount == LUAUC_RUNTIME_V1_MULTRET) {
+        if (L->top < function + 1)
+            luaG_runerror(L, "strict AOT prepared dynamic call starts above the live stack top");
+    } else if (uint32_t(parameterCount) >= uint32_t(callerProto->maxstacksize) - functionRegister) {
+        luaG_runerror(L, "strict AOT prepared fixed call arguments exceed the compiled caller frame");
+    }
+    if (resultCount != LUAUC_RUNTIME_V1_MULTRET &&
+        uint32_t(resultCount) > uint32_t(callerProto->maxstacksize) - functionRegister)
+        luaG_runerror(L, "strict AOT prepared fixed call results exceed the compiled caller frame");
+
+    if (parameterCount != LUAUC_RUNTIME_V1_MULTRET)
+        L->top = function + parameterCount + 1;
+    const int precallStatus = luau_precall(L, function, resultCount);
+    if (precallStatus == PCRC) {
+        if (resultCount != LUA_MULTRET)
+            L->top = L->ci->top;
+        luaC_checkGC(L);
+        gPreparedCall.status = LUAUC_RUNTIME_V1_OK;
+        return &gPreparedCall;
+    }
+    if (precallStatus == PCRYIELD) {
+        if (!validCallSuspension(L) && !validScheduledReentrySuspension(L))
+            luaG_runerror(L,
+                          "strict AOT prepared call returned PCRYIELD without an installed C suspension");
+        gPreparedCall.status = LUAUC_RUNTIME_V1_YIELDED;
+        return &gPreparedCall;
+    }
+    if (precallStatus != PCRLUA)
+        luaG_runerror(L, "strict AOT prepared call received invalid precall status %d", precallStatus);
+
+    CallInfo *calleeFrame = L->ci;
+    if (!calleeFrame || !ttisfunction(calleeFrame->func) || clvalue(calleeFrame->func)->isC)
+        luaG_runerror(L, "strict AOT prepared call did not install a Luau callee frame");
+
+    Closure *callee = clvalue(calleeFrame->func);
+    const LuaucRuntimeProtoV1 *metadata =
+        callee->l.p ? static_cast<const LuaucRuntimeProtoV1 *>(callee->l.p->execdata) : nullptr;
+    if (!validAotProto(metadata))
+        luaG_runerror(L, "strict AOT prepared call rejected missing callee metadata");
+    if (callee->nupvalues != metadata->nups)
+        luaG_runerror(L, "strict AOT prepared call rejected callee closure shape");
+    validateActiveAotEntry(L, metadata, "prepared nested entry");
+
+    gPreparedCall.status = LUAUC_RUNTIME_V1_PREPARED;
+    gPreparedCall.table_index =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(metadata->entry));
+    gPreparedCall.metadata = metadata;
+    return &gPreparedCall;
+}
+
+extern "C" void luauc_runtime_v1_finish_compiled_call(lua_State *L, uint32_t status) {
+    countRuntimeHelper();
+    if (!L || !L->ci)
+        luaG_runerror(L, "strict AOT compiled call finish requires an active frame");
+    if (status == LUAUC_RUNTIME_V1_OK) {
+        luau_poscall(L, L->base);
+        luaC_checkGC(L);
+        return;
+    }
+    if (status == LUAUC_RUNTIME_V1_UNSUPPORTED_TYPE)
+        luaG_runerror(L, "strict AOT nested numeric tier received an unsupported value type");
+    luaG_runerror(L, "strict AOT nested function returned invalid status %u", status);
+}
+
 static uint32_t callAotFunction(lua_State *L, StkId function, int32_t resultCount) {
     const int precallStatus = luau_precall(L, function, resultCount);
     if (precallStatus == PCRC) {
@@ -1723,8 +1961,42 @@ static uint32_t callAotFunction(lua_State *L, StkId function, int32_t resultCoun
     }
 }
 
+extern "C" void luauc_runtime_v1_reset_counts(void) {
+    gHelperCalls = 0;
+    gTrampolineCalls = 0;
+    gDirectCalls = 0;
+    gIndirectCalls = 0;
+}
+
+// Measurement-only counters for P2. Not required product call semantics (Rule 30).
+extern "C" void luauc_runtime_v1_count_direct_call(void) {
+    gDirectCalls++;
+}
+
+extern "C" void luauc_runtime_v1_count_indirect_call(void) {
+    gIndirectCalls++;
+}
+
+extern "C" uint32_t luauc_runtime_v1_helper_calls(void) {
+    return gHelperCalls;
+}
+
+extern "C" uint32_t luauc_runtime_v1_trampoline_calls(void) {
+    return gTrampolineCalls;
+}
+
+extern "C" uint32_t luauc_runtime_v1_direct_calls(void) {
+    return gDirectCalls;
+}
+
+extern "C" uint32_t luauc_runtime_v1_indirect_calls(void) {
+    return gIndirectCalls;
+}
+
 extern "C" uint32_t luauc_runtime_v1_call(lua_State *L, uint32_t functionRegister,
                                         int32_t parameterCount, int32_t resultCount) {
+    countRuntimeHelper();
+    gTrampolineCalls++;
     if (!L || !L->ci || !isLua(L->ci))
         luaG_runerror(L, "strict AOT call helper entered without an active Luau frame");
     if (parameterCount < LUAUC_RUNTIME_V1_MULTRET || resultCount < LUAUC_RUNTIME_V1_MULTRET)
@@ -1851,6 +2123,186 @@ extern "C" uint32_t luauc_runtime_v1_check_userdata_tag(lua_State *L, const void
     return userdata->tag == expectedTag;
 }
 
+extern "C" void luauc_runtime_v1_set_userdata_metatable(lua_State *L, void *ownerPointer,
+                                                      uint32_t sourceRegister) {
+    Proto *proto = activeAotFrameProto(L, "userdata metatable store");
+    TValue *source = activeAotRegister(L, proto, sourceRegister, "userdata metatable store");
+    if (source >= L->top)
+        luaG_runerror(L, "strict AOT userdata metatable store requires a published source register");
+    Udata *userdata = static_cast<Udata *>(ownerPointer);
+    if (!userdata || userdata->tt != LUA_TUSERDATA)
+        luaG_runerror(L, "strict AOT userdata metatable store lost owner provenance");
+    if (!ttistable(source))
+        luaG_runerror(L, "strict AOT userdata metatable store requires a table");
+    userdata->metatable = hvalue(source);
+}
+
+extern "C" void luauc_runtime_v1_table_store(lua_State *L, uint32_t tableRegister, uint32_t index,
+                                           uint32_t sourceRegister) {
+    Proto *proto = activeAotFrameProto(L, "table store");
+    LuaTable *table = activeAotPlainTable(L, proto, tableRegister, true, "table store");
+    TValue *source = activeAotRegister(L, proto, sourceRegister, "table store");
+    if (source >= L->top || index == 0)
+        luaG_runerror(L, "strict AOT table store requires a published source and a 1-based index");
+    if (index > INT_MAX)
+        luaG_runerror(L, "strict AOT table store rejected index %u", index);
+    TValue *destination = luaH_setnum(L, table, int(index));
+    source = L->base + sourceRegister;
+    setobj2t(L, destination, source);
+}
+
+static GCObject *stackCollectable(lua_State *L, int index) {
+    const TValue *value = luaA_toobject(L, index);
+    if (!value || !iscollectable(value))
+        return nullptr;
+    return gcvalue(value);
+}
+
+static uint32_t forceGcStep(lua_State *L) {
+    L->global->GCthreshold = 0;
+    // One luaC_step only. lua_gc(LUA_GCSTEP) loops to pause and can sweep in the same call.
+    luaC_step(L, false);
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_step(lua_State *L) {
+    if (!L || !L->global)
+        return UINT32_MAX;
+    return forceGcStep(L);
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_state(lua_State *L) {
+    return L && L->global ? L->global->gcstate : UINT32_MAX;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_isblack(lua_State *L, int stackIndex) {
+    GCObject *object = L ? stackCollectable(L, stackIndex) : nullptr;
+    return object && isblack(object);
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_isdead(lua_State *L, uint32_t objectPointer) {
+    if (!L || !L->global || objectPointer == 0)
+        return 0;
+    if (L->global->gcstate != GCSsweep)
+        return 0;
+    return isdead(L->global, reinterpret_cast<GCObject *>(static_cast<uintptr_t>(objectPointer)));
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_stop(lua_State *L) {
+    if (!L)
+        return UINT32_MAX;
+    lua_gc(L, LUA_GCSTOP, 0);
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_restart(lua_State *L) {
+    if (!L)
+        return UINT32_MAX;
+    lua_gc(L, LUA_GCRESTART, 0);
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *L) {
+    if (!L || !L->global)
+        return UINT32_MAX;
+    uint32_t steps = 0;
+    while (L->global->gcstate != GCSsweep && steps < 4096) {
+        forceGcStep(L);
+        steps++;
+    }
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *L) {
+    if (!L || !L->global)
+        return UINT32_MAX;
+    uint32_t steps = 0;
+    while (L->global->gcstate != GCSpause && steps < 4096) {
+        forceGcStep(L);
+        steps++;
+    }
+    return L->global->gcstate;
+}
+
+static bool paintSeedAndBagBlack(lua_State *L, int seedIndex, int bagIndex) {
+    for (int attempt = 0; attempt < 24; ++attempt) {
+        lua_gc(L, LUA_GCRESTART, 0);
+        if (L->global->gcstate == GCSpause)
+            forceGcStep(L);
+        uint32_t steps = 0;
+        while (steps++ < 512) {
+            GCObject *seed = stackCollectable(L, seedIndex);
+            GCObject *bag = stackCollectable(L, bagIndex);
+            if (!seed || !bag)
+                return false;
+            if (isblack(seed) && isblack(bag)) {
+                lua_gc(L, LUA_GCSTOP, 0);
+                const int stopped = L->global->gcstate;
+                if (stopped == GCSatomic || stopped == GCSsweep || stopped == GCSpause)
+                    break;
+                return true;
+            }
+            const int state = L->global->gcstate;
+            if (state == GCSatomic || state == GCSsweep || state == GCSpause)
+                break;
+            forceGcStep(L);
+        }
+        while (L->global->gcstate != GCSpause && steps++ < 2048)
+            forceGcStep(L);
+    }
+    return false;
+}
+
+extern "C" uint32_t luauc_runtime_v1_barrier_probe(lua_State *L, uint32_t kind) {
+    if (!L || (kind != 0 && kind != 1) || lua_gettop(L) < 1 || !lua_isfunction(L, 1))
+        return 2;
+
+    lua_settop(L, 1);
+    lua_getglobal(L, "embed");
+    if (!lua_istable(L, -1))
+        return 2;
+    lua_getfield(L, -1, "vec2");
+    lua_remove(L, -2);
+    lua_pushnumber(L, 1.0);
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK)
+        return 2;
+    lua_createtable(L, 1, 0);
+    lua_pushnumber(L, 0);
+    lua_rawseti(L, -2, 1);
+    if (!paintSeedAndBagBlack(L, 2, 3))
+        return 2;
+
+    lua_pushvalue(L, 1);
+    lua_pushvalue(L, 2);
+    if (kind == 1)
+        lua_pushvalue(L, 3);
+    if (lua_pcall(L, kind == 1 ? 2 : 1, 1, 0) != LUA_OK)
+        return 2;
+
+    GCObject *white = nullptr;
+    if (kind == 0) {
+        lua_pop(L, 1);
+        const TValue *seedValue = luaA_toobject(L, 2);
+        if (!seedValue || !ttisuserdata(seedValue))
+            return 2;
+        LuaTable *held = uvalue(seedValue)->metatable;
+        if (!held)
+            return 2;
+        white = (GCObject *)held;
+    } else {
+        lua_rawgeti(L, 3, 1);
+        white = stackCollectable(L, -1);
+        lua_pop(L, 2);
+    }
+    if (!white)
+        return 2;
+
+    const uint32_t markState = luauc_runtime_v1_gc_finish_mark(L);
+    if (markState != GCSsweep)
+        return 2;
+    return luauc_runtime_v1_gc_isdead(L, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(white)));
+}
+
 extern "C" void luauc_runtime_v1_barrier_object(lua_State *L, void *ownerPointer,
                                               uint32_t sourceRegister) {
     Proto *proto = activeAotFrameProto(L, "object barrier");
@@ -1885,12 +2337,10 @@ extern "C" void luauc_runtime_v1_barrier_table_forward(lua_State *L, void *table
     luaC_barriert(L, table, source);
 }
 
-extern "C" void *luauc_runtime_v1_hash_node_addr(lua_State *L, void *tablePointer,
+extern "C" void *luauc_runtime_v1_hash_node_addr(lua_State *L, uint32_t tableRegister,
                                                  uint32_t hash) {
-    activeAotFrameProto(L, "hash node address");
-    LuaTable *table = static_cast<LuaTable *>(tablePointer);
-    if (!table || table->tt != LUA_TTABLE)
-        luaG_runerror(L, "strict AOT hash node address lost table provenance");
+    Proto *proto = activeAotFrameProto(L, "hash node address");
+    LuaTable *table = activeAotTable(L, proto, tableRegister, false, "hash node address");
     return gnode(table, hash & (sizenode(table) - 1));
 }
 
@@ -2216,6 +2666,7 @@ extern "C" uint32_t luauc_runtime_v1_require_static(lua_State *L, uint32_t desti
     lua_State *moduleThread = lua_newthread(globalThread);
     lua_xmove(globalThread, L, 1);
     luaL_sandboxthread(moduleThread);
+    bindAotClosureTemplateEnvs(moduleThread, moduleProto, moduleThread->gt);
     if (!lua_checkstack(moduleThread, 1)) {
         lua_pushliteral(L, "could not reserve module thread stack space");
         cacheAndRaiseModuleFailure(L, originalTop, recordIndex, targetModuleId, -1, false);
@@ -2427,6 +2878,35 @@ static void materializeAotConstants(lua_State *L, Proto *proto, const LuaucRunti
         }
         sethvalue(L, &proto->k[id], table);
     }
+}
+
+static void materializeAotClosureConstants(lua_State *L, Proto *parent,
+                                          const LuaucRuntimeProtoV1 *metadata) {
+    for (uint32_t id = 0; id < metadata->constant_count; ++id) {
+        const LuaucRuntimeVmConstantV1 &constant = metadata->constants[id];
+        if (constant.kind != LUAUC_AOT_VM_CONSTANT_V1_CLOSURE)
+            continue;
+        Proto *child = findDirectAotChild(parent, constant.payload0);
+        if (!child)
+            luaG_runerror(L, "strict AOT closure constant %u is not a direct child", constant.payload0);
+        LuaTable *parentEnv = L->gt;
+        Closure *kcl = luaF_newLclosure(L, child->nups, parentEnv, child);
+        kcl->preload = child->nups == 0 ? 0 : 1;
+        setclvalue(L, &parent->k[id], kcl);
+        luaC_objbarrier(L, parent, kcl);
+    }
+}
+
+static void bindAotClosureTemplateEnvs(lua_State *L, Proto *proto, LuaTable *env) {
+    for (int index = 0; index < proto->sizek; ++index) {
+        if (!ttisfunction(&proto->k[index]))
+            continue;
+        Closure *kcl = clvalue(&proto->k[index]);
+        kcl->env = env;
+        luaC_objbarrier(L, kcl, env);
+    }
+    for (int index = 0; index < proto->sizep; ++index)
+        bindAotClosureTemplateEnvs(L, proto->p[index], env);
 }
 
 static void initializeAotProto(lua_State *L, Proto *proto, const LuaucRuntimeProtoV1 *metadata,
@@ -2685,6 +3165,9 @@ extern "C" uint32_t luauc_runtime_v1_push_program(lua_State *L, const LuaucRunti
         const uint32_t parent = program->protos[id].parent_id;
         protos[parent]->p[childCounts[parent]++] = protos[id];
     }
+
+    for (int id = 0; id < protoCount; ++id)
+        materializeAotClosureConstants(L, protos[id], &program->protos[id]);
 
     if (moduleCount == 0)
         publishRootClosure(L, protos[program->root_proto_id]);

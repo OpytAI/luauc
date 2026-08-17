@@ -1,0 +1,52 @@
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -1044,28 +1044,47 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
+     IrOp builtinArg3 = customParams ? customArg3 : build.vmReg(ra + 3);
+ 
+     IrOp fallback = build.fallbackBlock(pcpos);
++    const size_t specializedStart = build.function.instructions.size();
+ 
+     // In unsafe environment, instead of retrying fastcall at 'pcpos' we side-exit directly to fallback sequence
+     build.checkSafeEnv(pcpos + getOpLength(opcode));
+ 
+     BuiltinImplResult br = translateBuiltin(
+         build, LuauBuiltinFunction(bfid), ra, arg, builtinArgs, builtinArg3, nparams, nresults, fallback, pcpos + getOpLength(opcode)
+     );
+ 
++    bool usesFallback = false;
++    if (br.type != BuiltinImplType::None)
++    {
++        const uint32_t fallbackPc = pcpos + getOpLength(opcode);
++        for (size_t instructionIndex = specializedStart; instructionIndex < build.function.instructions.size(); ++instructionIndex)
++        {
++            IrInst& instruction = build.function.instructions[instructionIndex];
++            for (IrOp& operand : instruction.ops)
++            {
++                if (operand.kind == IrOpKind::VmExit && operand.index == fallbackPc)
++                {
++                    operand = fallback;
++                    usesFallback = true;
++                }
++            }
++        }
++    }
++
+     if (br.type != BuiltinImplType::None)
+     {
+         CODEGEN_ASSERT(nparams != LUA_MULTRET && "builtins are not allowed to handle variadic arguments");
+ 
+         if (nresults == LUA_MULTRET)
+             build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(ra), build.constInt(br.actualResultCount));
+         else
+             build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + 1), build.constInt(-1));
+ 
+-        if (br.type != BuiltinImplType::UsesFallback)
++        if (br.type != BuiltinImplType::UsesFallback && !usesFallback)
+         {
+             // We ended up not using the fallback block, kill it
+             build.function.blockOp(fallback).kind = IrBlockKind::Dead;
+ 
+             return build.undef();
+     }
+ }

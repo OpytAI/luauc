@@ -1,0 +1,27 @@
+diff --git a/CodeGen/include/Luau/CodeGenOptions.h b/CodeGen/include/Luau/CodeGenOptions.h
+--- a/CodeGen/include/Luau/CodeGenOptions.h
++++ b/CodeGen/include/Luau/CodeGenOptions.h
+@@ -74,6 +74,10 @@ using HostUserdataNamecallHandler = bool (*)(
+ 
+ struct HostIrHooks
+ {
++    // The target lowers GET_CACHED_IMPORT as a semantic environment lookup and never consumes the
++    // VM import cache, so import translation does not require a safe-environment guard.
++    bool cacheIndependentImports = false;
++
+     // Suggest result type of a vector field access
+     HostVectorOperationBytecodeType vectorAccessBytecodeType = nullptr;
+ 
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -1551,7 +1551,8 @@ void translateInstGetImport(IrBuilder& build, const Instruction* pc, int pcpos)
+     int k = LUAU_INSN_D(*pc);
+     uint32_t aux = pc[1];
+ 
+-    build.checkSafeEnv(pcpos);
++    if (!build.hostHooks.cacheIndependentImports)
++        build.checkSafeEnv(pcpos);
+ 
+     build.inst(IrCmd::GET_CACHED_IMPORT, build.vmReg(ra), build.vmConst(k), build.constImport(aux), build.constUint(pcpos + 1));
+ }

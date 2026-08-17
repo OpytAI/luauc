@@ -19,6 +19,7 @@ def luauc_package(
         name,
         modules,
         entry,
+        inline_plans = None,
         compiler = _COMPILER,
         runtime_profile = _EMBED_PROFILE,
         runtime_pack = _EMBED_PACK,
@@ -37,6 +38,9 @@ def luauc_package(
         "%s=$(location %s)" % (module_name, modules[module_name])
         for module_name in names
     ]
+    inline_plan_arguments = []
+    for plan in inline_plans or []:
+        inline_plan_arguments.extend(["--inline-plan", plan])
     js_run_binary(
         name = name,
         tool = _CLI,
@@ -54,7 +58,7 @@ def luauc_package(
             "$(execpath %s)" % output,
             "--entry",
             entry,
-        ] + module_arguments,
+        ] + inline_plan_arguments + module_arguments,
         copy_srcs_to_bin = False,
         env = {"LUAUC_BAZEL_EXECROOT_PATHS": "1"},
         mnemonic = "LuaucCompile",

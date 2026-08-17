@@ -2,7 +2,9 @@
 #include "lua.h"
 #include "lualib.h"
 
+#include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,6 +54,152 @@ typedef struct LuaucEmbedCoverageCollector {
     uint32_t truncated;
 } LuaucEmbedCoverageCollector;
 
+static char context_error[512];
+static uint32_t context_error_size;
+
+static int embedStamp(lua_State *L) {
+    lua_pushinteger(L, 1);
+    return 1;
+}
+
+static int embedIterNext(lua_State *L) {
+    const int control = lua_tointeger(L, 2);
+    if (control != 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    int *seed = (int *)lua_touserdatatagged(L, 1, 0);
+    lua_pushinteger(L, 1);
+    lua_pushinteger(L, seed ? *seed : 0);
+    return 2;
+}
+
+static int embedIter(lua_State *L) {
+    lua_pushcfunction(L, embedIterNext, "next");
+    lua_pushvalue(L, 1);
+    lua_pushinteger(L, 0);
+    return 3;
+}
+
+static int embedNewIter(lua_State *L) {
+    const int seed = (int)luaL_checkinteger(L, 1);
+    int *payload = (int *)lua_newuserdatatagged(L, sizeof(int), 0);
+    *payload = seed;
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, embedIter, "__iter");
+    lua_setfield(L, -2, "__iter");
+    lua_setreadonly(L, -1, 1);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+enum { kEmbedVec2Tag = 12 };
+
+// embed.vec2 contract: Unit = normalize; Mark returns payload[0].
+// Keep frontend_adapter.cpp, interpreter/main.cpp, provider_entry.c identical.
+static void embedVec2Normalize(float *dst, const float *src) {
+    const float x = src ? src[0] : 0;
+    const float y = src ? src[1] : 0;
+    const float len = sqrtf(x * x + y * y);
+    if (len == 0) {
+        dst[0] = 0;
+        dst[1] = 0;
+        return;
+    }
+    dst[0] = x / len;
+    dst[1] = y / len;
+}
+
+static int embedVec2Mark(lua_State *L) {
+    luaL_checktype(L, 2, LUA_TTABLE);
+    lua_pushvalue(L, 1);
+    lua_rawseti(L, 2, 1);
+    float *src = (float *)lua_touserdatatagged(L, 1, kEmbedVec2Tag);
+    lua_pushnumber(L, src ? src[0] : 0);
+    return 1;
+}
+
+static int embedVec2Index(lua_State *L) {
+    size_t key_size = 0;
+    const char *key = luaL_checklstring(L, 2, &key_size);
+    if (key_size == 4 && memcmp(key, "Unit", 4) == 0) {
+        float *src = (float *)lua_touserdatatagged(L, 1, kEmbedVec2Tag);
+        float *payload = (float *)lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag);
+        embedVec2Normalize(payload, src);
+        return 1;
+    }
+    if (key_size == 4 && memcmp(key, "Hold", 4) == 0) {
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setmetatable(L, 1);
+        return 1;
+    }
+    if (key_size == 4 && memcmp(key, "Mark", 4) == 0) {
+        lua_pushcfunction(L, embedVec2Mark, "Mark");
+        return 1;
+    }
+    luaL_error(L, "invalid vec2 index");
+    return 0;
+}
+
+static int embedVec2Namecall(lua_State *L) {
+    const char *name = lua_namecallatom(L, NULL);
+    if (name && strcmp(name, "Mark") == 0)
+        return embedVec2Mark(L);
+    if (name && strcmp(name, "Store") == 0) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, 2, 1);
+        return 1;
+    }
+    luaL_error(L, "invalid vec2 namecall");
+    return 0;
+}
+
+static int embedNewVec2(lua_State *L) {
+    const float seed = (float)luaL_checknumber(L, 1);
+    float *payload = (float *)lua_newuserdatataggedwithmetatable(L, sizeof(float) * 2, kEmbedVec2Tag);
+    payload[0] = seed;
+    payload[1] = seed;
+    return 1;
+}
+
+static void publishVec2Metatable(lua_State *L) {
+    lua_createtable(L, 0, 2);
+    lua_pushcfunction(L, embedVec2Index, "__index");
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, embedVec2Namecall, "__namecall");
+    lua_setfield(L, -2, "__namecall");
+    lua_setreadonly(L, -1, 1);
+    lua_setuserdatametatable(L, kEmbedVec2Tag);
+}
+
+static void publishEmbedImport(lua_State *L) {
+    publishVec2Metatable(L);
+    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, embedStamp, "stamp");
+    lua_setfield(L, -2, "stamp");
+    lua_setfield(L, -2, "util");
+    lua_pushcfunction(L, embedNewIter, "iter");
+    lua_setfield(L, -2, "iter");
+    lua_pushcfunction(L, embedNewVec2, "vec2");
+    lua_setfield(L, -2, "vec2");
+    lua_setglobal(L, "embed");
+}
+
+static void setContextError(const char *message, size_t size) {
+    if (!message) {
+        context_error_size = 0;
+        return;
+    }
+    if (size > sizeof(context_error))
+        size = sizeof(context_error);
+    memcpy(context_error, message, size);
+    context_error_size = (uint32_t)size;
+}
+
 static void collectCoverage(void *context, const char *, int, int depth, const int *hits,
                             size_t size) {
     LuaucEmbedCoverageCollector *collector = (LuaucEmbedCoverageCollector *)context;
@@ -77,9 +225,31 @@ static void collectCoverage(void *context, const char *, int, int depth, const i
 }
 
 extern const LuaucRuntimeProgramV1 *luauc_runtime_v1_program_pointer;
+uint32_t luauc_runtime_v1_gc_step(lua_State *state);
+uint32_t luauc_runtime_v1_gc_state(lua_State *state);
+uint32_t luauc_runtime_v1_gc_isblack(lua_State *state, int stack_index);
+uint32_t luauc_runtime_v1_gc_isdead(lua_State *state, uint32_t object);
+uint32_t luauc_runtime_v1_gc_stop(lua_State *state);
+uint32_t luauc_runtime_v1_gc_restart(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *state);
+uint32_t luauc_runtime_v1_barrier_probe(lua_State *state, uint32_t kind);
+void luauc_runtime_v1_reset_counts(void);
+uint32_t luauc_runtime_v1_helper_calls(void);
+uint32_t luauc_runtime_v1_trampoline_calls(void);
+uint32_t luauc_runtime_v1_direct_calls(void);
+uint32_t luauc_runtime_v1_indirect_calls(void);
 
 uint32_t luauc_embed_v1_alloc(uint32_t size) {
     return size == 0 ? 0 : (uint32_t)(uintptr_t)malloc(size);
+}
+
+uint32_t luauc_embed_v1_last_error(void) {
+    return (uint32_t)(uintptr_t)context_error;
+}
+
+uint32_t luauc_embed_v1_last_error_size(void) {
+    return context_error_size;
 }
 
 void luauc_embed_v1_dealloc(uint32_t pointer) {
@@ -87,20 +257,44 @@ void luauc_embed_v1_dealloc(uint32_t pointer) {
 }
 
 uint32_t luauc_embed_v1_context_create(void) {
+    context_error_size = 0;
     LuaucEmbedContext *context = (LuaucEmbedContext *)calloc(1, sizeof(LuaucEmbedContext));
-    if (!context)
+    if (!context) {
+        static const char message[] = "embed context allocation failed";
+        setContextError(message, sizeof(message) - 1);
         return 0;
+    }
     context->state = luaL_newstate();
     if (!context->state) {
+        static const char message[] = "Luau state allocation failed";
+        setContextError(message, sizeof(message) - 1);
         free(context);
         return 0;
     }
     luaL_openlibs(context->state);
+    publishEmbedImport(context->state);
     luaL_sandbox(context->state);
     static const char source_name[] = "@main.luau";
-    if (luauc_runtime_v1_push_program(context->state, luauc_runtime_v1_program_pointer,
-                                      source_name, sizeof(source_name) - 1) != 0 ||
-        lua_pcall(context->state, 0, 1, 0) != 0 || !lua_isfunction(context->state, -1)) {
+    const int push_status = luauc_runtime_v1_push_program(
+        context->state, luauc_runtime_v1_program_pointer, source_name, sizeof(source_name) - 1);
+    const int call_status = push_status == 0 ? lua_pcall(context->state, 0, 1, 0) : LUA_ERRRUN;
+    if (push_status != 0 || call_status != 0 || !lua_isfunction(context->state, -1)) {
+        size_t error_size = 0;
+        const char *error = lua_gettop(context->state) > 0
+                                ? lua_tolstring(context->state, -1, &error_size)
+                                : NULL;
+        if (error) {
+            setContextError(error, error_size);
+        } else {
+            const int length = snprintf(
+                context_error, sizeof(context_error),
+                "Luau initialization failed: push=%d call=%d top=%d type=%s", push_status,
+                call_status, lua_gettop(context->state),
+                lua_typename(context->state, lua_type(context->state, -1)));
+            context_error_size = length < 0 ? 0 : (uint32_t)length;
+            if (context_error_size >= sizeof(context_error))
+                context_error_size = sizeof(context_error) - 1;
+        }
         lua_close(context->state);
         free(context);
         return 0;
@@ -173,16 +367,38 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
     int status = lua_resume(thread, state, 2);
     static const char gc_boundary[] = "gc-boundary";
     size_t yielded_size = 0;
-    const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
-    if (status != LUA_YIELD || !yielded || yielded_size != sizeof(gc_boundary) - 1 ||
-        memcmp(yielded, gc_boundary, sizeof(gc_boundary) - 1) != 0) {
-        const char *failure = status == LUA_OK ? "compiled entry did not yield at the GC boundary"
-                                               : lua_tolstring(thread, -1, &yielded_size);
-        if (!failure)
-            failure = "non-string Luau suspension failure",
-            yielded_size = sizeof("non-string Luau suspension failure") - 1;
-        else if (status == LUA_OK)
-            yielded_size = sizeof("compiled entry did not yield at the GC boundary") - 1;
+    uint32_t suspension_count = 0;
+    while (status == LUA_YIELD && suspension_count < 64) {
+        const char *yielded = lua_gettop(thread) == 1 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
+        if (!yielded || yielded_size != sizeof(gc_boundary) - 1 ||
+            memcmp(yielded, gc_boundary, sizeof(gc_boundary) - 1) != 0) {
+            result->status = 3;
+            lua_settop(state, 1);
+            return 3;
+        }
+
+        // The suspended AOT thread remains rooted by the thread object on the main state's stack.
+        // Collect the complete VM heap before every generated continuation re-enters the function.
+        lua_settop(thread, 0);
+        lua_gc(state, LUA_GCCOLLECT, 0);
+        status = lua_resume(thread, state, 0);
+        suspension_count++;
+    }
+    if (status != LUA_OK) {
+        char diagnostic[128];
+        const int top = lua_gettop(thread);
+        const char *yielded = top > 0 ? lua_tolstring(thread, -1, &yielded_size) : NULL;
+        const char *failure = yielded;
+        if (!failure) {
+            const int value_type = top == 0 ? LUA_TNONE : lua_type(thread, -1);
+            const int length = snprintf(diagnostic, sizeof(diagnostic),
+                                        "Luau suspension failure: status=%d top=%d type=%s", status,
+                                        top, lua_typename(thread, value_type));
+            failure = diagnostic;
+            yielded_size = length < 0 ? 0 : (size_t)length;
+            if (yielded_size >= sizeof(diagnostic))
+                yielded_size = sizeof(diagnostic) - 1;
+        }
         if (yielded_size <= request->output_capacity) {
             memcpy((void *)(uintptr_t)request->output_pointer, failure, yielded_size);
             result->output_size = (uint32_t)yielded_size;
@@ -192,12 +408,6 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
         lua_settop(state, 1);
         return 3;
     }
-
-    // The suspended AOT thread remains rooted by the thread object on the main state's stack.
-    // Collect the complete VM heap before resuming through generated CALL continuations.
-    lua_settop(thread, 0);
-    lua_gc(state, LUA_GCCOLLECT, 0);
-    status = lua_resume(thread, state, 0);
     size_t output_size = 0;
     const char *output = lua_tolstring(thread, -1, &output_size);
     if (!output)
@@ -215,4 +425,80 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
     result->status = status == LUA_OK ? 0 : 3;
     lua_settop(state, 1);
     return result->status;
+}
+
+static lua_State *embedState(uint32_t handle) {
+    LuaucEmbedContext *context = (LuaucEmbedContext *)(uintptr_t)handle;
+    return context ? context->state : NULL;
+}
+
+uint32_t luauc_embed_v1_gc_step(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_step(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_state(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_state(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_isblack(uint32_t handle, int32_t stack_index) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_isblack(state, stack_index) : 0;
+}
+
+uint32_t luauc_embed_v1_gc_isdead(uint32_t handle, uint32_t object) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_isdead(state, object) : 0;
+}
+
+uint32_t luauc_embed_v1_gc_stop(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_stop(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_restart(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_restart(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_finish_mark(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_finish_mark(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_finish_sweep(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_finish_sweep(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_barrier_probe(uint32_t handle, uint32_t kind) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_barrier_probe(state, kind) : 2;
+}
+
+uint32_t luauc_embed_v1_reset_counts(uint32_t handle) {
+    (void)handle;
+    luauc_runtime_v1_reset_counts();
+    return 0;
+}
+
+uint32_t luauc_embed_v1_helper_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_helper_calls();
+}
+
+uint32_t luauc_embed_v1_trampoline_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_trampoline_calls();
+}
+
+uint32_t luauc_embed_v1_direct_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_direct_calls();
+}
+
+uint32_t luauc_embed_v1_indirect_calls(uint32_t handle) {
+    (void)handle;
+    return luauc_runtime_v1_indirect_calls();
 }

@@ -1,8 +1,261 @@
 return function(value, text)
+    local function guardBreadth(input)
+        local first = integer.create(math.floor(math.abs(input)) + 18)
+        local three = integer.create(3)
+        local four = integer.create(4)
+        local zero = integer.create(0)
+        local field = math.floor(math.abs(input)) % 8
+
+        assert(integer.tonumber(integer.div(first, three)) == math.floor(integer.tonumber(first) / 3))
+        assert(integer.tonumber(integer.extract(first, zero, four)) == bit32.extract(integer.tonumber(first), 0, 4))
+        assert(integer.tonumber(integer.clamp(first, integer.create(2), integer.create(5))) == 5)
+        assert(bit32.extract(integer.tonumber(first), field, 4) >= 0)
+
+        local failures = 0
+        failures += pcall(function()
+            integer.div(first, zero)
+        end) and 0 or 1
+        failures += pcall(function()
+            integer.extract(first, zero, integer.create(65))
+        end) and 0 or 2
+        failures += pcall(function()
+            bit32.extract(integer.tonumber(first), 40, 1)
+        end) and 0 or 4
+        failures += pcall(function()
+            integer.add(first, {})
+        end) and 0 or 8
+        failures += pcall(function()
+            assert(false, "guard assertion")
+        end) and 0 or 16
+        assert(failures == 31)
+        return failures
+    end
+
+    local function unsafeAssert(input)
+        return input and 41 or 43
+    end
+
     local function dynamicRoundtrip(object, key)
         local current = object[key]
         object[key] = current
         return object[key]
+    end
+
+    local function addDup(x, y)
+        return x + y
+    end
+    local addedDup = addDup(value, 1)
+
+    local function operatorBreadth(input, text)
+        local sum = input + 1 - 2 * 3 / 2
+        sum += input // 2
+        sum += 10 % 4
+        sum += 2 ^ 3
+        sum += -input
+        local box = setmetatable({ value = input, size = 3, text = text }, {
+            __add = function(left, right)
+                return left.value + (type(right) == "number" and right or right.value)
+            end,
+            __unm = function(left)
+                return -left.value
+            end,
+            __pow = function(left, right)
+                return left.value ^ (type(right) == "number" and right or right.value)
+            end,
+            __len = function(left)
+                return left.size
+            end,
+            __concat = function(left, right)
+                return left.text .. right.text
+            end,
+            __eq = function(left, right)
+                return left.value == right.value
+            end,
+        })
+        local other = setmetatable({ value = input, size = 3, text = text }, getmetatable(box))
+        local added = box + box
+        local powered = box ^ 2
+        local negated = -box
+        local eq = box == other
+        local cmp = 0
+        if box == other then
+            cmp = 1
+        end
+        local cat = text .. ":" .. text
+        local mcat = box .. box
+        local glen = #box
+        coroutine.yield("gc-boundary")
+        return sum + added + powered + negated + (eq and 1 or 0) + cmp + string.len(cat) + string.len(mcat) + glen
+    end
+
+    local function iterationBreadth(input)
+        local total = 0
+        for index, value in ipairs({ input, input + 1, input + 2 }) do
+            total += index * value
+        end
+        local function one(_, control)
+            if control == 0 then
+                return 1
+            end
+            return nil
+        end
+        local function two(_, control)
+            if control == 0 then
+                return 1, input
+            end
+            return nil
+        end
+        local function three(_, control)
+            if control == 0 then
+                return 1, input, input + 1
+            end
+            return nil
+        end
+        for first in one, nil, 0 do
+            total += first
+        end
+        for first, second in two, nil, 0 do
+            total += first + second
+        end
+        for first, second, third in three, nil, 0 do
+            total += first + second + third
+        end
+        local callable = setmetatable({}, {
+            __call = function(_, _, control)
+                if control == 0 then
+                    return 1, input
+                end
+                return nil
+            end,
+        })
+        for first, second in callable, nil, 0 do
+            total += first + second
+        end
+        for first, second in embed.iter(input) do
+            total += first + second
+        end
+        coroutine.yield("gc-boundary")
+        local function yielder(_, control)
+            if control == 0 then
+                return 1, input
+            end
+            return nil
+        end
+        for first, second in yielder, nil, 0 do
+            total += first + second
+        end
+        local raised = 0
+        pcall(function()
+            for _ in function()
+                error("iter-fail")
+            end do
+            end
+        end)
+        raised = 1
+        return total + raised
+    end
+
+    local function ksBreadth(input)
+        local inherited = { k = input }
+        local obj = setmetatable({}, {
+            __index = function(_, key)
+                return inherited[key]
+            end,
+            __newindex = function(_, key, value)
+                inherited[key] = value
+            end,
+        })
+        obj.k = input + 1
+        coroutine.yield("gc-boundary")
+        local got = obj.k
+        local shared = { n = input }
+        local tabulated = setmetatable({}, { __index = shared, __newindex = shared })
+        tabulated.n = input + 2
+        return got + tabulated.n
+    end
+
+    local function globalBreadth(input)
+        embed_seen = input
+        coroutine.yield("gc-boundary")
+        local seen = embed_seen
+        local stamp = embed.util.stamp
+        return seen + stamp()
+    end
+
+    local function closureBreadth(input, text)
+        local function factory()
+            local function blank()
+                return 1
+            end
+            return blank
+        end
+        local first = factory()
+        local second = factory()
+        local hoisted = input
+        local function valReader()
+            return hoisted
+        end
+
+        local cell0 = input
+        local cell1 = string.len(text)
+        local function writer(delta, more)
+            cell0 = cell0 + delta
+            cell1 = more
+            return cell0, cell1
+        end
+        local written0, written1 = writer(1, input + 3)
+
+        local closed
+        do
+            local scoped = input + 2
+            closed = function()
+                return scoped, cell0, cell1, valReader()
+            end
+        end
+        local c0, c1, c2, c3 = closed()
+
+        local function outer()
+            local function inner()
+                return hoisted, cell0
+            end
+            return inner
+        end
+        local forwarded = outer()
+
+        local function makePair()
+            local v = input
+            return function()
+                return v + hoisted
+            end
+        end
+        local pairA, pairB = makePair(), makePair()
+
+        coroutine.yield("gc-boundary")
+        return first() + valReader() + written0 + written1 + c0 + c1 + c2 + c3
+            + forwarded() + pairA() + pairB() + (first == second and 1 or 0)
+    end
+
+    local function tableBreadth(input, text)
+        local seedA = { input }
+        local seedB = { input + 1 }
+        local seedC = { input + 2 }
+        local seedLen = #seedA + #seedB + #seedC
+        local arr = { input, input + 1, input + 2 }
+        local hash = { name = text, bias = input, extra = input + 3 }
+        local hashLen = #hash
+        hash[1] = input
+        hash[2] = input + 1
+        table.insert(arr, text)
+        local first = { count = 17, kind = "seed", ready = true }
+        local second = { count = 17, kind = "seed", ready = true }
+        table.insert(first, input)
+        local mixed = { input, name = text, extra = input + 4 }
+        local extraA = { input + 5 }
+        local extraB = { flag = true, more = text }
+        extraA[2] = input + 6
+        coroutine.yield("gc-boundary")
+        return seedLen + #arr + hashLen + #hash + #mixed + first[1] + second.count + extraA[1] + extraA[2]
+            + (extraB.flag and 0 or 1)
     end
 
     local records = {
@@ -97,6 +350,13 @@ return function(value, text)
         end,
     })
     local functionResult = callStep(functionReceiver, value + 2)
+    local tableBreadthResult = tableBreadth(value, text)
+    local closureBreadthResult = closureBreadth(value, text)
+    local globalBreadthResult = globalBreadth(value)
+    local operatorBreadthResult = operatorBreadth(value, text)
+    local iterationBreadthResult = iterationBreadth(value)
+    local ksBreadthResult = ksBreadth(value)
+    local guardResult = guardBreadth(value) + unsafeAssert(false)
 
     local missingReceiver = setmetatable({}, { __index = {} })
     local missingOk, missingMessage = pcall(function()
@@ -118,6 +378,8 @@ return function(value, text)
 
     return sum + suspended + finished + directFirst + directSecond + tableResult + functionResult
             + directHits + tableIndexHits + functionIndexHits
+            + guardResult + tableBreadthResult + closureBreadthResult + globalBreadthResult
+            + operatorBreadthResult + iterationBreadthResult + ksBreadthResult + addedDup
             + (string.len(message) > 0 and 1 or 0) + (missingOk and 0 or 1),
         text .. ":" .. tostring(records[2].amount) .. ":" .. tostring(directHits)
             .. "/" .. tostring(tableIndexHits) .. "/" .. tostring(functionIndexHits) .. ":missing"

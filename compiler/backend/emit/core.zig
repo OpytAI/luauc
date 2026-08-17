@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const admission = @import("luauc_backend_admission");
 
 const Error = model.Error;
 const ValueSlot = model.ValueSlot;
@@ -11,7 +12,6 @@ const NewClosurePattern = model.NewClosurePattern;
 const SetUpvaluePattern = model.SetUpvaluePattern;
 const markerCapture = model.markerCapture;
 const requireSingleBytecodeBlockRangeFor = model.requireSingleBytecodeBlockRangeFor;
-const dupClosurePattern = model.dupClosurePattern;
 const lua_state_base_offset = abi.lua_state_base_offset;
 const tvalue_size = abi.tvalue_size;
 const tvalue_tag_offset = abi.tvalue_tag_offset;
@@ -21,6 +21,7 @@ const lua_tag_number = abi.lua_tag_number;
 const lua_tag_integer = abi.lua_tag_integer;
 const lua_tag_vector = abi.lua_tag_vector;
 const lua_tag_string = abi.lua_tag_string;
+const lua_tag_table = abi.lua_tag_table;
 
 pub fn instruction(self: anytype, id: u32) Error!snapshot_v1.IrInstruction {
     return self.snapshot.irInstruction(self.function, id);
@@ -65,34 +66,24 @@ pub fn requireSingleBytecodeBlockRange(self: anytype, start: u32, finish: u32) E
     return requireSingleBytecodeBlockRangeFor(self.snapshot, self.function, start, finish);
 }
 pub fn requireSingleCompilableBlockRange(self: anytype, start: u32, finish: u32) Error!void {
-    var owner: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (block.isEmpty() or block.finish < start or block.start > finish)
-            continue;
-        if (owner != null or !block.kind.isCompilable() or block.start > start or block.finish < finish)
-            return Error.UnsupportedControlFlow;
-        owner = block_id;
-    }
-    if (owner == null)
+    const start_block = self.plan.instructionBlock(start) orelse return Error.UnsupportedControlFlow;
+    const finish_block = self.plan.instructionBlock(finish) orelse return Error.UnsupportedControlFlow;
+    if (start_block != finish_block)
+        return Error.UnsupportedControlFlow;
+    const block = try self.snapshot.irBlock(self.function, start_block);
+    if (block.isEmpty() or !block.kind.isCompilable() or block.start > start or block.finish < finish)
         return Error.UnsupportedControlFlow;
 }
 pub fn requireSingleCallBlockRange(self: anytype, start: u32, finish: u32) Error!void {
-    var owner: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (block.isEmpty() or block.finish < start or block.start > finish)
-            continue;
-        const supported = block.kind.isCompilable() or
-            (block.kind == .fallback and
-                ((try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block))));
-        if (owner != null or !supported or block.start > start or block.finish < finish)
-            return Error.UnsupportedControlFlow;
-        owner = block_id;
-    }
-    if (owner == null)
+    const owner_id = self.plan.instructionBlock(start) orelse return Error.UnsupportedControlFlow;
+    const finish_id = self.plan.instructionBlock(finish) orelse return Error.UnsupportedControlFlow;
+    if (owner_id != finish_id)
+        return Error.UnsupportedControlFlow;
+    const block = try self.snapshot.irBlock(self.function, owner_id);
+    const supported = block.kind.isCompilable() or
+        (block.kind == .fallback and
+            ((try self.isFastcallFallbackBlock(block)) or (try self.supportsOrdinaryCallFallback(block))));
+    if (block.isEmpty() or !supported or block.start > start or block.finish < finish)
         return Error.UnsupportedControlFlow;
 }
 pub fn loadedTValueRegister(self: anytype, instruction_id: u32) Error!?u32 {
@@ -121,13 +112,27 @@ pub fn initializedClosureValueCapture(self: anytype, address_id: u32, store_id: 
         const source = try self.operand(store, 1);
         if (destination.kind != .instruction or destination.value != address_id or source.kind != .instruction)
             return Error.InvalidOperandType;
-        if (try self.concatPatternContaining(source.value)) |concat| {
-            if (source.value != concat.start + 2)
-                return Error.InvalidOperandType;
-            return .{ .kind = .value, .source = concat.destination };
+        if (self.plan.clusterAt(source.value)) |cluster| {
+            if (cluster.kind == .concat) {
+                const concat = (try self.concatPatternAt(cluster.at)) orelse return Error.InvalidOperandType;
+                if (source.value != concat.start + 2)
+                    return Error.InvalidOperandType;
+                return .{ .kind = .value, .source = concat.destination };
+            }
         }
         if (try self.loadedTValueRegister(source.value)) |source_register|
             return .{ .kind = .value, .source = source_register };
+        const source_instruction = try self.instruction(source.value);
+        if (source_instruction.command == .get_upvalue and source.value + 1 < store_id) {
+            const published = try self.instruction(source.value + 1);
+            if (published.command == .store_tvalue and published.operand_count == 2) {
+                const published_dest = try self.operand(published, 0);
+                const published_source = try self.operand(published, 1);
+                if (published_dest.kind == .vm_reg and published_dest.value < self.proto.max_stack_size and
+                    published_source.kind == .instruction and published_source.value == source.value)
+                    return .{ .kind = .value, .source = published_dest.value };
+            }
+        }
         return null;
     }
     if (store.command != .store_split_tvalue)
@@ -137,16 +142,24 @@ pub fn initializedClosureValueCapture(self: anytype, address_id: u32, store_id: 
     const tag = try self.operand(store, 1);
     const source = try self.operand(store, 2);
     if (destination.kind != .instruction or destination.value != address_id or
-        tag.kind != .constant or (try self.constant(tag.value)).tagValue() != 8 or
-        source.kind != .instruction or source.value >= newclosure_id)
+        tag.kind != .constant or source.kind != .instruction or source.value >= newclosure_id)
         return Error.InvalidOperandType;
-    const source_instruction = try self.instruction(source.value);
-    if (source_instruction.command != .newclosure)
-        return Error.UnsupportedControlFlow;
-    const source_pattern = try self.newClosurePattern(source.value);
-    if (source_pattern.finish >= newclosure_id - 2)
-        return Error.UnsupportedControlFlow;
-    return .{ .kind = .value, .source = source_pattern.destination };
+    const tag_value = (try self.constant(tag.value)).tagValue() orelse return Error.InvalidOperandType;
+    if (tag_value == 8) {
+        const source_instruction = try self.instruction(source.value);
+        if (source_instruction.command != .newclosure)
+            return Error.UnsupportedControlFlow;
+        const source_pattern = try self.newClosurePattern(source.value);
+        if (source_pattern.finish >= newclosure_id - 2)
+            return Error.UnsupportedControlFlow;
+        return .{ .kind = .value, .source = source_pattern.destination };
+    }
+    if (tag_value == lua_tag_number) {
+        const owner = (try self.compilableOwnerBlock(store_id)) orelse return null;
+        const register = (try self.publishedNumberPayloadRegister(owner, source, store_id)) orelse return null;
+        return .{ .kind = .value, .source = register };
+    }
+    return Error.UnsupportedControlFlow;
 }
 pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewClosurePattern {
     if (newclosure_id < 2)
@@ -173,8 +186,6 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
         env_operand.value != newclosure_id - 1 or child_index_operand.kind != .constant)
         return Error.InvalidOperandType;
     const capture_count = (try self.constant(nups_operand.value)).uintValue() orelse return Error.InvalidOperandType;
-    if (capture_count == 0)
-        return Error.UnsupportedControlFlow;
     const child_index = (try self.constant(child_index_operand.value)).uintValue() orelse
         return Error.InvalidOperandType;
     const child_proto_id = try self.snapshot.protoChild(self.proto, child_index);
@@ -193,6 +204,29 @@ pub noinline fn newClosurePattern(self: anytype, newclosure_id: u32) Error!NewCl
     const destination = try self.vmRegisterIndex(pointer_destination);
 
     var cursor = std.math.add(u32, newclosure_id, 3) catch return Error.ResourceLimit;
+    if (capture_count == 0) {
+        var finish = newclosure_id + 2;
+        var check_gc = false;
+        if (cursor < self.function.instruction_count) {
+            const gc_marker = try self.instruction(cursor);
+            if (gc_marker.command == .check_gc or gc_marker.command == .nop) {
+                try self.requireOperandCount(gc_marker, 0);
+                finish = cursor;
+                check_gc = gc_marker.command == .check_gc;
+            }
+        }
+        try self.requireSingleCompilableBlockRange(newclosure_id - 2, finish);
+        return .{
+            .start = newclosure_id - 2,
+            .finish = finish,
+            .destination = destination,
+            .child_proto_id = child_proto_id,
+            .capture_count = 0,
+            .capture_ir_start = finish,
+            .marker_start = finish + 1,
+            .check_gc = check_gc,
+        };
+    }
     const leading_marker = try self.instruction(cursor);
     if (leading_marker.command == .nop) {
         try self.requireOperandCount(leading_marker, 0);
@@ -370,50 +404,8 @@ pub fn initializedCapture(self: anytype, wanted: u32, capture_ir_start: u32) Err
     }
     unreachable;
 }
-pub noinline fn newClosurePatternContaining(self: anytype, instruction_id: u32) Error!?NewClosurePattern {
-    var candidate: u32 = 0;
-    while (candidate < self.function.instruction_count) : (candidate += 1) {
-        if ((try self.instruction(candidate)).command != .newclosure)
-            continue;
-        const pattern = self.newClosurePattern(candidate) catch |err| switch (err) {
-            Error.UnsupportedControlFlow,
-            Error.InvalidOperandCount,
-            Error.InvalidOperandType,
-            Error.InvalidInstructionResult,
-            Error.InvalidBlockTermination,
-            => continue,
-            else => return err,
-        };
-        if (instruction_id >= pattern.start and instruction_id <= pattern.finish)
-            return pattern;
-    }
-    return null;
-}
 pub fn isDupClosureCapture(self: anytype, instruction_id: u32) Error!bool {
-    var candidate: u32 = 0;
-    while (candidate < instruction_id) : (candidate += 1) {
-        if ((try self.instruction(candidate)).command != .fallback_dupclosure)
-            continue;
-        const pattern = dupClosurePattern(self.snapshot, self.function, self.proto, candidate) catch |err| switch (err) {
-            Error.UnsupportedControlFlow,
-            Error.InvalidOperandCount,
-            Error.InvalidOperandType,
-            Error.InvalidInstructionResult,
-            Error.InvalidBlockTermination,
-            => continue,
-            else => return err,
-        };
-        switch (pattern) {
-            .closed => {},
-            .captured => |captured| {
-                const finish = std.math.add(u32, captured.marker_start, captured.capture_count) catch
-                    return Error.ResourceLimit;
-                if (instruction_id >= captured.marker_start and instruction_id < finish)
-                    return true;
-            },
-        }
-    }
-    return false;
+    return self.plan.dupClosureCaptureContaining(instruction_id);
 }
 pub noinline fn setUpvaluePattern(self: anytype, instruction_id: u32) Error!SetUpvaluePattern {
     if (instruction_id == 0)
@@ -510,6 +502,33 @@ pub noinline fn emitStoreSplitTValue(
         try self.tvalueByteOffset(instruction_value, 3)
     else
         0;
+    const reloaded_table_register: ?u32 = if (tag_value == lua_tag_table and source.kind == .instruction and
+        self.plan.isProvenTablePointer(source.value))
+    reload: {
+        const producer_block = self.plan.instructionBlock(source.value) orelse
+            return Error.UnsupportedControlFlow;
+        const consumer_block = self.plan.instructionBlock(instruction_id) orelse
+            return Error.UnsupportedControlFlow;
+        if (producer_block == consumer_block)
+            break :reload null;
+        const register = (try self.loadedPointerRegister(source)) orelse
+            return Error.UnsupportedControlFlow;
+        const predecessors = self.plan.predecessorSlice(consumer_block) orelse
+            return Error.UnsupportedControlFlow;
+        if (predecessors.len != 1 or predecessors[0] != producer_block)
+            return Error.UnsupportedControlFlow;
+        const producer = try self.snapshot.irBlock(self.function, producer_block);
+        var cursor = source.value + 1;
+        while (cursor <= producer.finish) : (cursor += 1)
+            if (try self.storesVmRegister(try self.instruction(cursor), register))
+                return Error.UnsupportedControlFlow;
+        const consumer = try self.snapshot.irBlock(self.function, consumer_block);
+        cursor = consumer.start;
+        while (cursor < instruction_id) : (cursor += 1)
+            if (try self.storesVmRegister(try self.instruction(cursor), register))
+                return Error.UnsupportedControlFlow;
+        break :reload register;
+    } else null;
 
     // A numeric-string builtin argument enters the optimized numeric arm through an
     // AOT-owned coercion.  Numeric consumers use the converted instruction result,
@@ -583,7 +602,19 @@ pub noinline fn emitStoreSplitTValue(
         },
         lua_tag_string, 7, 8, 9, 10, 11, 12 => {
             try self.emitTValueAddress(destination_operand);
-            try self.emitPointerValue(source);
+            if (reloaded_table_register) |register| {
+                try self.body.localGet(self.allocator, self.base_local);
+                try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+            } else if (source.kind == .instruction) {
+                if (self.plan.tableAllocAt(source.value)) |alloc| {
+                    try self.body.localGet(self.allocator, self.base_local);
+                    try self.body.i32Load(self.allocator, 2, alloc.destination * tvalue_size);
+                } else {
+                    try self.emitPointerValue(source);
+                }
+            } else {
+                try self.emitPointerValue(source);
+            }
             try self.body.i32Store(self.allocator, 2, value_offset);
         },
         else => return Error.UnsupportedOperand,
@@ -681,6 +712,16 @@ pub noinline fn emitTValueAddress(self: anytype, operand_value: snapshot_v1.IrOp
         .instruction => try self.emitPointerValue(operand_value),
         else => return Error.UnsupportedOperand,
     }
+}
+pub noinline fn emitLoadEnv(self: anytype, instruction_id: u32) Error!void {
+    if (instruction_id >= self.slots.len or self.slots[instruction_id].shape != .pointer)
+        return Error.InvalidInstructionResult;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Load(self.allocator, 2, abi.closure_env_offset);
+    try self.emitInstructionResultSet(instruction_id);
 }
 pub noinline fn emitVmConstantAddress(self: anytype, operand_value: snapshot_v1.IrOperand) Error!void {
     if (operand_value.kind != .vm_const or operand_value.value >= self.proto.vm_constant_count)
@@ -842,7 +883,7 @@ pub fn requireDispatchTarget(self: anytype, operand_value: snapshot_v1.IrOperand
     const target = try self.snapshot.irBlock(self.function, operand_value.value);
     if (target.isEmpty() or
         (!target.kind.isCompilable() and
-            (target.kind != .fallback or !try self.supportsFallback(target))))
+            (target.kind != .fallback or !try admission.supportsFallback(self, target))))
         return Error.UnsupportedControlFlow;
     return operand_value.value;
 }

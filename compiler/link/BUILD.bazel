@@ -1,4 +1,13 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_test")
+
+WASM_LD = "@@emsdk++emscripten_deps+emscripten_bin_linux//:bin/wasm-ld"
+
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = glob(["*.zig"], exclude = ["*.test.zig"]),
+    visibility = ["//visibility:public"],
+)
 
 zig_library(
     name = "linker",
@@ -18,4 +27,46 @@ zig_binary(
     name = "linker_cli",
     main = "linker_main.zig",
     deps = [":linker", "//schema:runtime_profile_v1"],
+    visibility = ["//visibility:public"],
+)
+
+js_test(
+    name = "corpus_test",
+    size = "large",
+    data = [
+        "corpus_test.mjs",
+        "//compiler/backend:backend_wasm",
+        "//compiler/wasm:scalar_fixture_object",
+        "//conformance/maps:link_conformance_json",
+        "//conformance/sources:compiled_call",
+        "//conformance/sources:embed_lib",
+        "//conformance/sources:generic_iteration",
+        "//conformance/sources:recursive_call",
+        "//conformance/sources:table_clone_append",
+        "//frontend:frontend_wasm",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+        "//tools:generate_link_conformance",
+        "//tools:ir_ledger",
+        "//tools:wasm_bytes",
+        ":linker_cli",
+        WASM_LD,
+    ],
+    entry_point = "corpus_test.mjs",
+    env = {
+        "LUAUC_BACKEND_WASM": "$(rlocationpath //compiler/backend:backend_wasm)",
+        "LUAUC_COMPILED_CALL_SOURCE": "$(rlocationpath //conformance/sources:compiled_call)",
+        "LUAUC_EMBED_LIB_SOURCE": "$(rlocationpath //conformance/sources:embed_lib)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_FRONTEND_WASM": "$(rlocationpath //frontend:frontend_wasm)",
+        "LUAUC_GENERIC_ITERATION_SOURCE": "$(rlocationpath //conformance/sources:generic_iteration)",
+        "LUAUC_LINKER_CLI": "$(rlocationpath :linker_cli)",
+        "LUAUC_LINK_CONFORMANCE": "$(rlocationpath //conformance/maps:link_conformance_json)",
+        "LUAUC_RECURSIVE_CALL_SOURCE": "$(rlocationpath //conformance/sources:recursive_call)",
+        "LUAUC_SCALAR_FIXTURE_OBJECT": "$(rlocationpath //compiler/wasm:scalar_fixture_object)",
+        "LUAUC_TABLE_CLONE_APPEND_SOURCE": "$(rlocationpath //conformance/sources:table_clone_append)",
+        "LUAUC_WASM_LD": "$(rlocationpath %s)" % WASM_LD,
+    },
+    no_copy_to_bin = [WASM_LD],
 )

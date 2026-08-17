@@ -3,7 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
-const import_plan = @import("luauc_backend_imports");
+const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const Error = model.Error;
@@ -20,6 +20,7 @@ const tvalue_tag_offset = abi.tvalue_tag_offset;
 const tstring_len_offset = abi.tstring_len_offset;
 const lua_tag_number = abi.lua_tag_number;
 const lua_tag_string = abi.lua_tag_string;
+const status_unsupported_type = abi.status_unsupported_type;
 const lbf_operand_none = abi.lbf_operand_none;
 const lop_getimport = abi.lop_getimport;
 const lop_call = abi.lop_call;
@@ -302,6 +303,63 @@ pub fn builtinFallback(self: anytype, pc: u32) Error!?BuiltinFallback {
         .argument_count = argument_count,
     };
 }
+pub fn guardFailureBlock(self: anytype, failure: snapshot_v1.IrOperand) Error!?snapshot_v1.IrBlock {
+    if (failure.kind != .block or failure.value >= self.function.block_count)
+        return null;
+    const block = try self.snapshot.irBlock(self.function, failure.value);
+    if (block.kind != .fallback or block.isEmpty() or block.finish < block.start + 3)
+        return null;
+    const saved = try self.instruction(block.finish - 2);
+    const call = try self.instruction(block.finish - 1);
+    const jump = try self.instruction(block.finish);
+    if (saved.command != .set_savedpc or call.command != .call or jump.command != .jump)
+        return null;
+    return block;
+}
+pub fn isGuardFailure(self: anytype, failure: snapshot_v1.IrOperand) Error!bool {
+    return failure.kind == .vm_exit or try self.guardFailureBlock(failure) != null;
+}
+pub fn guardFailureIsBuiltin(
+    self: anytype,
+    failure: snapshot_v1.IrOperand,
+    object: []const u8,
+    name: []const u8,
+) Error!bool {
+    if (failure.kind == .vm_exit) {
+        const fallback = (try self.builtinFallback(failure.value)) orelse return false;
+        return self.builtinIdentityMatches(fallback.id, object, name);
+    }
+    const block = (try self.guardFailureBlock(failure)) orelse return false;
+    var found = false;
+    var instruction_id = block.start;
+    while (instruction_id <= block.finish) : (instruction_id += 1) {
+        const instruction_value = try self.instruction(instruction_id);
+        if (instruction_value.command != .get_cached_import)
+            continue;
+        if (found or instruction_value.operand_count != 4)
+            return false;
+        const import_operand = try self.operand(instruction_value, 1);
+        if (import_operand.kind != .vm_const)
+            return false;
+        const import = try self.snapshot.vmConstant(self.proto, import_operand.value);
+        if (import.kind != .import or import.payload1 == 0 or import.payload1 > 2)
+            return false;
+        const object_item = try self.snapshot.vmConstantItem(import.payload0);
+        const name_item = try self.snapshot.vmConstantItem(import.payload0 + import.payload1 - 1);
+        if (object_item.value != snapshot_v1.no_id or name_item.value != snapshot_v1.no_id)
+            return false;
+        const object_constant = try self.snapshot.vmConstant(self.proto, object_item.key);
+        const name_constant = try self.snapshot.vmConstant(self.proto, name_item.key);
+        if (object_constant.kind != .string or name_constant.kind != .string)
+            return false;
+        const imported_object = if (import.payload1 == 1) "" else try self.snapshot.string(object_constant.payload0);
+        const imported_name = try self.snapshot.string(name_constant.payload0);
+        if (!std.mem.eql(u8, imported_object, object) or !std.mem.eql(u8, imported_name, name))
+            return false;
+        found = true;
+    }
+    return found;
+}
 pub noinline fn emitSingleGlobalImport(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 4);
     const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
@@ -315,6 +373,21 @@ pub noinline fn emitSingleGlobalImport(self: anytype, instruction_value: snapsho
     if (import.kind != .import or import.payload1 == 0 or import.payload1 > 3)
         return Error.UnsupportedControlFlow;
     const encoded = (try self.constant(descriptor.value)).importValue() orelse return Error.InvalidOperandType;
+    const pc = (try self.constant(pc_operand.value)).uintValue() orelse return Error.InvalidOperandType;
+    try self.emitDecodedGlobalImport(destination, import_operand.value, encoded, pc);
+}
+pub noinline fn emitDecodedGlobalImport(
+    self: anytype,
+    destination: u32,
+    import_id: u32,
+    encoded: u32,
+    pc: u32,
+) Error!void {
+    if (destination >= self.proto.max_stack_size or import_id >= self.proto.vm_constant_count)
+        return Error.InvalidOperandType;
+    const import = try self.snapshot.vmConstant(self.proto, import_id);
+    if (import.kind != .import or import.payload1 == 0 or import.payload1 > 3)
+        return Error.UnsupportedControlFlow;
     var keys = [_]StringKeyPool.Entry{undefined} ** 3;
     var expected = import.payload1 << 30;
     var index: u32 = 0;
@@ -331,8 +404,6 @@ pub noinline fn emitSingleGlobalImport(self: anytype, instruction_value: snapsho
     }
     if (encoded != expected)
         return Error.UnsupportedControlFlow;
-    const pc = (try self.constant(pc_operand.value)).uintValue() orelse return Error.InvalidOperandType;
-
     // Decode the complete one-to-three-key import into ordinary semantic lookups. This does
     // not consume or trust the optimizer's environment cache: unsafe environments and
     // metatable-backed intermediate objects observe the same luaV boundaries as the bytecode
@@ -357,35 +428,36 @@ pub noinline fn emitSingleGlobalImport(self: anytype, instruction_value: snapsho
 }
 pub fn staticRequireTarget(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?StaticRequirePattern {
     const package = self.static_package orelse return null;
-    const end = std.math.add(u32, start, 6) catch return Error.ResourceLimit;
+    const first = try self.instruction(start);
+    const has_marker = first.command == .nop or first.command == .check_safe_env;
+    const get_id = std.math.add(u32, start, @intFromBool(has_marker)) catch return Error.ResourceLimit;
+    const end = std.math.add(u32, get_id, 5) catch return Error.ResourceLimit;
     if (start < block.start or end > block.finish)
         return null;
 
-    const marker = try self.instruction(start);
-    const get_import = try self.instruction(start + 1);
-    const load_path = try self.instruction(start + 2);
-    const store_path = try self.instruction(start + 3);
-    const interrupt = try self.instruction(start + 4);
-    const saved_pc = try self.instruction(start + 5);
-    const call = try self.instruction(start + 6);
-    if ((marker.command != .nop and marker.command != .check_safe_env) or
-        get_import.command != .get_cached_import or load_path.command != .load_tvalue or
+    const get_import = try self.instruction(get_id);
+    const load_path = try self.instruction(get_id + 1);
+    const store_path = try self.instruction(get_id + 2);
+    const interrupt = try self.instruction(get_id + 3);
+    const saved_pc = try self.instruction(get_id + 4);
+    const call = try self.instruction(get_id + 5);
+    if (get_import.command != .get_cached_import or load_path.command != .load_tvalue or
         store_path.command != .store_tvalue or interrupt.command != .interrupt or
         saved_pc.command != .set_savedpc or call.command != .call)
         return null;
-    if (!try import_plan.isRequireImportInstruction(self.snapshot, self.function, self.proto, get_import))
+    if (!try admission.isRequireImportInstruction(self.snapshot, self.function, self.proto, get_import))
         return null;
-    if (marker.command == .nop) {
+    if (has_marker and first.command == .nop) {
         var prefix = block.start;
         if (prefix < start and (try self.instruction(prefix)).command == .fallback_prepvarargs)
             prefix += 1;
         while (prefix < start and (try self.instruction(prefix)).command == .coverage)
             prefix += 1;
-        if (prefix != start or (block.flags & (1 << 0)) == 0 or marker.operand_count != 0)
+        if (prefix != start or (block.flags & (1 << 0)) == 0 or first.operand_count != 0)
             return Error.UnsupportedControlFlow;
-    } else {
-        try self.requireOperandCount(marker, 1);
-        const failure = try self.operand(marker, 0);
+    } else if (has_marker) {
+        try self.requireOperandCount(first, 1);
+        const failure = try self.operand(first, 0);
         if (failure.kind != .vm_exit)
             return Error.UnsupportedControlFlow;
     }
@@ -408,7 +480,7 @@ pub fn staticRequireTarget(self: anytype, start: u32, block: snapshot_v1.IrBlock
     try self.requireOperandCount(store_path, 2);
     const argument = try self.vmRegisterIndex(try self.operand(store_path, 0));
     const stored = try self.operand(store_path, 1);
-    if (argument != destination + 1 or stored.kind != .instruction or stored.value != start + 2)
+    if (argument != destination + 1 or stored.kind != .instruction or stored.value != get_id + 1)
         return Error.UnsupportedControlFlow;
 
     try self.requireOperandCount(interrupt, 1);
@@ -428,7 +500,7 @@ pub fn staticRequireTarget(self: anytype, start: u32, block: snapshot_v1.IrBlock
         return Error.UnsupportedControlFlow;
 
     const target = package.moduleByName(path) orelse return Error.UnsupportedControlFlow;
-    return .{ .end = end, .interrupt_id = start + 4, .destination = destination, .module_id = target.id };
+    return .{ .end = end, .interrupt_id = get_id + 3, .destination = destination, .module_id = target.id };
 }
 pub noinline fn emitStaticRequire(self: anytype, interrupt_id: u32, destination: u32, module_id: u32) Error!void {
     // The source CALL cluster carries its ordinary interrupt/fuel safepoint. Static resolution
@@ -459,7 +531,7 @@ pub fn isTableInsertAppendSafeEnv(self: anytype, instruction_id: u32) Error!bool
         return false;
 
     const guard = try self.instruction(instruction_id);
-    if (guard.operand_count != 1 or (try self.operand(guard, 0)).kind != .vm_exit)
+    if (guard.operand_count != 1 or !try self.isGuardFailure(try self.operand(guard, 0)))
         return false;
 
     const append_start = instruction_id + @as(u32, @intCast(commands.len));
@@ -481,10 +553,33 @@ pub noinline fn emitStatusCheckedCall(self: anytype, helper: wasm.FunctionRef) E
 pub noinline fn emitSafeEnvCheck(self: anytype, instruction_id: u32) Error!void {
     const instruction_value = try self.instruction(instruction_id);
     try self.requireOperandCount(instruction_value, 1);
-    if ((try self.operand(instruction_value, 0)).kind != .vm_exit)
+    const failure = try self.operand(instruction_value, 0);
+    if (failure.kind != .block)
         return Error.InvalidOperandType;
     try self.body.localGet(self.allocator, 0);
-    try self.emitStatusCheckedCall(self.check_safe_env orelse return Error.UnsupportedCommand);
+    try self.body.call(self.allocator, self.check_safe_env orelse return Error.UnsupportedCommand);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.emitReloadBase();
+
+    // The runtime returns only OK, UNSUPPORTED_TYPE (take the compiled slow arm), or a fatal
+    // status. Preserve fatal statuses and route ordinary unsafe environments through the same
+    // guard target produced by the pinned frontend.
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, status_unsupported_type);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, 0x72); // i32.or
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, status_unsupported_type);
+    try self.body.i32Eq(self.allocator);
+    try self.emitGuardFailure(failure);
 }
 pub noinline fn emitAdjustStackConstant(self: anytype, destination: u32, count: u32) Error!void {
     const end = std.math.add(u32, destination, count) catch return Error.ResourceLimit;
@@ -516,6 +611,50 @@ pub noinline fn emitAdjustStackToTop(self: anytype) Error!void {
     try self.body.i32Load(self.allocator, 2, callinfo_top_offset);
     try self.body.i32Store(self.allocator, 2, lua_state_top_offset);
 }
+pub noinline fn emitGeneralInvokeFastcall(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 7);
+    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+        return Error.UnsupportedControlFlow;
+    try self.emitSavedPcLocation(try self.instruction(instruction_id - 1));
+    const builtin_operand = try self.operand(instruction_value, 0);
+    if (builtin_operand.kind != .constant)
+        return Error.InvalidOperandType;
+    const builtin_id = (try self.constant(builtin_operand.value)).uintValue() orelse return Error.InvalidOperandType;
+    if (builtin_id >= 256)
+        return Error.InvalidOperandType;
+    const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
+    const argument_two = (try self.fastcallValueOperand(try self.operand(instruction_value, 3))) orelse
+        return Error.UnsupportedControlFlow;
+    const argument_three = (try self.fastcallValueOperand(try self.operand(instruction_value, 4))) orelse
+        return Error.UnsupportedControlFlow;
+    const parameter_count = try self.intConstant(try self.operand(instruction_value, 5));
+    const result_count = try self.intConstant(try self.operand(instruction_value, 6));
+    if (parameter_count < -1 or result_count < -1)
+        return Error.UnsupportedControlFlow;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(builtin_id));
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32Const(self.allocator, @bitCast(argument_two));
+    try self.body.i32Const(self.allocator, @bitCast(argument_three));
+    try self.body.i32Const(self.allocator, result_count);
+    try self.body.i32Const(self.allocator, parameter_count);
+    try self.body.call(self.allocator, self.fastcall orelse return Error.UnsupportedCommand);
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+    try self.emitReloadBase();
+}
+
 pub noinline fn emitDirectFastcall(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 4);
     const builtin_operand = try self.operand(instruction_value, 0);
@@ -577,7 +716,7 @@ pub noinline fn emitFastcallCluster(self: anytype, pattern: FastcallPattern) Err
     try self.body.i32Const(self.allocator, @intCast(pattern.fast_target));
     try self.body.localSet(self.allocator, self.dispatch_local);
     try self.body.end(self.allocator);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub fn isFastcallFallback(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
     if (block.kind != .fallback or block.isEmpty())
@@ -596,14 +735,10 @@ pub fn isFastcallFallback(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
     return false;
 }
 pub noinline fn emitFastcallFallbackBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     const terminated = try self.emitInstructionRange(block.start, block.finish, block);
     if (!terminated)
         return Error.InvalidBlockTermination;
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitLibm(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (instruction_value.operand_count != 2 and instruction_value.operand_count != 3)

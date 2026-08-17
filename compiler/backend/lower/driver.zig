@@ -4,11 +4,13 @@ const static_package_v1 = @import("luauc_backend_static_package_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const FunctionPlan = @import("luauc_backend_plan").FunctionPlan;
+const continuation_plan = @import("luauc_backend_continuation_plan");
 const abi = @import("luauc_backend_runtime_abi");
 const Context = @import("luauc_backend_context").Context;
 const continuations = @import("luauc_backend_continuations");
 const runtime_imports = @import("luauc_backend_imports");
 const diagnostics = @import("luauc_backend_diagnostics");
+const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const Error = model.Error;
@@ -29,6 +31,49 @@ const aot_proto_root_flag = abi.aot_proto_root_flag;
 const aot_layout_sha256 = abi.aot_layout_sha256;
 const status_internal_error = abi.status_internal_error;
 const max_lowered_locals = abi.max_lowered_locals;
+
+pub const br_table_page_size: u32 = 256;
+pub const br_table_case_limit: u32 = 512;
+pub const function_body_limit: usize = 256 * 1024;
+pub const i32_ge_u: u8 = 0x4f;
+
+pub const DispatchMode = enum { flat, paged };
+
+pub fn dispatchMode(case_count: u32, block_plus_cont: u32) Error!DispatchMode {
+    if (case_count > br_table_case_limit)
+        return Error.ResourceLimit;
+    return if (block_plus_cont > br_table_page_size) .paged else .flat;
+}
+
+pub fn checkFunctionBodyLimit(len: usize) Error!void {
+    if (len > function_body_limit)
+        return Error.ResourceLimit;
+}
+
+pub fn emitPagedBrTable(
+    allocator: std.mem.Allocator,
+    body: *wasm.Body,
+    dispatch_local: u32,
+    labels: []const u32,
+    nest: u32,
+) Error!void {
+    var paged = try allocator.alloc(u32, labels.len);
+    defer allocator.free(paged);
+    for (labels, 0..) |label, index|
+        paged[index] = label + 1;
+    const paged_default = nest;
+    try body.i32Const(allocator, @intCast(br_table_page_size));
+    try body.opcode(allocator, i32_ge_u);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, dispatch_local);
+    try body.i32Const(allocator, @intCast(br_table_page_size));
+    try body.opcode(allocator, 0x6b); // i32.sub
+    try body.brTable(allocator, paged[br_table_page_size..], paged_default);
+    try body.else_(allocator);
+    try body.localGet(allocator, dispatch_local);
+    try body.brTable(allocator, paged[0..@min(labels.len, br_table_page_size)], paged_default);
+    try body.end(allocator);
+}
 
 fn lowerFunction(
     allocator: std.mem.Allocator,
@@ -52,7 +97,7 @@ fn lowerFunction(
     if (!entry_block.kind.isCompilable() or entry_block.isEmpty())
         return Error.UnsupportedControlFlow;
 
-    var plan = FunctionPlan.init(allocator, snapshot, function) catch |err| {
+    var plan = FunctionPlan.init(allocator, snapshot, function, static_package != null) catch |err| {
         diagnostics.recordPhase(@errorName(err), "function planning");
         return err;
     };
@@ -153,11 +198,19 @@ fn lowerFunction(
         .do_arith = imports.do_arith,
         .compare_any = imports.compare_any,
         .dupclosure = imports.dupclosure,
+        .dupclosure_capture = imports.dupclosure_capture,
+        .newclosure_empty = imports.newclosure_empty,
         .newclosure_capture = imports.newclosure_capture,
         .get_upvalue = imports.get_upvalue,
         .set_upvalue = imports.set_upvalue,
         .close_upvalues = imports.close_upvalues,
-        .call = imports.call,
+        .prepare_compiled_call = imports.prepare_compiled_call,
+        .finish_compiled_call = imports.finish_compiled_call,
+        .count_direct_call = imports.count_direct_call,
+        .count_indirect_call = imports.count_indirect_call,
+        .generated_type = imports.generated_type,
+        .self_function = try object.pendingFunctionRef(imports.generated_type),
+        .planned_function_id = std.math.add(u32, function_id_base, function_id) catch return Error.ResourceLimit,
         .exchange_continuation = imports.exchange_continuation,
         .set_location = imports.set_location,
         .new_table = imports.new_table,
@@ -167,6 +220,8 @@ fn lowerFunction(
         .check_userdata_tag = imports.check_userdata_tag,
         .barrier_object = imports.barrier_object,
         .barrier_table_back = imports.barrier_table_back,
+        .set_userdata_metatable = imports.set_userdata_metatable,
+        .table_store = imports.table_store,
         .barrier_table_forward = imports.barrier_table_forward,
         .hash_node_addr = imports.hash_node_addr,
         .slot_node_addr = imports.slot_node_addr,
@@ -206,6 +261,7 @@ fn lowerFunction(
         .type_name = imports.type_name,
         .builtin_type_error = imports.builtin_type_error,
         .builtin_number = imports.builtin_number,
+        .forn_prepare = imports.forn_prepare,
         .buffer_bounds_error = imports.buffer_bounds_error,
         .libm = imports.libm,
         .prep_varargs = imports.prep_varargs,
@@ -217,12 +273,23 @@ fn lowerFunction(
         .proto_id_by_bytecode_id = proto_id_by_bytecode_id,
         .base_local = 2,
         .dispatch_local = 3,
+        .loop_branch_depth = 1,
         .status_local = 4,
         .continuation_local = 5,
         .table_index_local = 6,
         .call_continuations = &.{},
+        .continuation_indices = &.{},
         .string_keys = string_keys,
     };
+    plan.indexClusters(context) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "cluster index");
+        return err;
+    };
+    plan.indexBlocks(context) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "block index");
+        return err;
+    };
+    try continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan);
     context.classifyBuiltinNumberLoads() catch |err| {
         diagnostics.recordPhase(@errorName(err), "value classification");
         return err;
@@ -233,6 +300,17 @@ fn lowerFunction(
     };
     defer allocator.free(call_continuations);
     context.call_continuations = call_continuations;
+    const continuation_indices = try allocator.alloc(u32, function.instruction_count);
+    defer allocator.free(continuation_indices);
+    @memset(continuation_indices, snapshot_v1.no_id);
+    for (call_continuations, 0..) |continuation, index| {
+        if (continuation.instruction_id >= continuation_indices.len or
+            continuation_indices[continuation.instruction_id] != snapshot_v1.no_id)
+            return Error.UnsupportedControlFlow;
+        continuation_indices[continuation.instruction_id] = std.math.cast(u32, index) orelse
+            return Error.ResourceLimit;
+    }
+    context.continuation_indices = continuation_indices;
     if (call_continuations.len == 0 and context.exchange_continuation != null)
         context.exchange_continuation = null;
     if (call_continuations.len != 0 and context.exchange_continuation == null)
@@ -241,7 +319,7 @@ fn lowerFunction(
     var block_id: u32 = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        if (block.kind == .fallback and try context.supportsArithmeticFallback(block)) {
+        if (block.kind == .fallback and try admission.supportsArithmeticFallback(context, block)) {
             if (context.do_arith == null)
                 return Error.UnsupportedCommand;
         } else if (block.kind == .fallback and
@@ -272,32 +350,83 @@ fn lowerFunction(
     }
     try body.loop(allocator);
 
+    const DispatchCase = union(enum) { block: u32, continuation: u32 };
+    var cases: std.ArrayList(DispatchCase) = .empty;
+    defer cases.deinit(allocator);
+    var max_dispatch: u32 = 0;
     block_id = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        const bypassed = context.isBypassedEmissionBlock(block_id, block) catch |err| {
-            diagnostics.recordBlock(@errorName(err), block_id);
-            return err;
-        };
-        if (block.kind.isCompilable() and !block.isEmpty() and !bypassed)
-            context.emitBlock(block_id, block) catch |err| {
-                diagnostics.recordBlock(@errorName(err), block_id);
-                return err;
-            }
-        else if (block.kind == .fallback and !bypassed and try context.supportsFallback(block))
-            context.emitBlock(block_id, block) catch |err| {
+        const bypassed = if (block.kind == .fallback and try context.supportsOrdinaryCallFallback(block))
+            false
+        else
+            admission.isBypassedEmissionBlock(context, block_id, block) catch |err| {
                 diagnostics.recordBlock(@errorName(err), block_id);
                 return err;
             };
+        const emit_block = (block.kind.isCompilable() and !block.isEmpty() and !bypassed) or
+            (block.kind == .fallback and !bypassed and try admission.supportsFallback(context, block));
+        if (emit_block) {
+            try cases.append(allocator, .{ .block = block_id });
+            max_dispatch = @max(max_dispatch, block_id);
+        }
     }
-    for (call_continuations) |continuation|
-        try context.emitCallContinuation(continuation);
+    for (call_continuations, 0..) |continuation, index| {
+        try cases.append(allocator, .{ .continuation = @intCast(index) });
+        max_dispatch = @max(max_dispatch, continuation.dispatch_id);
+    }
+
+    const table_len = std.math.add(u32, max_dispatch, 1) catch return Error.ResourceLimit;
+    const case_count: u32 = @intCast(cases.items.len);
+    const block_plus_cont = std.math.add(u32, function.block_count, @intCast(call_continuations.len)) catch
+        return Error.ResourceLimit;
+    const mode = try dispatchMode(case_count, block_plus_cont);
+    const nest = case_count + 1;
+    var opened: u32 = 0;
+    while (opened < nest) : (opened += 1)
+        try body.block(allocator);
+
+    var labels = try allocator.alloc(u32, table_len);
+    defer allocator.free(labels);
+    @memset(labels, nest - 1);
+    for (cases.items, 0..) |case, index| {
+        const dispatch_id = switch (case) {
+            .block => |id| id,
+            .continuation => |id| call_continuations[id].dispatch_id,
+        };
+        labels[dispatch_id] = @intCast(index);
+    }
+
+    try body.localGet(allocator, context.dispatch_local);
+    if (mode == .paged) {
+        // Page if is an extra depth inside the innermost case, so br_table labels are +1.
+        try emitPagedBrTable(allocator, &body, context.dispatch_local, labels, nest);
+    } else {
+        try body.brTable(allocator, labels, nest - 1);
+    }
+
+    for (cases.items, 0..) |case, index| {
+        try body.end(allocator);
+        context.loop_branch_depth = nest - @as(u32, @intCast(index)) - 1;
+        switch (case) {
+            .block => |id| {
+                const block = try snapshot.irBlock(function, id);
+                context.emitBlock(id, block) catch |err| {
+                    diagnostics.recordBlock(@errorName(err), id);
+                    return err;
+                };
+            },
+            .continuation => |id| try context.emitCallContinuation(call_continuations[id]),
+        }
+    }
 
     // Reaching the bottom means a malformed/generated dispatch target escaped static validation.
     try context.emitStatusReturn(status_internal_error);
     try body.end(allocator);
+    try body.end(allocator);
     try body.i32Const(allocator, status_internal_error);
     try body.finish(allocator);
+    try checkFunctionBodyLimit(body.bytes.items.len);
 
     return object.defineFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden, body);
 }
@@ -333,10 +462,13 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     defer allocator.free(proto_id_by_bytecode_id);
 
     var needs = runtime_imports.ImportNeeds{};
-    runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs) catch |err| {
-        diagnostics.recordPhase(@errorName(err), "runtime import planning");
-        return err;
-    };
+    {
+        const function = try snapshot.irFunction(function_id);
+        model.scanImportNeedsFor(snapshot, function, false, &needs) catch |err| {
+            diagnostics.recordPhase(@errorName(err), "runtime import planning");
+            return err;
+        };
+    }
     var object = wasm.Object.init(allocator);
     defer object.deinit();
     var string_keys = StringKeyPool{};
@@ -356,8 +488,10 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
 
     var needs = runtime_imports.ImportNeeds{};
     var function_id: u32 = 0;
-    while (function_id < snapshot.header.ir_function_count) : (function_id += 1)
-        try runtime_imports.scanImportNeeds(snapshot, function_id, false, &needs);
+    while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
+        const function = try snapshot.irFunction(function_id);
+        try model.scanImportNeedsFor(snapshot, function, false, &needs);
+    }
 
     var object = wasm.Object.init(allocator);
     defer object.deinit();
@@ -415,6 +549,7 @@ fn appendProtoConstantMetadata(
     allocator: std.mem.Allocator,
     snapshot: snapshot_v1.Snapshot,
     proto: snapshot_v1.Proto,
+    function_id_base: u32,
     constant_bytes: *std.ArrayList(u8),
     item_bytes: *std.ArrayList(u8),
     constant_strings: *StringKeyPool,
@@ -469,7 +604,13 @@ fn appendProtoConstantMetadata(
                 }
                 local_item_count = std.math.add(u32, local_item_count, constant.payload1) catch return Error.ResourceLimit;
             },
-            .import, .closure, .class_shape => {},
+            .closure => {
+                const child_proto_id = constant.closureProtoId() orelse return Error.InvalidOperandType;
+                const function_id = std.math.add(u32, function_id_base, child_proto_id) catch
+                    return Error.ResourceLimit;
+                writeU32(descriptor, 4, function_id);
+            },
+            .import, .class_shape => {},
         }
     }
 
@@ -587,6 +728,7 @@ fn emitStaticPackageMetadata(
                 allocator,
                 snapshot,
                 proto,
+                function_base,
                 &constant_bytes,
                 &item_bytes,
                 &constant_strings,
@@ -770,7 +912,8 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
 
         var function_id: u32 = 0;
         while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
-            try runtime_imports.scanImportNeeds(snapshot, function_id, true, &needs);
+            const function = try snapshot.irFunction(function_id);
+            try model.scanImportNeedsFor(snapshot, function, true, &needs);
         }
     }
     if (total_functions == 0)

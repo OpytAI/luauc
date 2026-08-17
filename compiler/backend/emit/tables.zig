@@ -35,6 +35,74 @@ const tvalue_size = abi.tvalue_size;
 const lua_tag_number = abi.lua_tag_number;
 const lua_tag_table = abi.lua_tag_table;
 
+pub noinline fn emitGeneralGetGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralGlobal(self, instruction_value, .get);
+}
+
+pub noinline fn emitGeneralSetGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralGlobal(self, instruction_value, .set);
+}
+
+fn emitGeneralGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction, operation: GlobalOperation) Error!void {
+    try self.requireOperandCount(instruction_value, 3);
+    const pc = try self.uintConstant(try self.operand(instruction_value, 0));
+    const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const key = (try self.stringKey(try self.operand(instruction_value, 2))) orelse
+        return Error.UnsupportedControlFlow;
+    const interned = try self.string_keys.intern(self.allocator, key);
+    try self.emitPcLocation(pc);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(value));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+    try self.body.i32Const(self.allocator, @intCast(interned.length));
+    try self.body.call(self.allocator, switch (operation) {
+        .get => self.get_global orelse return Error.UnsupportedCommand,
+        .set => self.set_global orelse return Error.UnsupportedCommand,
+    });
+    try self.emitReloadBase();
+}
+
+pub noinline fn emitGeneralGetTableKs(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralTableKs(self, instruction_value, .get);
+}
+
+pub noinline fn emitGeneralSetTableKs(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try emitGeneralTableKs(self, instruction_value, .set);
+}
+
+fn emitGeneralTableKs(
+    self: anytype,
+    instruction_value: snapshot_v1.IrInstruction,
+    operation: model.StringTableOperation,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const pc = try self.uintConstant(try self.operand(instruction_value, 0));
+    const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    const table = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
+    const key = (try self.stringKey(try self.operand(instruction_value, 3))) orelse
+        return Error.UnsupportedControlFlow;
+    const interned = try self.string_keys.intern(self.allocator, key);
+    try self.emitPcLocation(pc);
+    try self.body.localGet(self.allocator, 0);
+    switch (operation) {
+        .set => {
+            try self.body.i32Const(self.allocator, @intCast(table));
+            try self.body.i32Const(self.allocator, @intCast(value));
+            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+            try self.body.i32Const(self.allocator, @intCast(interned.length));
+            try self.body.call(self.allocator, self.table_set_string orelse return Error.UnsupportedCommand);
+        },
+        .get => {
+            try self.body.i32Const(self.allocator, @intCast(value));
+            try self.body.i32Const(self.allocator, @intCast(table));
+            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+            try self.body.i32Const(self.allocator, @intCast(interned.length));
+            try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
+        },
+    }
+    try self.emitReloadBase();
+}
+
 pub noinline fn emitDirectGenericTableOperation(
     self: anytype,
     instruction_value: snapshot_v1.IrInstruction,
@@ -390,16 +458,6 @@ pub noinline fn inlineGenericTableSetPatternAt(self: anytype, start: u32) Error!
         };
     }
 }
-pub noinline fn inlineGenericTableSetPatternContaining(self: anytype, instruction_id: u32) Error!?InlineGenericTablePattern {
-    var distance: u32 = 0;
-    while (distance < 15 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if ((try self.instruction(start)).command == .load_tag)
-            if (try self.inlineGenericTableSetPatternAt(start)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn semanticTableReloadPatternAt(self: anytype, start: u32) Error!?SemanticTableReloadPattern {
     if (start + 1 >= self.function.instruction_count)
         return null;
@@ -436,14 +494,6 @@ pub noinline fn semanticTableReloadPatternAt(self: anytype, start: u32) Error!?S
             .table = owner.table,
             .key = .{ .string = .{ .value = owner.key, .pc = owner.pc } },
         };
-    return null;
-}
-pub noinline fn semanticTableReloadPatternContaining(self: anytype, instruction_id: u32) Error!?SemanticTableReloadPattern {
-    if (try self.semanticTableReloadPatternAt(instruction_id)) |pattern|
-        return pattern;
-    if (instruction_id != 0)
-        if (try self.semanticTableReloadPatternAt(instruction_id - 1)) |pattern|
-            if (pattern.finish == instruction_id) return pattern;
     return null;
 }
 pub noinline fn emitSemanticTableReload(self: anytype, pattern: SemanticTableReloadPattern) Error!void {
@@ -630,7 +680,8 @@ pub noinline fn genericTableSetPattern(self: anytype, block: snapshot_v1.IrBlock
             (try self.operand(readonly, 1)).kind != .block or (try self.operand(readonly, 1)).value != fallback_target.value)
             return null;
     } else {
-        const allocation = (try self.tableAllocationPatternContaining(pointer_id)) orelse return null;
+        const covering = self.plan.tableAllocCovering(pointer_id) orelse return null;
+        const allocation = (try self.tableAllocationPatternAt(covering.start)) orelse return null;
         if (allocation.start != pointer_id or allocation.destination >= self.proto.max_stack_size)
             return null;
         table = allocation.destination;
@@ -899,16 +950,6 @@ pub noinline fn inlineConstantTableGetPatternAt(self: anytype, start: u32) Error
         .finish = finish,
     };
 }
-pub noinline fn inlineConstantTableGetPatternContaining(self: anytype, instruction_id: u32) Error!?InlineConstantTableGetPattern {
-    var distance: u32 = 0;
-    while (distance < 8 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if ((try self.instruction(start)).command == .load_tag)
-            if (try self.inlineConstantTableGetPatternAt(start)) |pattern|
-                if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn genericTablePattern(self: anytype, block: snapshot_v1.IrBlock) Error!?GenericTablePattern {
     if (try self.genericTableSetPattern(block)) |pattern|
         return pattern;
@@ -1134,15 +1175,6 @@ pub noinline fn inlineArrayGetPatternAt(self: anytype, start: u32) Error!?Inline
         .index = std.math.add(u32, zero_based, 1) catch return null,
     };
 }
-pub noinline fn inlineArrayGetPatternContaining(self: anytype, instruction_id: u32) Error!?InlineArrayGetPattern {
-    var distance: u32 = 0;
-    while (distance < 3 and distance <= instruction_id) : (distance += 1) {
-        const start = instruction_id - distance;
-        if (try self.inlineArrayGetPatternAt(start)) |pattern|
-            if (instruction_id <= pattern.finish) return pattern;
-    }
-    return null;
-}
 pub noinline fn emitInlineArrayGet(self: anytype, pattern: InlineArrayGetPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
@@ -1276,4 +1308,63 @@ pub noinline fn dynamicLengthPattern(self: anytype, block: snapshot_v1.IrBlock) 
         .rejoin = try self.requireCompiledTarget(fast_rejoin),
         .marker = marker,
     };
+}
+pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(dest_reg));
+    try self.body.i32Const(self.allocator, @intCast(table_reg));
+    try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}
+pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 1);
+    const pointer = try self.operand(instruction_value, 0);
+    const table_reg = (try self.loadedPointerRegister(pointer)) orelse
+        ((try self.rootedTablePointerRegister(pointer)) orelse return Error.UnsupportedControlFlow);
+    const dest_reg = (try tableLenDestination(self, instruction_id, table_reg)) orelse
+        return Error.UnsupportedControlFlow;
+    try self.emitPlainTableLen(dest_reg, table_reg);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, dest_reg * tvalue_size);
+    try self.body.opcode(self.allocator, 0xaa); // i32.trunc_f64_s
+    try self.emitInstructionResultSet(instruction_id);
+}
+
+fn storedLenRegister(self: anytype, store: snapshot_v1.IrInstruction, convert_id: u32) Error!?u32 {
+    if (store.operand_count != 2)
+        return null;
+    if (store.command != .store_double and store.command != .store_tvalue and
+        store.command != .store_split_tvalue)
+        return null;
+    const stored = try self.operand(store, 1);
+    if (stored.kind != .instruction or stored.value != convert_id)
+        return null;
+    return self.vmRegisterIndex(try self.operand(store, 0)) catch return null;
+}
+
+fn tableLenDestination(self: anytype, table_len_id: u32, table_reg: u32) Error!?u32 {
+    if (self.plan.plainLenAt(table_len_id)) |fact| {
+        if (fact.dest_reg == table_reg)
+            return null;
+        return fact.dest_reg;
+    }
+    if (table_len_id + 1 >= self.function.instruction_count)
+        return null;
+    const convert = try self.instruction(table_len_id + 1);
+    if (convert.command != .int_to_num or convert.operand_count != 1)
+        return null;
+    const converted = try self.operand(convert, 0);
+    if (converted.kind != .instruction or converted.value != table_len_id)
+        return null;
+    var cursor = table_len_id + 2;
+    const limit = @min(self.function.instruction_count, table_len_id + 8);
+    while (cursor < limit) : (cursor += 1) {
+        const dest = try storedLenRegister(self, try self.instruction(cursor), table_len_id + 1);
+        if (dest) |register| {
+            if (register == table_reg)
+                return null;
+            return register;
+        }
+    }
+    return null;
 }

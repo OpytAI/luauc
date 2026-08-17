@@ -1,16 +1,69 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 
+_LEDGER_LUAU = [
+    "buffer_scalar_matrix.luau",
+    "captured_call.luau",
+    "compiled_call.luau",
+    "dynamic_array_table.luau",
+    "dynamic_hash_table.luau",
+    "dynamic_string.luau",
+    "fast_builtins.luau",
+    "forwarded_capture.luau",
+    "generic_iteration.luau",
+    "generic_table.luau",
+    "global_state.luau",
+    "mixed_table.luau",
+    "multi_result_call.luau",
+    "reference_capture.luau",
+    "recursive_call.luau",
+    "silent_return.luau",
+    "slow_add.luau",
+    "table_assign_empty.luau",
+    "table_clone_append.luau",
+    "table_namecall.luau",
+    "yield_call.luau",
+    "numeric_loop.luau",
+    "natural_integer.luau",
+    "natural_bit32.luau",
+    "natural_buffer.luau",
+]
+
+_PRODUCT_LUAU = [
+    "embed_lib.luau",
+    "embed_main.luau",
+    "proto_identity.luau",
+    "userdata_hooks.luau",
+    "userdata_hold.luau",
+    "userdata_store.luau",
+]
+
+_MEASURE_LUAU = [
+    "call_graph.luau",
+    "table_churn.luau",
+]
+
 exports_files(
-    ["embed_lib.luau", "embed_main.luau", "proto_identity.luau"],
+    glob(["*.luau"]),
     visibility = ["//visibility:public"],
 )
 
 js_library(
     name = "embed_sources",
-    srcs = ["embed_lib.luau", "embed_main.luau", "proto_identity.luau"],
+    srcs = _PRODUCT_LUAU,
     visibility = ["//visibility:public"],
 )
 
-js_library(name = "embed_lib", srcs = ["embed_lib.luau"], visibility = ["//visibility:public"])
-js_library(name = "embed_main", srcs = ["embed_main.luau"], visibility = ["//visibility:public"])
-js_library(name = "proto_identity", srcs = ["proto_identity.luau"], visibility = ["//visibility:public"])
+js_library(
+    name = "ir_ledger_luau",
+    srcs = _LEDGER_LUAU + _PRODUCT_LUAU + _MEASURE_LUAU,
+    visibility = ["//visibility:public"],
+)
+
+[
+    js_library(
+        name = src.replace(".luau", ""),
+        srcs = [src],
+        visibility = ["//visibility:public"],
+    )
+    for src in _LEDGER_LUAU + _PRODUCT_LUAU + _MEASURE_LUAU
+]

@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "source": "buffer_scalar_matrix",
+      "path": "conformance/sources/buffer_scalar_matrix.luau",
+      "bazel_data": "//conformance/sources:buffer_scalar_matrix",
+      "hook": false
+    },
+    {
+      "source": "captured_call",
+      "path": "conformance/sources/captured_call.luau",
+      "bazel_data": "//conformance/sources:captured_call",
+      "hook": false
+    },
+    {
+      "source": "compiled_call",
+      "path": "conformance/sources/compiled_call.luau",
+      "bazel_data": "//conformance/sources:compiled_call",
+      "hook": false
+    },
+    {
+      "source": "dynamic_array_table",
+      "path": "conformance/sources/dynamic_array_table.luau",
+      "bazel_data": "//conformance/sources:dynamic_array_table",
+      "hook": false
+    },
+    {
+      "source": "dynamic_hash_table",
+      "path": "conformance/sources/dynamic_hash_table.luau",
+      "bazel_data": "//conformance/sources:dynamic_hash_table",
+      "hook": false
+    },
+    {
+      "source": "dynamic_string",
+      "path": "conformance/sources/dynamic_string.luau",
+      "bazel_data": "//conformance/sources:dynamic_string",
+      "hook": false
+    },
+    {
+      "source": "fast_builtins",
+      "path": "conformance/sources/fast_builtins.luau",
+      "bazel_data": "//conformance/sources:fast_builtins",
+      "hook": false
+    },
+    {
+      "source": "forwarded_capture",
+      "path": "conformance/sources/forwarded_capture.luau",
+      "bazel_data": "//conformance/sources:forwarded_capture",
+      "hook": false
+    },
+    {
+      "source": "generic_iteration",
+      "path": "conformance/sources/generic_iteration.luau",
+      "bazel_data": "//conformance/sources:generic_iteration",
+      "hook": false
+    },
+    {
+      "source": "generic_table",
+      "path": "conformance/sources/generic_table.luau",
+      "bazel_data": "//conformance/sources:generic_table",
+      "hook": false
+    },
+    {
+      "source": "global_state",
+      "path": "conformance/sources/global_state.luau",
+      "bazel_data": "//conformance/sources:global_state",
+      "hook": false
+    },
+    {
+      "source": "mixed_table",
+      "path": "conformance/sources/mixed_table.luau",
+      "bazel_data": "//conformance/sources:mixed_table",
+      "hook": false
+    },
+    {
+      "source": "multi_result_call",
+      "path": "conformance/sources/multi_result_call.luau",
+      "bazel_data": "//conformance/sources:multi_result_call",
+      "hook": false
+    },
+    {
+      "source": "reference_capture",
+      "path": "conformance/sources/reference_capture.luau",
+      "bazel_data": "//conformance/sources:reference_capture",
+      "hook": false
+    },
+    {
+      "source": "recursive_call",
+      "path": "conformance/sources/recursive_call.luau",
+      "bazel_data": "//conformance/sources:recursive_call",
+      "hook": false
+    },
+    {
+      "source": "silent_return",
+      "path": "conformance/sources/silent_return.luau",
+      "bazel_data": "//conformance/sources:silent_return",
+      "hook": false
+    },
+    {
+      "source": "slow_add",
+      "path": "conformance/sources/slow_add.luau",
+      "bazel_data": "//conformance/sources:slow_add",
+      "hook": false
+    },
+    {
+      "source": "table_clone_append",
+      "path": "conformance/sources/table_clone_append.luau",
+      "bazel_data": "//conformance/sources:table_clone_append",
+      "hook": false
+    },
+    {
+      "source": "table_namecall",
+      "path": "conformance/sources/table_namecall.luau",
+      "bazel_data": "//conformance/sources:table_namecall",
+      "hook": false
+    },
+    {
+      "source": "yield_call",
+      "path": "conformance/sources/yield_call.luau",
+      "bazel_data": "//conformance/sources:yield_call",
+      "hook": false
+    },
+    {
+      "source": "embed_lib",
+      "path": "conformance/sources/embed_lib.luau",
+      "bazel_data": "//conformance/sources:embed_lib",
+      "hook": false
+    },
+    {
+      "source": "embed_main",
+      "path": "conformance/sources/embed_main.luau",
+      "bazel_data": "//conformance/sources:embed_main",
+      "hook": false
+    },
+    {
+      "source": "proto_identity",
+      "path": "conformance/sources/proto_identity.luau",
+      "bazel_data": "//conformance/sources:proto_identity",
+      "hook": false,
+      "inline_plans": [
+        {
+          "callerFunctionId": 2,
+          "feedbackSlot": 0,
+          "targetFunctionId": 0
+        }
+      ]
+    },
+    {
+      "source": "userdata_hooks",
+      "path": "conformance/sources/userdata_hooks.luau",
+      "bazel_data": "//conformance/sources:userdata_hooks",
+      "hook": true
+    },
+    {
+      "source": "userdata_hold",
+      "path": "conformance/sources/userdata_hold.luau",
+      "bazel_data": "//conformance/sources:userdata_hold",
+      "hook": true
+    },
+    {
+      "source": "userdata_store",
+      "path": "conformance/sources/userdata_store.luau",
+      "bazel_data": "//conformance/sources:userdata_store",
+      "hook": true
+    },
+    {
+      "source": "numeric_loop",
+      "path": "conformance/sources/numeric_loop.luau",
+      "bazel_data": "//conformance/sources:numeric_loop",
+      "hook": false
+    },
+    {
+      "source": "natural_integer",
+      "path": "conformance/sources/natural_integer.luau",
+      "bazel_data": "//conformance/sources:natural_integer",
+      "hook": false
+    },
+    {
+      "source": "natural_bit32",
+      "path": "conformance/sources/natural_bit32.luau",
+      "bazel_data": "//conformance/sources:natural_bit32",
+      "hook": false
+    },
+    {
+      "source": "natural_buffer",
+      "path": "conformance/sources/natural_buffer.luau",
+      "bazel_data": "//conformance/sources:natural_buffer",
+      "hook": false
+    },
+    {
+      "source": "call_graph",
+      "path": "conformance/sources/call_graph.luau",
+      "bazel_data": "//conformance/sources:call_graph",
+      "hook": false
+    },
+    {
+      "source": "table_churn",
+      "path": "conformance/sources/table_churn.luau",
+      "bazel_data": "//conformance/sources:table_churn",
+      "hook": false
+    }
+  ]
+}

@@ -298,13 +298,10 @@ pub noinline fn emitXnextFastPreparationBlock(
     block: snapshot_v1.IrBlock,
     pattern: XnextFastPreparationPattern,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+            return;
     }
     try self.emitPcLocation(pattern.pc);
     try self.body.localGet(self.allocator, 0);
@@ -313,18 +310,14 @@ pub noinline fn emitXnextFastPreparationBlock(
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(pattern.target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitXnextPreparationBlock(
     self: anytype,
     block_id: u32,
     pattern: XnextPreparationPattern,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     try self.emitPcLocation(pattern.pc);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.base));
@@ -332,125 +325,7 @@ pub noinline fn emitXnextPreparationBlock(
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(pattern.target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
-}
-pub noinline fn supportsGenericIterationFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
-    const fallback = (try self.genericIterationFallbackPattern(block)) orelse return false;
-    var fallback_id: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (candidate.kind == block.kind and candidate.start == block.start and candidate.finish == block.finish) {
-            if (fallback_id != null)
-                return Error.UnsupportedControlFlow;
-            fallback_id = block_id;
-        }
-    }
-    const resolved_fallback_id = fallback_id orelse return Error.UnsupportedControlFlow;
-
-    block_id = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        const fast = (try self.genericIterationPattern(candidate)) orelse continue;
-        if (fast.fallback_target != null and fast.fallback_target.? == resolved_fallback_id and fast.base == fallback.base and
-            fast.aux == fallback.aux and fast.repeat_target == fallback.repeat_target and
-            fast.exit_target == fallback.exit_target)
-            return true;
-    }
-    return false;
-}
-pub noinline fn supportsSpecializedIpairsFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
-    const fallback = (try self.genericIterationFallbackPattern(block)) orelse return false;
-    if (fallback.aux != 0x8000_0002)
-        return false;
-    var fallback_id: ?u32 = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (candidate.kind == block.kind and candidate.start == block.start and candidate.finish == block.finish) {
-            if (fallback_id != null)
-                return Error.UnsupportedControlFlow;
-            fallback_id = block_id;
-        }
-    }
-    const resolved_fallback = fallback_id orelse return Error.UnsupportedControlFlow;
-
-    block_id = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (!candidate.kind.isCompilable() or candidate.isEmpty() or candidate.finish != candidate.start + 8)
-            continue;
-        const commands = [_]snapshot_v1.IrCommand{
-            .interrupt,
-            .load_tag,
-            .check_tag,
-            .load_pointer,
-            .load_int,
-            ir_cmd_get_arr_addr,
-            ir_cmd_check_array_size,
-            .load_tag,
-            .jump_eq_tag,
-        };
-        if (!try self.commandRangeMatches(candidate.start, &commands))
-            continue;
-        const iterator_tag = try self.instruction(candidate.start + 1);
-        const iterator_guard = try self.instruction(candidate.start + 2);
-        const state_pointer = try self.instruction(candidate.start + 3);
-        const control = try self.instruction(candidate.start + 4);
-        const address = try self.instruction(candidate.start + 5);
-        const bounds = try self.instruction(candidate.start + 6);
-        const value_tag = try self.instruction(candidate.start + 7);
-        const branch = try self.instruction(candidate.start + 8);
-        if (iterator_tag.operand_count != 1 or iterator_guard.operand_count != 3 or
-            state_pointer.operand_count != 1 or control.operand_count != 1 or address.operand_count != 2 or
-            bounds.operand_count != 3 or value_tag.operand_count != 1 or branch.operand_count != 4)
-            continue;
-        const base = self.vmRegisterIndex(try self.operand(iterator_tag, 0)) catch continue;
-        if (base != fallback.base or base + 4 >= self.proto.max_stack_size or
-            (try self.operand(iterator_guard, 0)).kind != .instruction or
-            (try self.operand(iterator_guard, 0)).value != candidate.start + 1 or
-            (try self.operand(iterator_guard, 1)).kind != .constant or
-            (try self.constant((try self.operand(iterator_guard, 1)).value)).tagValue() !=
-                @as(u8, @intCast(lua_tag_nil)) or
-            (try self.operand(iterator_guard, 2)).kind != .block or
-            (try self.operand(iterator_guard, 2)).value != resolved_fallback or
-            (try self.operand(state_pointer, 0)).kind != .vm_reg or
-            (try self.operand(state_pointer, 0)).value != base + 1 or
-            (try self.operand(control, 0)).kind != .vm_reg or
-            (try self.operand(control, 0)).value != base + 2 or
-            (try self.operand(address, 0)).kind != .instruction or
-            (try self.operand(address, 0)).value != candidate.start + 3 or
-            (try self.operand(address, 1)).kind != .instruction or
-            (try self.operand(address, 1)).value != candidate.start + 4 or
-            (try self.operand(bounds, 0)).kind != .instruction or
-            (try self.operand(bounds, 0)).value != candidate.start + 3 or
-            (try self.operand(bounds, 1)).kind != .instruction or
-            (try self.operand(bounds, 1)).value != candidate.start + 4 or
-            (try self.operand(bounds, 2)).kind != .block or
-            (try self.operand(bounds, 2)).value != fallback.exit_target or
-            (try self.operand(value_tag, 0)).kind != .instruction or
-            (try self.operand(value_tag, 0)).value != candidate.start + 5 or
-            (try self.operand(branch, 0)).kind != .instruction or
-            (try self.operand(branch, 0)).value != candidate.start + 7 or
-            (try self.operand(branch, 1)).kind != .constant or
-            (try self.constant((try self.operand(branch, 1)).value)).tagValue() !=
-                @as(u8, @intCast(lua_tag_nil)) or
-            (try self.operand(branch, 2)).kind != .block or
-            (try self.operand(branch, 2)).value != fallback.exit_target or
-            (try self.operand(branch, 3)).kind != .block)
-            continue;
-        const publish = try self.snapshot.irBlock(self.function, (try self.operand(branch, 3)).value);
-        if (!publish.kind.isCompilable() or publish.isEmpty())
-            continue;
-        const terminator = try self.instruction(publish.finish);
-        if (terminator.command != .jump or terminator.operand_count != 1 or
-            (try self.operand(terminator, 0)).kind != .block or
-            (try self.operand(terminator, 0)).value != fallback.repeat_target)
-            continue;
-        return true;
-    }
-    return false;
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn specializedIpairsPattern(self: anytype, block: snapshot_v1.IrBlock) Error!?GenericIterationPattern {
     if (!block.kind.isCompilable() or block.isEmpty() or block.finish != block.start + 8)
@@ -482,9 +357,9 @@ pub noinline fn specializedIpairsPattern(self: anytype, block: snapshot_v1.IrBlo
         fallback_target.kind != .block or fallback_target.value >= self.function.block_count)
         return null;
     const fallback_block = try self.snapshot.irBlock(self.function, fallback_target.value);
-    if (!try self.supportsSpecializedIpairsFallback(fallback_block))
-        return null;
     var fallback = (try self.genericIterationFallbackPattern(fallback_block)) orelse return null;
+    if (fallback.aux != 0x8000_0002)
+        return null;
     const base = self.vmRegisterIndex(try self.operand(load_tag, 0)) catch return null;
     if (base != fallback.base)
         return null;
@@ -492,19 +367,49 @@ pub noinline fn specializedIpairsPattern(self: anytype, block: snapshot_v1.IrBlo
     fallback.fallback_target = fallback_target.value;
     return fallback;
 }
-pub noinline fn isBypassedSpecializedIpairsPublishBlock(self: anytype, block_id: u32) Error!bool {
-    var candidate_id: u32 = 0;
-    while (candidate_id < self.function.block_count) : (candidate_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, candidate_id);
-        if (try self.specializedIpairsPattern(candidate) == null)
-            continue;
-        const branch = try self.instruction(candidate.finish);
-        const publish = try self.operand(branch, 3);
-        if (publish.kind == .block and publish.value == block_id)
-            return true;
-    }
-    return false;
+pub noinline fn emitGeneralForgLoop(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const base = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const aux = try self.genericIterationAux(try self.operand(instruction_value, 1));
+    const repeat = try self.requireCompiledTarget(try self.operand(instruction_value, 2));
+    const exit = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
+    const live_count = @max(std.math.add(u32, aux & 0xff, 3) catch return Error.UnsupportedControlFlow, 5);
+    if (live_count > self.proto.max_stack_size or
+        base > @as(u32, self.proto.max_stack_size) - live_count)
+        return Error.UnsupportedControlFlow;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(base));
+    try self.body.i32Const(self.allocator, @bitCast(aux));
+    try self.body.call(self.allocator, self.forg_loop orelse return Error.UnsupportedCommand);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.emitReloadBase();
+    try self.body.i32Const(self.allocator, @intCast(repeat));
+    try self.body.i32Const(self.allocator, @intCast(exit));
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.select(self.allocator);
+    try self.body.localSet(self.allocator, self.dispatch_local);
 }
+
+pub noinline fn emitGeneralForgLoopFallback(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    try self.requireOperandCount(instruction_value, 4);
+    const base = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const aux = try self.genericIterationAux(try self.operand(instruction_value, 1));
+    const repeat = try self.requireCompiledTarget(try self.operand(instruction_value, 2));
+    const exit = try self.requireCompiledTarget(try self.operand(instruction_value, 3));
+    try self.emitGenericIterationFallbackCall(instruction_id, .{
+        .marker = if (instruction_id != 0) try self.instruction(instruction_id - 1) else instruction_value,
+        .base = base,
+        .aux = aux,
+        .variable_count = aux & 0xff,
+        .repeat_target = repeat,
+        .exit_target = exit,
+    });
+}
+
 pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.base));
@@ -579,10 +484,6 @@ pub noinline fn emitGenericIterationBlock(
     guarded: bool,
 ) Error!void {
     const block = try self.snapshot.irBlock(self.function, block_id);
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
     if (guarded) {
         try self.emitInterrupt(block.start, pattern.marker);
         const fallback_target = pattern.fallback_target orelse return Error.UnsupportedControlFlow;
@@ -604,25 +505,17 @@ pub noinline fn emitGenericIterationBlock(
         // exclusively the guarded nil-iterator fast arm above.
         try self.emitGenericIterationFallbackCall(block.finish, pattern);
     }
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitGenericIterationPrep(
     self: anytype,
     instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
-    var owner: ?snapshot_v1.IrBlock = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const candidate = try self.snapshot.irBlock(self.function, block_id);
-        if (!candidate.isEmpty() and instruction_id >= candidate.start and instruction_id <= candidate.finish) {
-            if (owner != null)
-                return Error.UnsupportedControlFlow;
-            owner = candidate;
-        }
-    }
-    const block = owner orelse return Error.UnsupportedControlFlow;
+    const owner_id = self.plan.instructionBlock(instruction_id) orelse return Error.UnsupportedControlFlow;
+    const block = try self.snapshot.irBlock(self.function, owner_id);
+    if (block.isEmpty() or instruction_id < block.start or instruction_id > block.finish)
+        return Error.UnsupportedControlFlow;
     if (!block.kind.isCompilable() or instruction_id != block.finish or instruction_value.operand_count != 3)
         return Error.UnsupportedControlFlow;
     const pc = try self.uintConstant(try self.operand(instruction_value, 0));
@@ -643,7 +536,7 @@ pub noinline fn emitGenericIterationPrep(
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(target));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitArrayOperationBlock(
     self: anytype,
@@ -652,17 +545,13 @@ pub noinline fn emitArrayOperationBlock(
     pattern: ArrayOperationPattern,
     operation: ArrayOperationKind,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+            return;
     }
     try self.emitArrayOperation(pattern, operation);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitArrayOperation(
     self: anytype,
@@ -705,22 +594,18 @@ pub fn semanticArrayOperation(self: anytype, block: snapshot_v1.IrBlock) Error!?
     return null;
 }
 pub noinline fn emitStringTableOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: StringTablePattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+            return;
     }
     try self.emitStringTableOperation(pattern);
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitStringTableOperation(self: anytype, pattern: StringTablePattern) Error!void {
     try self.emitStringTableHelper(pattern);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitStringTableHelper(self: anytype, pattern: StringTablePattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -748,17 +633,13 @@ pub noinline fn emitStringTableHelper(self: anytype, pattern: StringTablePattern
     try self.emitReloadBase();
 }
 pub noinline fn emitGlobalOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: GlobalPattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+            return;
     }
     try self.emitGlobalOperation(pattern);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitGlobalOperation(self: anytype, pattern: GlobalPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -854,13 +735,10 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
     try self.body.end(self.allocator);
 }
 pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: GenericTablePattern) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+            return;
     }
     try self.emitGenericTableDirectAttempt(pattern);
     try self.body.localGet(self.allocator, self.status_local);
@@ -870,8 +748,7 @@ pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, blo
     try self.body.end(self.allocator);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitInlineGenericTableSet(self: anytype, pattern: GenericTablePattern) Error!void {
     try self.emitGenericTableDirectAttempt(pattern);
@@ -880,182 +757,4 @@ pub noinline fn emitInlineGenericTableSet(self: anytype, pattern: GenericTablePa
     try self.body.ifVoid(self.allocator);
     try self.emitGenericTableFallbackCall(pattern);
     try self.body.end(self.allocator);
-}
-pub noinline fn isBypassedStringLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
-    if (block.kind != .linearized or self.function.entry_block == block_id)
-        return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.stringTablePattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
-}
-pub noinline fn isBypassedGenericTableLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
-    if (block.kind != .linearized or self.function.entry_block == block_id)
-        return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.genericTablePattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
-}
-pub noinline fn isBypassedGlobalLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
-    if (block.kind != .linearized or self.function.entry_block == block_id)
-        return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.globalPattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
-}
-pub noinline fn isBypassedPowLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
-    if (block.kind != .linearized or self.function.entry_block == block_id)
-        return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = try self.powPattern(source_block);
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
-}
-pub noinline fn isBypassedConstantArithmeticLinearizedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
-    if (block.kind != .linearized or self.function.entry_block == block_id)
-        return false;
-    var has_rewritten_incoming = false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const source_pattern = (try self.constantArithmeticPattern(source_block)) orelse
-            (try self.constantPowPattern(source_block));
-        var instruction_id: u32 = if (source_block.isEmpty()) 0 else source_block.start;
-        while (!source_block.isEmpty() and instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind != .block or operand_value.value != block_id)
-                    continue;
-                if (source_pattern == null or source_pattern.?.fast_target != block_id or
-                    instruction_id != source_block.finish or instruction_value.command != .jump)
-                    return false;
-                has_rewritten_incoming = true;
-            }
-        }
-    }
-    return has_rewritten_incoming;
-}
-pub noinline fn isBypassedStringEqualityBlock(self: anytype, block_id: u32) Error!bool {
-    if (self.function.entry_block == block_id)
-        return false;
-    var owner: ?u32 = null;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        const pattern = (try self.stringEqualityPattern(source_block)) orelse continue;
-        if (pattern.pointer_block == block_id) {
-            if (owner != null)
-                return false;
-            owner = source_block_id;
-        }
-    }
-    if (owner == null)
-        return false;
-    var incoming_count: u32 = 0;
-    source_block_id = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        if (source_block_id == block_id)
-            continue;
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        if (source_block.isEmpty())
-            continue;
-        var instruction_id = source_block.start;
-        while (instruction_id <= source_block.finish) : (instruction_id += 1) {
-            const instruction_value = try self.instruction(instruction_id);
-            var operand_id: u32 = 0;
-            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-                const operand_value = try self.operand(instruction_value, operand_id);
-                if (operand_value.kind == .block and operand_value.value == block_id) {
-                    if (source_block_id != owner.?)
-                        return false;
-                    incoming_count += 1;
-                }
-            }
-        }
-    }
-    return incoming_count == 1;
 }

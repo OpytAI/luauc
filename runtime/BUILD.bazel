@@ -1,9 +1,25 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_zig//zig:defs.bzl", "zig_configure", "zig_library")
 load("//bazel:cc.bzl", "cc_headers", "cc_object_archive", "zig_cxx_object")
 
-exports_files(["runtime_symbols.bzl"])
-exports_files(["abi_v1.zig"])
+exports_files([
+    "runtime_symbols.bzl",
+    "abi_v1.zig",
+    "include/aot_runtime_v1.h",
+])
+
+js_library(
+    name = "runtime_symbols_bzl",
+    srcs = ["runtime_symbols.bzl"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "aot_runtime_v1_h",
+    srcs = ["include/aot_runtime_v1.h"],
+    visibility = ["//visibility:public"],
+)
 
 cc_headers(
     name = "runtime_incs",

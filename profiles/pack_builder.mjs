@@ -221,6 +221,8 @@ function stringRef(value) {
 const profileRef = stringRef(profileId);
 for (const item of imports) { stringRef(item.module); stringRef(item.name); }
 for (const item of retained) stringRef(item.name);
+const generatedRuntimeModule = "env";
+stringRef(generatedRuntimeModule);
 for (const item of runtimeSymbols) stringRef(item.name);
 for (const item of bindings) stringRef(item.name);
 
@@ -269,8 +271,10 @@ for (let index = 0; index < retained.length; index++) {
 }
 for (let index = 0; index < runtimeSymbols.length; index++) {
   const record = runtimeOffset + index * runtimeSize, item = runtimeSymbols[index], ref = stringRef(item.name);
+  const module = stringRef(generatedRuntimeModule);
   profile.writeUInt32LE(ref.offset, record); profile.writeUInt32LE(ref.size, record + 4);
   profile.writeUInt32LE(item.typeIndex, record + 8); profile[record + 12] = item.kind;
+  profile.writeUInt32LE(module.offset, record + 16); profile.writeUInt32LE(module.size, record + 20);
 }
 for (let index = 0; index < bindings.length; index++) {
   const record = bindingOffset + index * bindingSize, item = bindings[index], ref = stringRef(item.name);

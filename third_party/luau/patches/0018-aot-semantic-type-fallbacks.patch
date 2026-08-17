@@ -1,0 +1,99 @@
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -229,7 +229,7 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int
+             IrCmd::CHECK_TAG,
+             ta,
+             build.constTag(LUA_TNUMBER),
+-            bcTypes.a == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++            getInitializedFallback(build, fallback, pcpos)
+         );
+ 
+         IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+@@ -237,5 +237,5 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int
+             IrCmd::CHECK_TAG,
+             tb,
+             build.constTag(LUA_TNUMBER),
+-            bcTypes.b == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++            getInitializedFallback(build, fallback, pcpos)
+         );
+@@ -272,5 +272,5 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int
+             IrCmd::CHECK_TAG,
+             ta,
+             build.constTag(LUA_TINTEGER),
+-            bcTypes.a == LBC_TYPE_INTEGER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++            getInitializedFallback(build, fallback, pcpos)
+         );
+@@ -280,5 +280,5 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int
+             IrCmd::CHECK_TAG,
+             tb,
+             build.constTag(LUA_TINTEGER),
+-            bcTypes.b == LBC_TYPE_INTEGER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++            getInitializedFallback(build, fallback, pcpos)
+         );
+@@ -650,5 +650,5 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
+                 IrCmd::CHECK_TAG,
+                 build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)),
+                 build.constTag(LUA_TNUMBER),
+-                bcTypes.a == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++                getInitializedFallback(build, fallback, pcpos)
+             );
+@@ -692,5 +692,5 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
+                 IrCmd::CHECK_TAG,
+                 build.inst(IrCmd::LOAD_TAG, build.vmReg(rc)),
+                 build.constTag(LUA_TNUMBER),
+-                bcTypes.b == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++                getInitializedFallback(build, fallback, pcpos)
+             );
+@@ -742,5 +742,5 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
+             IrCmd::CHECK_TAG,
+             tb,
+             build.constTag(LUA_TNUMBER),
+-            bcTypes.a == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++            getInitializedFallback(build, fallback, pcpos)
+         );
+@@ -753,5 +753,5 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
+             IrCmd::CHECK_TAG,
+             tc,
+             build.constTag(LUA_TNUMBER),
+-            bcTypes.b == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++            getInitializedFallback(build, fallback, pcpos)
+         );
+@@ -894,5 +894,5 @@ void translateInstMinus(IrBuilder& build, const Instruction* pc, int pcpos)
+         IrCmd::CHECK_TAG,
+         tb,
+         build.constTag(LUA_TNUMBER),
+-        bcTypes.a == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
++        getInitializedFallback(build, fallback, pcpos)
+     );
+@@ -938,3 +938,3 @@ void translateInstLength(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+@@ -1391,3 +1391,3 @@ void translateInstGetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+@@ -1429,3 +1429,3 @@ void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+@@ -1470,5 +1470,5 @@ void translateInstGetTable(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+     IrOp tc = build.inst(IrCmd::LOAD_TAG, build.vmReg(rc));
+-    build.inst(IrCmd::CHECK_TAG, tc, build.constTag(LUA_TNUMBER), bcTypes.b == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tc, build.constTag(LUA_TNUMBER), fallback);
+@@ -1516,5 +1516,5 @@ void translateInstSetTable(IrBuilder& build, const Instruction* pc, int pcpos)
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+-    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+     IrOp tc = build.inst(IrCmd::LOAD_TAG, build.vmReg(rc));
+-    build.inst(IrCmd::CHECK_TAG, tc, build.constTag(LUA_TNUMBER), bcTypes.b == LBC_TYPE_NUMBER ? build.vmExit(pcpos) : fallback);
++    build.inst(IrCmd::CHECK_TAG, tc, build.constTag(LUA_TNUMBER), fallback);

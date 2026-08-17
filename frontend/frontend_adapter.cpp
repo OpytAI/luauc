@@ -36,6 +36,177 @@ using namespace Luau::CodeGen;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 
+// Host userdata types follow the pinned Luau HostIrHooks contract (same class as CALLFB /
+// inline_plans): the production frontend emits NEW_USERDATA / CHECK_USERDATA_TAG / BARRIER_OBJ /
+// BARRIER_TABLE_BACK from ordinary typed Luau. Names must match CompileOptions.userdataTypes.
+static const char *const kUserdataCompileTypes[] = {"extra", "color", "vec2", "mat3", "vertex", nullptr};
+constexpr uint8_t kUserdataVec2Index = 2;
+constexpr int kTagVec2 = 12;
+constexpr int kVec2ByteSize = 8;
+
+static bool sourceMentionsUserdataType(const char *source, size_t size) {
+    // Only the types this frontend actually lowers. Do not scan "extra"/"color": those
+    // strings appear as ordinary identifiers in existing sources.
+    // Require a type annotation (`: vec2`) so constructor names like embed.vec2 do not
+    // enable typeInfoLevel for unrelated modules.
+    static const char kNeeded[] = ": vec2";
+    const size_t nameSize = sizeof(kNeeded) - 1;
+    if (nameSize > size)
+        return false;
+    for (size_t index = 0; index + nameSize <= size; ++index) {
+        if (memcmp(source + index, kNeeded, nameSize) == 0)
+            return true;
+    }
+    static const char kNeededTight[] = ":vec2";
+    const size_t tightSize = sizeof(kNeededTight) - 1;
+    for (size_t index = 0; index + tightSize <= size; ++index) {
+        if (memcmp(source + index, kNeededTight, tightSize) == 0)
+            return true;
+    }
+    return false;
+}
+
+template <typename Options>
+void applyUserdataCompileOptions(Options &options, const char *source, size_t size) {
+    options.userdataTypes = kUserdataCompileTypes;
+    if (sourceMentionsUserdataType(source, size))
+        options.typeInfoLevel = 1;
+}
+
+static bool compareMemberName(const char *member, size_t memberLength, const char *expected) {
+    const size_t expectedLength = strlen(expected);
+    return memberLength == expectedLength && memcmp(member, expected, expectedLength) == 0;
+}
+
+static uint8_t typeToUserdataIndex(uint8_t type) {
+    return uint8_t(type - LBC_TYPE_TAGGED_USERDATA_BASE);
+}
+
+static uint8_t userdataIndexToType(uint8_t userdataIndex) {
+    return uint8_t(LBC_TYPE_TAGGED_USERDATA_BASE + userdataIndex);
+}
+
+static bool isHookedUserdataType(uint8_t type) {
+    return type == LBC_TYPE_USERDATA ||
+           (type >= LBC_TYPE_TAGGED_USERDATA_BASE && type < LBC_TYPE_TAGGED_USERDATA_END);
+}
+
+static uint8_t userdataAccessBytecodeType(uint8_t type, const char *member, size_t memberLength) {
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Unit"))
+        return userdataIndexToType(kUserdataVec2Index);
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Hold"))
+        return LBC_TYPE_TABLE;
+    return LBC_TYPE_ANY;
+}
+
+static uint8_t userdataNamecallBytecodeType(uint8_t type, const char *member, size_t memberLength) {
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Mark"))
+        return LBC_TYPE_NUMBER;
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Store"))
+        return LBC_TYPE_TABLE;
+    return LBC_TYPE_ANY;
+}
+
+// embed.vec2 contract: Unit = normalize; Mark returns payload[0].
+// Keep frontend_adapter.cpp, interpreter/main.cpp, provider_entry.c identical.
+static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
+                           int resultReg, int sourceReg, int pcpos) {
+    (void)pcpos;
+    if (!isHookedUserdataType(type))
+        return false;
+    if (compareMemberName(member, memberLength, "Hold")) {
+        IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+        build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+        build.inst(IrCmd::CHECK_GC);
+        IrOp created = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
+        build.inst(IrCmd::STORE_POINTER, build.vmReg(resultReg), created);
+        build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TTABLE));
+        // Explicit Hold store: SET_TABLE(held, seed, 0) lowers to set_userdata_metatable.
+        build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+        build.inst(IrCmd::SET_TABLE, build.vmReg(resultReg), build.vmReg(sourceReg), build.constUint(0));
+        build.inst(IrCmd::BARRIER_OBJ, udata, build.vmReg(resultReg), build.undef());
+        return true;
+    }
+    if (!compareMemberName(member, memberLength, "Unit"))
+        return false;
+
+    IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+    build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+    IrOp x = build.inst(IrCmd::BUFFER_READF32, udata, build.constUint(0), build.constTag(LUA_TUSERDATA));
+    IrOp y = build.inst(IrCmd::BUFFER_READF32, udata, build.constUint(4), build.constTag(LUA_TUSERDATA));
+    IrOp x64 = build.inst(IrCmd::FLOAT_TO_NUM, x);
+    IrOp y64 = build.inst(IrCmd::FLOAT_TO_NUM, y);
+    IrOp len = build.inst(IrCmd::SQRT_NUM, build.inst(IrCmd::ADD_NUM,
+        build.inst(IrCmd::MUL_NUM, x64, x64), build.inst(IrCmd::MUL_NUM, y64, y64)));
+    IrOp zero = build.constDouble(0.0);
+    IrOp nx = build.inst(IrCmd::SELECT_NUM, build.inst(IrCmd::DIV_NUM, x64, len), zero, len, zero);
+    IrOp ny = build.inst(IrCmd::SELECT_NUM, build.inst(IrCmd::DIV_NUM, y64, len), zero, len, zero);
+    IrOp nx_f = build.inst(IrCmd::NUM_TO_FLOAT, nx);
+    IrOp ny_f = build.inst(IrCmd::NUM_TO_FLOAT, ny);
+    build.inst(IrCmd::CHECK_GC);
+    IrOp created = build.inst(IrCmd::NEW_USERDATA, build.constUint(kVec2ByteSize), build.constUint(kTagVec2));
+    build.inst(IrCmd::BUFFER_WRITEF32, created, build.constUint(0), nx_f, build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::BUFFER_WRITEF32, created, build.constUint(4), ny_f, build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::STORE_POINTER, build.vmReg(resultReg), created);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TUSERDATA));
+    return true;
+}
+
+static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
+                             int argResReg, int sourceReg, int params, int results, int pcpos) {
+    if (!isHookedUserdataType(type))
+        return false;
+    if (compareMemberName(member, memberLength, "Store")) {
+        if (params >= 0 && params < 2)
+            return false;
+        IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+        build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+        build.loadAndCheckTag(build.vmReg(argResReg + 2), LUA_TTABLE, build.undef());
+        build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+        build.inst(IrCmd::CHECK_GC);
+        IrOp created = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
+        build.inst(IrCmd::STORE_POINTER, build.vmReg(argResReg), created);
+        build.inst(IrCmd::STORE_TAG, build.vmReg(argResReg), build.constTag(LUA_TTABLE));
+        build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+        build.inst(IrCmd::SET_TABLE, build.vmReg(argResReg), build.vmReg(argResReg + 2), build.constUint(1));
+        IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
+        build.inst(IrCmd::BARRIER_TABLE_BACK, table);
+        if (results == LUA_MULTRET)
+            build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(argResReg), build.constInt(1));
+        return true;
+    }
+    if (!compareMemberName(member, memberLength, "Mark"))
+        return false;
+
+    // sourceReg stays the live receiver.
+    if (params >= 0 && params < 2)
+        return false;
+
+    IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+    build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+    build.loadAndCheckTag(build.vmReg(argResReg + 2), LUA_TTABLE, build.undef());
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+    build.inst(IrCmd::SET_TABLE, build.vmReg(sourceReg), build.vmReg(argResReg + 2), build.constUint(1));
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
+    build.inst(IrCmd::BARRIER_TABLE_BACK, table);
+    IrOp x = build.inst(IrCmd::BUFFER_READF32, udata, build.constUint(0), build.constTag(LUA_TUSERDATA));
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(argResReg), build.inst(IrCmd::FLOAT_TO_NUM, x));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(argResReg), build.constTag(LUA_TNUMBER));
+    if (results == LUA_MULTRET)
+        build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(argResReg), build.constInt(1));
+    return true;
+}
+
+static HostIrHooks makeHostIrHooks() {
+    HostIrHooks hooks{};
+    hooks.cacheIndependentImports = true;
+    hooks.userdataAccessBytecodeType = userdataAccessBytecodeType;
+    hooks.userdataNamecallBytecodeType = userdataNamecallBytecodeType;
+    hooks.userdataAccess = userdataAccess;
+    hooks.userdataNamecall = userdataNamecall;
+    return hooks;
+}
+
 static_assert(sizeof(IrCmd) == 1, "FrontendSnapshotV1 pins IrCmd to one byte");
 static_assert(unsigned(IrCmd::JUMP_CMP_PROTOID) == 215, "IrCmd pin drift");
 static_assert(unsigned(IrOpKind::VmExit) == 9, "IrOpKind pin drift");
@@ -60,8 +231,8 @@ constexpr uint8_t kLuauPinSha256[32] = {
 };
 
 constexpr uint8_t kPatchsetSha256[32] = {
-    0xc5, 0x10, 0xe8, 0x65, 0x34, 0xc3, 0x45, 0xd9, 0xd6, 0xeb, 0xd7, 0xb3, 0x02, 0x20, 0x8a, 0x66,
-    0x42, 0xc1, 0x23, 0xa4, 0x7e, 0x76, 0xe1, 0xb0, 0x17, 0xb7, 0x7f, 0x3f, 0x29, 0xa6, 0xc7, 0xeb,
+    0x7a, 0x8e, 0x67, 0xca, 0x0b, 0xa7, 0x6c, 0x14, 0x2d, 0x3f, 0x20, 0xe6, 0x24, 0xd2, 0x14, 0xbc,
+    0xac, 0x86, 0x8c, 0x42, 0x3c, 0x07, 0xa8, 0x27, 0xe5, 0x55, 0x8b, 0xe8, 0x9a, 0x4f, 0x33, 0x71,
 };
 
 constexpr uint8_t kIrEnumSha256[32] = {
@@ -684,7 +855,7 @@ bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &
     SectionData &mapping = section(sections, LUAUC_SNAPSHOT_V1_BC_MAPPING);
 
     size_t totalInstructions = 0;
-    HostIrHooks hooks{};
+    const HostIrHooks hooks = makeHostIrHooks();
 
     for (size_t functionIndex = 0; functionIndex < protos.size(); ++functionIndex) {
         Proto *proto = protos[functionIndex].proto;
@@ -887,6 +1058,7 @@ bool compileSource(const uint8_t *source, size_t sourceSize, uint32_t coverageLe
     options.optimizationLevel = 1;
     options.debugLevel = 1;
     options.coverageLevel = int(coverageLevel);
+    applyUserdataCompileOptions(options, sourceBytes, sourceSize);
     char *rawBytecode = luau_compile(sourceBytes, sourceSize, &options, &bytecodeSize);
     if (!rawBytecode || bytecodeSize == 0 || bytecodeSize > kMaxBytecodeBytes) {
         free(rawBytecode);
@@ -1035,6 +1207,8 @@ bool buildInlinedBytecode(const uint8_t *source, size_t sourceSize, uint32_t cov
     options.optimizationLevel = 1;
     options.debugLevel = 1;
     options.coverageLevel = int(coverageLevel);
+    applyUserdataCompileOptions(options, sourceSize ? reinterpret_cast<const char *>(source) : "",
+                                sourceSize);
     Luau::BytecodeBuilder original;
     std::string compileDiagnostic = Luau::compileInto(
         original,

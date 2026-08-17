@@ -1,0 +1,56 @@
+diff --git a/CodeGen/include/Luau/IrBuilder.h b/CodeGen/include/Luau/IrBuilder.h
+--- a/CodeGen/include/Luau/IrBuilder.h
++++ b/CodeGen/include/Luau/IrBuilder.h
+@@ -33,6 +33,7 @@ struct IrBuilder
+     void beginBlock(IrOp block);
+     void loadAndCheckTag(IrOp loc, uint8_t tag, IrOp fallback);
+     void checkSafeEnv(int pcpos);
++    void checkSafeEnv(int pcpos, IrOp fallback);
+ 
+     // Clones instruction subset into the active block, optionally removing the terminating instruction in the active block
+     void clone(std::vector<uint32_t> sourceIdxs, bool removeCurrentTerminator);
+diff --git a/CodeGen/src/IrBuilder.cpp b/CodeGen/src/IrBuilder.cpp
+--- a/CodeGen/src/IrBuilder.cpp
++++ b/CodeGen/src/IrBuilder.cpp
+@@ -728,6 +728,11 @@ void IrBuilder::loadAndCheckTag(IrOp loc, uint8_t tag, IrOp fallback)
+ 
+ void IrBuilder::checkSafeEnv(int pcpos)
+ {
++    checkSafeEnv(pcpos, vmExit(pcpos));
++}
++
++void IrBuilder::checkSafeEnv(int pcpos, IrOp fallback)
++{
+     IrBlock& active = function.blocks[activeBlockIdx];
+ 
+     // If the block start is associated with a bytecode position, we can perform an early safeenv check
+@@ -740,7 +745,7 @@ void IrBuilder::checkSafeEnv(int pcpos)
+             active.flags |= kBlockFlagSafeEnvCheck;
+     }
+ 
+-    inst(IrCmd::CHECK_SAFE_ENV, vmExit(pcpos));
++    inst(IrCmd::CHECK_SAFE_ENV, fallback);
+ }
+ 
+ void IrBuilder::clone(std::vector<uint32_t> sourceIdxs, bool removeCurrentTerminator)
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -1280,7 +1280,7 @@ void translateInstForGPrepNext(IrBuilder& build, const Instruction* pc, int pcpo
+     IrOp fallback = build.fallbackBlock(pcpos);
+ 
+     // fast-path: pairs/next
+-    build.checkSafeEnv(pcpos);
++    build.checkSafeEnv(pcpos, fallback);
+ 
+     IrOp tagB = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra + 1));
+     build.inst(IrCmd::CHECK_TAG, tagB, build.constTag(LUA_TTABLE), fallback);
+@@ -1309,7 +1309,7 @@ void translateInstForGPrepInext(IrBuilder& build, const Instruction* pc, int pcp
+     IrOp finish = build.block(IrBlockKind::Internal);
+ 
+     // fast-path: ipairs/inext
+-    build.checkSafeEnv(pcpos);
++    build.checkSafeEnv(pcpos, fallback);
+ 
+     IrOp tagB = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra + 1));
+     build.inst(IrCmd::CHECK_TAG, tagB, build.constTag(LUA_TTABLE), fallback);

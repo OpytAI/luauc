@@ -1,6 +1,16 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+function hexBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < out.length; index++)
+    out[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  return out;
+}
+
+// Must match compiler/ir/frontend_identity_v1.zig frontend_contract_sha256.
+const FRONTEND_CONTRACT = hexBytes("ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157");
+
 function bytes(value) {
   if (typeof value === "string") return encoder.encode(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -87,8 +97,6 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
   modules.sort((lhs, rhs) => compareBytes(lhs.name, rhs.name));
   if (!modules.length || modules.some((module, index) => index && compareBytes(modules[index - 1].name, module.name) === 0))
     throw new Error("invalid source package modules");
-  const inlinePlanEnabled = modules.some((module) => module.planCount !== 0);
-
   const manifestHeader = new Uint8Array(8);
   putU32(manifestHeader, 0, modules.length);
   putU32(manifestHeader, 4, entryModuleId);
@@ -100,16 +108,19 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
   const manifest = [manifestHeader];
   for (const module of modules) {
     manifest.push(sized(module.name), sized(module.sourceName), module.contentDigest);
-    if (inlinePlanEnabled) {
-      const planCount = new Uint8Array(4);
-      putU32(planCount, 0, module.planCount);
-      manifest.push(planCount, module.planBytes);
-    }
+    const planCount = new Uint8Array(4);
+    putU32(planCount, 0, module.planCount);
+    manifest.push(planCount, module.planBytes);
   }
   const manifestDigest = await sha256(concat(manifest));
 
-  const headerSize = 160;
+  const headerSize = 240;
   const recordSize = 64;
+  const allowedImportCeiling = 32;
+  const featureCeiling = 0;
+  const budgetInstructions = 1_048_576;
+  const budgetFunctions = 4096;
+  const budgetBytes = 16_777_216;
   const total = modules.reduce(
     (size, module) => size + module.name.length + module.sourceName.length + module.content.length + module.planBytes.length,
     headerSize + recordSize * modules.length,
@@ -123,21 +134,41 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
   putU32(request, 20, entryModuleId);
   putU32(request, 24, recordSize);
   putU32(request, 28, coverageLevel);
+  putU32(request, 176, 0);
+  putU32(request, 180, allowedImportCeiling);
+  putU32(request, 184, featureCeiling);
+  putU32(request, 188, budgetInstructions);
+  putU32(request, 192, budgetFunctions);
+  putU32(request, 196, budgetBytes);
   const coverage = new Uint8Array(4);
   putU32(coverage, 0, coverageLevel);
+  const optionBytes = new Uint8Array(32);
+  putU32(optionBytes, 0, 0);
+  putU32(optionBytes, 4, allowedImportCeiling);
+  putU32(optionBytes, 8, featureCeiling);
+  putU32(optionBytes, 12, budgetInstructions);
+  putU32(optionBytes, 16, budgetFunctions);
+  putU32(optionBytes, 20, budgetBytes);
+  const planPreimage = [];
+  for (const module of modules) {
+    const planCount = new Uint8Array(4);
+    putU32(planCount, 0, module.planCount);
+    planPreimage.push(planCount, module.planBytes);
+  }
   request.set((await sha256(concat([
-    bytes(inlinePlanEnabled
-      ? "luauc-source-request-v1-inline-plan\0"
-      : "luauc-source-request-v1\0"),
+    bytes("luauc-source-request-v1\0"),
     coverage,
+    FRONTEND_CONTRACT,
     profileDigest,
     packDigest,
     manifestDigest,
+    optionBytes,
+    ...planPreimage,
   ]))).subarray(0, 16), 32);
-  request.set(profileDigest, 48);
-  request.set(packDigest, 80);
-  request.set(manifestDigest, 112);
-  if (inlinePlanEnabled) putU32(request, 144, 1);
+  request.set(FRONTEND_CONTRACT, 48);
+  request.set(profileDigest, 80);
+  request.set(packDigest, 112);
+  request.set(manifestDigest, 144);
 
   let cursor = headerSize + recordSize * modules.length;
   for (let index = 0; index < modules.length; index++) {
@@ -198,7 +229,18 @@ export async function compilePackage(compilerBytes, profileBytes, packBytes, mod
     if (entryModuleId < 0) throw new Error(`missing entry module ${entryName}`);
     const request = await buildRequest(sorted, entryModuleId, profileDigest, packDigest, coverageLevel);
     const requestInput = allocation(api, request);
-    const compileResult = allocation(api, 208);
+    const compileResultSize = api.luauc_v1_describe
+      ? (() => {
+        const describe = allocation(api, 32);
+        try {
+          if (api.luauc_v1_describe(describe.pointer) !== 0) throw new Error("luauc describe failed");
+          return new DataView(api.memory.buffer, describe.pointer, 32).getUint32(12, true);
+        } finally {
+          api.luauc_v1_dealloc(describe.pointer, describe.size);
+        }
+      })()
+      : 320;
+    const compileResult = allocation(api, compileResultSize);
     try {
       new Uint8Array(api.memory.buffer, compileResult.pointer, compileResult.size).fill(0);
       const compileStatus = api.luauc_v1_compile(
@@ -219,10 +261,10 @@ export async function compilePackage(compilerBytes, profileBytes, packBytes, mod
       const dataSize = view.getUint32(4, true);
       const artifact = copyBytes(new Uint8Array(api.memory.buffer, dataPointer, dataSize));
       const provenance = {
-        profileDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 40, 32)),
-        packDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 72, 32)),
-        objectDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 136, 32)),
-        artifactDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 168, 32)),
+        profileDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 104, 32)),
+        packDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 136, 32)),
+        objectDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 200, 32)),
+        artifactDigest: copyBytes(new Uint8Array(api.memory.buffer, compileResult.pointer + 232, 32)),
       };
       return { artifact, provenance };
     } finally {
@@ -268,7 +310,14 @@ export function instantiateArtifact(artifact, namespace = "luauc_embed_v1") {
 
 export function createContext(instance) {
   const context = instance.exports.luauc_embed_v1_context_create();
-  if (!context) throw new Error("embed-v1 context creation failed");
+  if (!context) {
+    const pointer = instance.exports.luauc_embed_v1_last_error?.() ?? 0;
+    const size = instance.exports.luauc_embed_v1_last_error_size?.() ?? 0;
+    const detail = pointer && size
+      ? new TextDecoder().decode(new Uint8Array(instance.exports.memory.buffer, pointer, size))
+      : "unknown initialization failure";
+    throw new Error(`embed-v1 context creation failed: ${detail}`);
+  }
   return context;
 }
 

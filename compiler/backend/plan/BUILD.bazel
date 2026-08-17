@@ -1,0 +1,107 @@
+load("@rules_zig//zig:defs.bzl", "zig_library", "zig_test")
+
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = glob(["*.zig"], exclude = ["*.test.zig"]),
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "recognize",
+    main = "recognize.zig",
+    import_name = "luauc_backend_recognize",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "recognize_tables",
+    main = "recognize_tables.zig",
+    import_name = "luauc_backend_recognize_tables",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+    ],
+)
+
+zig_library(
+    name = "recognize_calls",
+    main = "recognize_calls.zig",
+    import_name = "luauc_backend_recognize_calls",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+    ],
+)
+
+zig_library(
+    name = "cluster_index",
+    main = "cluster_index.zig",
+    import_name = "luauc_backend_cluster_index",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":recognize",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "plan",
+    main = "plan.zig",
+    import_name = "luauc_backend_plan",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":cluster_index",
+        ":recognize",
+        ":recognize_calls",
+        ":recognize_tables",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "continuation_plan",
+    main = "continuation_plan.zig",
+    import_name = "luauc_backend_continuation_plan",
+    visibility = ["//compiler/backend:__subpackages__"],
+    deps = [
+        ":admission",
+        ":plan",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_test(
+    name = "plan_winner_test",
+    main = "plan_winner.test.zig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":plan",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:runtime_abi",
+    ],
+)
+
+zig_library(
+    name = "admission",
+    main = "admission.zig",
+    import_name = "luauc_backend_admission",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:model",
+        "//compiler/model:runtime_abi",
+    ],
+)

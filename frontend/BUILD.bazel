@@ -1,13 +1,19 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary")
-load("//bazel:cc.bzl", "cc_headers")
+load("//bazel:cc.bzl", "cc_headers", "cc_object_archive", "zig_cxx_object")
 load("//luau:components.bzl", "luauc_c_archive", "luauc_cpp_archive")
 
 cc_headers(
     name = "frontend_incs",
     hdrs = [],
     includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = ["frontend_adapter.cpp"],
     visibility = ["//visibility:public"],
 )
 
@@ -62,6 +68,37 @@ luauc_cpp_archive(
     visibility = ["//visibility:public"],
 )
 
+zig_cxx_object(
+    name = "luau_execute_stub_object",
+    src = "luau_execute_stub.cpp",
+    target = "wasm32-wasi",
+    copts = [
+        "-Oz",
+        "-DNDEBUG",
+        "-std=c++17",
+        "-fno-exceptions",
+        "-fno-rtti",
+    ],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        ":compiler_patch_headers",
+    ],
+    deps = [
+        ":frontend_incs",
+        "@luau//:interp_incs",
+    ],
+)
+
+cc_object_archive(
+    name = "luau_execute_stub_wasm32_wasi",
+    objects = [":luau_execute_stub_object"],
+    deps = [
+        ":frontend_incs",
+        "@luau//:interp_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 luauc_c_archive(
     name = "host_stubs_wasm32_wasi",
     srcs = ["host_wasi_stubs.c"],
@@ -100,6 +137,7 @@ zig_binary(
         ":adapter_wasm32_wasi",
         ":frontend_incs",
         ":host_stubs_wasm32_wasi",
+        ":luau_execute_stub_wasm32_wasi",
         "@luau//:aot_frontend_wasm32_wasi",
         "@luau//:aot_frontend_codegen_ir_incs",
         "@luau//:interp_incs",

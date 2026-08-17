@@ -1,19 +1,49 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load(":defs.bzl", "backend_emit_library")
+
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = glob(["*.zig"], exclude = ["*.test.zig"]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["dispatch.zig"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "dispatch_zig",
+    srcs = ["dispatch.zig"],
+    visibility = ["//visibility:public"],
+)
 
 backend_emit_library(name = "allocations")
 backend_emit_library(name = "builtin_patterns")
 backend_emit_library(
     name = "calls",
-    deps = ["//compiler/backend:imports"],
+    deps = [
+        "//compiler/backend/plan:admission",
+    ],
 )
+backend_emit_library(name = "closures")
 backend_emit_library(name = "control")
-backend_emit_library(name = "core")
+backend_emit_library(
+    name = "core",
+    deps = ["//compiler/backend/plan:admission"],
+)
 backend_emit_library(
     name = "dispatch",
-    deps = ["//compiler/backend:diagnostics"],
+    deps = [
+        "//compiler/model:diagnostics",
+        "//compiler/backend/plan:admission",
+    ],
 )
 backend_emit_library(name = "iteration")
-backend_emit_library(name = "memory")
+backend_emit_library(
+    name = "memory",
+    deps = ["//compiler/backend/plan:admission"],
+)
 backend_emit_library(name = "namecall")
 backend_emit_library(name = "operators")
 backend_emit_library(name = "scalar")

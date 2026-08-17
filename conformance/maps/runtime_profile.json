@@ -1,0 +1,452 @@
+{
+  "schema_version": 1,
+  "generator_version": "luauc-runtime-profile-v1",
+  "pin": "luau-0.725+luauc-patches",
+  "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
+  "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
+  "input_sha256": {
+    "profile": "58d90ca5e4ad0fbfad1320a29e974aa6f11116c5a4d37b6b890f92509e3e9647",
+    "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",
+    "pack": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c"
+  },
+  "profile_id": "embed-v1",
+  "feature_mask": 0,
+  "memory_minimum": 1024,
+  "memory_maximum": 4096,
+  "table_minimum": 400,
+  "table_maximum": 400,
+  "identities": {
+    "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
+    "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
+    "object_contract_sha256": "cfdc8723b60c127b30f342fa4d52c4fd8520992b3bb57c6e74e51c32a927ae7b",
+    "pack_build_sha256": "8c615393d5639fbf161c6061ff65a51c002eb89dc8e5f2d255c5df9ec4096fef",
+    "license_inventory_sha256": "62db69aaae1bfdcf018c8a83254e4aeb91f1e42d8882e8b4cd224bda6045659c"
+  },
+  "host_imports": [
+    {
+      "module": "luauc_embed_v1",
+      "name": "protected_call",
+      "type_index": 10,
+      "kind": "function"
+    },
+    {
+      "module": "luauc_embed_v1",
+      "name": "set_throw",
+      "type_index": 0,
+      "kind": "function"
+    }
+  ],
+  "retained_exports": [
+    {
+      "name": "__stack_pointer",
+      "kind": "global",
+      "role": "stack_pointer"
+    },
+    {
+      "name": "_start",
+      "kind": "function",
+      "role": "initialize"
+    },
+    {
+      "name": "luauc_embed_v1_alloc",
+      "kind": "function",
+      "role": "alloc"
+    },
+    {
+      "name": "luauc_embed_v1_barrier_probe",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_context_create",
+      "kind": "function",
+      "role": "context_create"
+    },
+    {
+      "name": "luauc_embed_v1_context_destroy",
+      "kind": "function",
+      "role": "context_destroy"
+    },
+    {
+      "name": "luauc_embed_v1_coverage",
+      "kind": "function",
+      "role": "coverage"
+    },
+    {
+      "name": "luauc_embed_v1_dealloc",
+      "kind": "function",
+      "role": "dealloc"
+    },
+    {
+      "name": "luauc_embed_v1_direct_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_finish_mark",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_finish_sweep",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_isblack",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_isdead",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_restart",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_state",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_step",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_gc_stop",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_helper_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_indirect_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_invoke",
+      "kind": "function",
+      "role": "invoke"
+    },
+    {
+      "name": "luauc_embed_v1_last_error",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_last_error_size",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_protected_call_run",
+      "kind": "function",
+      "role": "protected_dispatch"
+    },
+    {
+      "name": "luauc_embed_v1_reset_counts",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "luauc_embed_v1_trampoline_calls",
+      "kind": "function",
+      "role": null
+    },
+    {
+      "name": "memory",
+      "kind": "memory",
+      "role": "memory"
+    }
+  ],
+  "runtime_symbols": [
+    "luauc_runtime_v1_array_get",
+    "luauc_runtime_v1_array_set",
+    "luauc_runtime_v1_barrier_object",
+    "luauc_runtime_v1_barrier_table_back",
+    "luauc_runtime_v1_barrier_table_forward",
+    "luauc_runtime_v1_buffer_bounds_error",
+    "luauc_runtime_v1_builtin_number",
+    "luauc_runtime_v1_builtin_type_error",
+    "luauc_runtime_v1_call",
+    "luauc_runtime_v1_check_gc",
+    "luauc_runtime_v1_check_node_no_next",
+    "luauc_runtime_v1_check_node_value",
+    "luauc_runtime_v1_check_readonly",
+    "luauc_runtime_v1_check_safe_env",
+    "luauc_runtime_v1_check_userdata_tag",
+    "luauc_runtime_v1_close_upvalues",
+    "luauc_runtime_v1_closure_matches_proto_id",
+    "luauc_runtime_v1_compare_any",
+    "luauc_runtime_v1_concat",
+    "luauc_runtime_v1_count_direct_call",
+    "luauc_runtime_v1_count_indirect_call",
+    "luauc_runtime_v1_coverage_hit",
+    "luauc_runtime_v1_do_arith",
+    "luauc_runtime_v1_do_len",
+    "luauc_runtime_v1_dup_table",
+    "luauc_runtime_v1_dupclosure",
+    "luauc_runtime_v1_dupclosure_capture",
+    "luauc_runtime_v1_exchange_continuation",
+    "luauc_runtime_v1_fastcall",
+    "luauc_runtime_v1_finish_compiled_call",
+    "luauc_runtime_v1_forg_loop",
+    "luauc_runtime_v1_forg_loop_call",
+    "luauc_runtime_v1_forg_loop_finish",
+    "luauc_runtime_v1_forg_prep",
+    "luauc_runtime_v1_forgprep_xnext_fallback",
+    "luauc_runtime_v1_forn_prepare",
+    "luauc_runtime_v1_get_global",
+    "luauc_runtime_v1_get_upvalue",
+    "luauc_runtime_v1_get_varargs_fixed",
+    "luauc_runtime_v1_get_varargs_multret",
+    "luauc_runtime_v1_hash_node_addr",
+    "luauc_runtime_v1_interrupt",
+    "luauc_runtime_v1_libm",
+    "luauc_runtime_v1_load_constant",
+    "luauc_runtime_v1_namecall_plain",
+    "luauc_runtime_v1_new_table",
+    "luauc_runtime_v1_new_table_deferred",
+    "luauc_runtime_v1_new_userdata",
+    "luauc_runtime_v1_newclosure_capture",
+    "luauc_runtime_v1_newclosure_empty",
+    "luauc_runtime_v1_node_slot_match",
+    "luauc_runtime_v1_prep_varargs",
+    "luauc_runtime_v1_prepare_compiled_call",
+    "luauc_runtime_v1_require_static",
+    "luauc_runtime_v1_return",
+    "luauc_runtime_v1_set_global",
+    "luauc_runtime_v1_set_list",
+    "luauc_runtime_v1_set_location",
+    "luauc_runtime_v1_set_upvalue",
+    "luauc_runtime_v1_set_userdata_metatable",
+    "luauc_runtime_v1_slot_node_addr",
+    "luauc_runtime_v1_table_array_get",
+    "luauc_runtime_v1_table_array_set",
+    "luauc_runtime_v1_table_get",
+    "luauc_runtime_v1_table_get_number",
+    "luauc_runtime_v1_table_get_string",
+    "luauc_runtime_v1_table_insert_append",
+    "luauc_runtime_v1_table_len",
+    "luauc_runtime_v1_table_set",
+    "luauc_runtime_v1_table_set_number",
+    "luauc_runtime_v1_table_set_string",
+    "luauc_runtime_v1_table_store",
+    "luauc_runtime_v1_try_get_tm",
+    "luauc_runtime_v1_type_name"
+  ],
+  "bindings": [
+    {
+      "name": "luauc_runtime_v1_program_pointer",
+      "role": "program_pointer",
+      "kind": "global"
+    },
+    {
+      "name": "luauc_runtime_v1_program_arena",
+      "role": "generated_data_arena",
+      "kind": "global"
+    },
+    {
+      "name": "luauc_runtime_v1_program_arena_capacity",
+      "role": "generated_data_capacity",
+      "kind": "global"
+    },
+    {
+      "name": "memory",
+      "role": "memory",
+      "kind": "memory"
+    },
+    {
+      "name": "__stack_pointer",
+      "role": "stack_pointer",
+      "kind": "global"
+    },
+    {
+      "name": "luauc_embed_v1_protected_call_run",
+      "role": "protected_dispatch",
+      "kind": "function"
+    },
+    {
+      "name": "luauc_embed_v1_alloc",
+      "role": "alloc",
+      "kind": "function"
+    },
+    {
+      "name": "luauc_embed_v1_dealloc",
+      "role": "dealloc",
+      "kind": "function"
+    },
+    {
+      "name": "luauc_embed_v1_context_create",
+      "role": "context_create",
+      "kind": "function"
+    },
+    {
+      "name": "luauc_embed_v1_context_destroy",
+      "role": "context_destroy",
+      "kind": "function"
+    },
+    {
+      "name": "luauc_embed_v1_invoke",
+      "role": "invoke",
+      "kind": "function"
+    },
+    {
+      "name": "_start",
+      "role": "initialize",
+      "kind": "function"
+    },
+    {
+      "name": "luauc_embed_v1_coverage",
+      "role": "coverage",
+      "kind": "function"
+    }
+  ],
+  "policy": {
+    "version": 1,
+    "profile_id": "embed-v1",
+    "bindings": [
+      {
+        "role": "program_pointer",
+        "name": "luauc_runtime_v1_program_pointer",
+        "retain": false
+      },
+      {
+        "role": "generated_data_arena",
+        "name": "luauc_runtime_v1_program_arena",
+        "retain": false
+      },
+      {
+        "role": "generated_data_capacity",
+        "name": "luauc_runtime_v1_program_arena_capacity",
+        "retain": false
+      },
+      {
+        "role": "memory",
+        "name": "memory",
+        "retain": true
+      },
+      {
+        "role": "stack_pointer",
+        "name": "__stack_pointer",
+        "retain": true
+      },
+      {
+        "role": "protected_dispatch",
+        "name": "luauc_embed_v1_protected_call_run",
+        "retain": true
+      },
+      {
+        "role": "alloc",
+        "name": "luauc_embed_v1_alloc",
+        "retain": true
+      },
+      {
+        "role": "dealloc",
+        "name": "luauc_embed_v1_dealloc",
+        "retain": true
+      },
+      {
+        "role": "context_create",
+        "name": "luauc_embed_v1_context_create",
+        "retain": true
+      },
+      {
+        "role": "context_destroy",
+        "name": "luauc_embed_v1_context_destroy",
+        "retain": true
+      },
+      {
+        "role": "coverage",
+        "name": "luauc_embed_v1_coverage",
+        "retain": true
+      },
+      {
+        "role": "invoke",
+        "name": "luauc_embed_v1_invoke",
+        "retain": true
+      },
+      {
+        "role": "initialize",
+        "name": "_start",
+        "retain": true
+      }
+    ],
+    "retained_exports": [
+      {
+        "name": "luauc_embed_v1_last_error",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_last_error_size",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_step",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_state",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_isblack",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_isdead",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_stop",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_restart",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_finish_mark",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_gc_finish_sweep",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_barrier_probe",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_reset_counts",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_helper_calls",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_trampoline_calls",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_direct_calls",
+        "kind": "function"
+      },
+      {
+        "name": "luauc_embed_v1_indirect_calls",
+        "kind": "function"
+      }
+    ]
+  },
+  "canonical_hash": "08dfe9c80101b18007d21db6e65090f53dca86aa44cfef9b062c0038a57d3a53"
+}

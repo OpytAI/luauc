@@ -16,5 +16,22 @@
     { "role": "invoke", "name": "luauc_embed_v1_invoke", "retain": true },
     { "role": "initialize", "name": "_start", "retain": true }
   ],
-  "retained_exports": []
+  "retained_exports": [
+    { "name": "luauc_embed_v1_last_error", "kind": "function" },
+    { "name": "luauc_embed_v1_last_error_size", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_step", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_state", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_isblack", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_isdead", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_stop", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_restart", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_finish_mark", "kind": "function" },
+    { "name": "luauc_embed_v1_gc_finish_sweep", "kind": "function" },
+    { "name": "luauc_embed_v1_barrier_probe", "kind": "function" },
+    { "name": "luauc_embed_v1_reset_counts", "kind": "function" },
+    { "name": "luauc_embed_v1_helper_calls", "kind": "function" },
+    { "name": "luauc_embed_v1_trampoline_calls", "kind": "function" },
+    { "name": "luauc_embed_v1_direct_calls", "kind": "function" },
+    { "name": "luauc_embed_v1_indirect_calls", "kind": "function" }
+  ]
 }

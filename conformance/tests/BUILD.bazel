@@ -1,0 +1,139 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load(":defs.bzl", "SOURCE_ENV", "family_js_test")
+
+js_library(
+    name = "harness",
+    srcs = ["harness.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+family_js_test(
+    name = "scalar_test",
+    entry_point = "scalar.test.mjs",
+    source_env_keys = ["LUAUC_SILENT_SOURCE"],
+)
+
+family_js_test(
+    name = "operators_test",
+    entry_point = "operators.test.mjs",
+    source_env_keys = ["LUAUC_SLOW_ADD_SOURCE"],
+)
+
+family_js_test(
+    name = "calls_test",
+    entry_point = "calls.test.mjs",
+    source_env_keys = [
+        "LUAUC_COMPILED_CALL_SOURCE",
+        "LUAUC_MULTI_RESULT_CALL_SOURCE",
+        "LUAUC_RECURSIVE_CALL_SOURCE",
+        "LUAUC_YIELD_CALL_SOURCE",
+    ],
+)
+
+family_js_test(
+    name = "closures_test",
+    entry_point = "closures.test.mjs",
+    source_env_keys = [
+        "LUAUC_CAPTURED_CALL_SOURCE",
+        "LUAUC_REFERENCE_CAPTURE_SOURCE",
+        "LUAUC_FORWARDED_CAPTURE_SOURCE",
+    ],
+)
+
+family_js_test(
+    name = "tables_test",
+    entry_point = "tables.test.mjs",
+    source_env_keys = [
+        "LUAUC_TABLE_ASSIGN_EMPTY_SOURCE",
+        "LUAUC_TABLE_CLONE_APPEND_SOURCE",
+        "LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE",
+        "LUAUC_DYNAMIC_HASH_TABLE_SOURCE",
+        "LUAUC_DYNAMIC_STRING_SOURCE",
+        "LUAUC_GENERIC_TABLE_SOURCE",
+        "LUAUC_MIXED_TABLE_SOURCE",
+        "LUAUC_GLOBAL_STATE_SOURCE",
+    ],
+)
+
+family_js_test(
+    name = "iteration_test",
+    entry_point = "iteration.test.mjs",
+    source_env_keys = ["LUAUC_GENERIC_ITERATION_SOURCE"],
+)
+
+family_js_test(
+    name = "namecall_test",
+    entry_point = "namecall.test.mjs",
+    source_env_keys = [
+        "LUAUC_TABLE_NAMECALL_SOURCE",
+        "LUAUC_EMBED_LIB_SOURCE",
+    ],
+)
+
+family_js_test(
+    name = "malformed_graph_test",
+    entry_point = "malformed_graph.test.mjs",
+    source_env_keys = ["LUAUC_EMBED_LIB_SOURCE"],
+)
+
+family_js_test(
+    name = "builtins_test",
+    entry_point = "builtins.test.mjs",
+    source_env_keys = ["LUAUC_FAST_BUILTINS_SOURCE"],
+)
+
+family_js_test(
+    name = "buffers_test",
+    entry_point = "buffers.test.mjs",
+    source_env_keys = ["LUAUC_BUFFER_SCALAR_MATRIX_SOURCE"],
+)
+
+family_js_test(
+    name = "proto_identity_test",
+    entry_point = "proto_identity.test.mjs",
+    source_env_keys = ["LUAUC_PROTO_IDENTITY_SOURCE"],
+)
+
+family_js_test(
+    name = "userdata_test",
+    entry_point = "userdata.test.mjs",
+    source_env_keys = ["LUAUC_USERDATA_HOOKS_SOURCE"],
+)
+
+family_js_test(
+    name = "natural_sources_test",
+    entry_point = "natural_sources.test.mjs",
+    source_env_keys = [
+        "LUAUC_NUMERIC_LOOP_SOURCE",
+        "LUAUC_NATURAL_INTEGER_SOURCE",
+        "LUAUC_NATURAL_BIT32_SOURCE",
+        "LUAUC_NATURAL_BUFFER_SOURCE",
+    ],
+)
+
+family_js_test(
+    name = "coverage_test",
+    entry_point = "coverage.test.mjs",
+    source_env_keys = [],
+)
+
+family_js_test(
+    name = "frontend_to_wasm_test",
+    entry_point = "frontend_to_wasm.test.mjs",
+    extra_data = [
+        "scalar.test.mjs",
+        "operators.test.mjs",
+        "calls.test.mjs",
+        "closures.test.mjs",
+        "tables.test.mjs",
+        "iteration.test.mjs",
+        "namecall.test.mjs",
+        "malformed_graph.test.mjs",
+        "builtins.test.mjs",
+        "buffers.test.mjs",
+        "proto_identity.test.mjs",
+        "userdata.test.mjs",
+        "coverage.test.mjs",
+    ],
+    source_env_keys = sorted(SOURCE_ENV.keys()),
+)

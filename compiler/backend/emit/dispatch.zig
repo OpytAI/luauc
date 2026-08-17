@@ -4,6 +4,7 @@ const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const diagnostics = @import("luauc_backend_diagnostics");
+const admission = @import("luauc_backend_admission");
 
 const Error = model.Error;
 const CallContinuation = model.CallContinuation;
@@ -31,11 +32,22 @@ const ir_cmd_check_node_value = abi.ir_cmd_check_node_value;
 const ir_cmd_check_readonly = abi.ir_cmd_check_readonly;
 const ir_cmd_check_no_metatable = abi.ir_cmd_check_no_metatable;
 const ir_cmd_check_array_size = abi.ir_cmd_check_array_size;
+const ir_cmd_do_len = abi.ir_cmd_do_len;
+const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
+const ir_cmd_table_len = abi.ir_cmd_table_len;
+const ir_cmd_concat = abi.ir_cmd_concat;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
 const ir_cmd_try_num_to_index = abi.ir_cmd_try_num_to_index;
 const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
+const ir_cmd_forgloop = abi.ir_cmd_forgloop;
+const ir_cmd_forgloop_fallback = abi.ir_cmd_forgloop_fallback;
+const ir_cmd_fallback_gettableks = abi.ir_cmd_fallback_gettableks;
+const ir_cmd_fallback_settableks = abi.ir_cmd_fallback_settableks;
+const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
+const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
+const ir_cmd_invoke_fastcall = abi.ir_cmd_invoke_fastcall;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
 const ir_cmd_buffer_readu8 = abi.ir_cmd_buffer_readu8;
 const ir_cmd_buffer_writei8 = abi.ir_cmd_buffer_writei8;
@@ -53,84 +65,114 @@ const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
 const tvalue_extra_offset = abi.tvalue_extra_offset;
 
 pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
-    return emitInstructionInner(self, instruction_id, block_kind) catch |err| {
+    const result = emitInstructionInner(self, instruction_id, block_kind) catch |err| {
         const failed = self.instruction(instruction_id) catch return err;
         diagnostics.recordInstruction(@errorName(err), instruction_id, @intFromEnum(failed.command));
         return err;
     };
+    if (self.plan.clusterAt(instruction_id) == null) {
+        const instruction_value = self.instruction(instruction_id) catch return result;
+        self.plan.noteLowered(instruction_value.command);
+    }
+    return result;
+}
+
+fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
+    switch (cluster.kind) {
+        .constant_truthy => try self.emitConstantTruthyFallback(
+            (try self.constantTruthyFallbackPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .inline_const_table_get => try self.emitGenericTableFallbackCall(
+            ((try self.inlineConstantTableGetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow).pattern,
+        ),
+        .inline_array_get => try self.emitInlineArrayGet(
+            (try self.inlineArrayGetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .semantic_table_reload => try self.emitSemanticTableReload(
+            (try self.semanticTableReloadPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .inline_generic_table_set => try self.emitInlineGenericTableSet(
+            ((try self.inlineGenericTableSetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow).pattern,
+        ),
+        .userdata_alloc => {},
+        .literal_field_set => try self.emitLiteralFieldSet(
+            (try self.literalFieldSetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .constant_load => try self.emitConstantLoad(
+            (try self.constantLoadPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .dup_table => try self.emitDupTable(
+            (try self.dupTablePatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .table_insert_append => try self.emitTableInsertAppend(
+            (try self.tableInsertAppendPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .plain_len => {
+            const fact = self.plan.plainLenAt(cluster.at) orelse return Error.UnsupportedControlFlow;
+            try self.emitPlainTableLen(fact.dest_reg, fact.table_reg);
+        },
+        .concat => try self.emitConcat(
+            (try self.concatPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .table_alloc => try self.emitTableAllocation(
+            (try self.tableAllocationPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
+        ),
+        .integer_create => {
+            const pattern = (try self.integerCreatePatternAt(cluster.at)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.emitIntegerCreate(pattern);
+        },
+        .linearized_pow => {
+            const block = try self.snapshot.irBlock(
+                self.function,
+                self.plan.instructionBlock(cluster.at) orelse return Error.UnsupportedControlFlow,
+            );
+            const pattern = (try self.linearizedPowPattern(cluster.at, block)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.emitSavedPcLocation(pattern.marker);
+            try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
+        },
+        .type_name => {
+            const command = (try self.instruction(cluster.at)).command;
+            const pattern = (try self.typeNamePattern(cluster.at, command == ir_cmd_get_typeof)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.emitTypeName(pattern);
+        },
+    }
 }
 
 fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
     const instruction_value = try self.instruction(instruction_id);
-    if (try self.constantTruthyFallbackPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitConstantTruthyFallback(pattern);
-        return false;
-    }
-    if (try self.inlineConstantTableGetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitGenericTableFallbackCall(pattern.pattern);
-        return false;
-    }
-    if (try self.inlineArrayGetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitInlineArrayGet(pattern);
-        return false;
-    }
-    if (try self.semanticTableReloadPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitSemanticTableReload(pattern);
-        return false;
-    }
-    if (try self.inlineGenericTableSetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitInlineGenericTableSet(pattern.pattern);
-        return false;
-    }
-    if (try self.userdataAllocationPatternContaining(instruction_id)) |pattern| {
-        try self.emitUserdataAllocationInstruction(instruction_id, instruction_value, pattern);
-        return false;
-    }
-    if (try self.literalFieldSetPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitLiteralFieldSet(pattern);
-        return false;
-    }
-    if (try self.constantLoadPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitConstantLoad(pattern);
-        return false;
-    }
-    if (try self.dupTablePatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitDupTable(pattern);
-        return false;
-    }
-    if (try self.tableInsertAppendPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitTableInsertAppend(pattern);
-        return false;
-    }
-    if (try self.concatPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitConcat(pattern);
-        return false;
-    }
-    if (try self.tableAllocationPatternContaining(instruction_id)) |pattern| {
-        if (instruction_id == pattern.finish)
-            try self.emitTableAllocation(pattern);
+    if (self.plan.clusterAt(instruction_id)) |cluster| {
+        switch (cluster.kind) {
+            .userdata_alloc => {
+                const pattern = (try self.userdataAllocationPatternAt(cluster.at)) orelse
+                    return Error.UnsupportedControlFlow;
+                try self.emitUserdataAllocationInstruction(instruction_id, instruction_value, pattern);
+            },
+            .integer_create => if (instruction_id == cluster.at)
+                try emitPlannedCluster(self, cluster),
+            .linearized_pow => if (instruction_id == cluster.at)
+                try emitPlannedCluster(self, cluster),
+            .type_name => if (instruction_value.command == ir_cmd_get_type or
+                instruction_value.command == ir_cmd_get_typeof)
+                try emitPlannedCluster(self, cluster),
+            else => if (instruction_id == cluster.finish) try emitPlannedCluster(self, cluster),
+        }
+        self.plan.noteLoweredRange(self.snapshot, self.function, cluster.start, cluster.finish);
         return false;
     }
     switch (instruction_value.command) {
         .nop, .substitute, .mark_used, .mark_dead => return false,
         .load_env => {
-            if (instruction_id + 1 >= self.function.instruction_count or
-                (try self.instruction(instruction_id + 1)).command != .newclosure)
-                return Error.UnsupportedControlFlow;
-            _ = try self.newClosurePattern(instruction_id + 1);
+            if (self.plan.closureContaining(instruction_id) != null) {
+                // Planned newclosure consumes LOAD_ENV.
+            } else {
+                try self.emitLoadEnv(instruction_id);
+            }
         },
         .get_closure_upval_addr => {
-            if (try self.newClosurePatternContaining(instruction_id) == null)
+            if (self.plan.closureContaining(instruction_id) == null)
                 return Error.UnsupportedControlFlow;
         },
         .load_tag => try self.emitLoadTag(instruction_id, instruction_value),
@@ -140,12 +182,12 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .load_double => try self.emitLoadDouble(instruction_id, instruction_value),
         .load_tvalue => try self.emitLoadTValue(instruction_id, instruction_value),
         .store_pointer => {
-            if (try self.newClosurePatternContaining(instruction_id) == null)
+            if (self.plan.closureContaining(instruction_id) == null)
                 try self.emitStoreI32(instruction_value, 0);
         },
         .store_tag => try self.emitStoreTag(instruction_id, instruction_value),
         .store_extra => try self.emitStoreI32(instruction_value, tvalue_extra_offset),
-        .store_split_tvalue => if (try self.newClosurePatternContaining(instruction_id) == null)
+        .store_split_tvalue => if (self.plan.closureContaining(instruction_id) == null)
             try self.emitStoreSplitTValue(instruction_id, instruction_value),
         .store_double => try self.emitStoreDouble(instruction_value),
         .store_int => try self.emitStoreI32(instruction_value, 0),
@@ -215,8 +257,10 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .tag_vector => try self.emitTagVector(instruction_id, instruction_value),
         .not_any => try self.emitNotAny(instruction_id, instruction_value),
         .cmp_any => {
-            if (block_kind != .fallback)
-                return Error.UnsupportedControlFlow;
+            if (block_kind != .fallback) {
+                if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+                    return Error.UnsupportedControlFlow;
+            }
             try self.emitCompareAny(instruction_id, instruction_value);
         },
         .cmp_int => try self.emitComparisonI32(instruction_id, instruction_value),
@@ -268,9 +312,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .check_cmp_int => try self.emitCheckCompareInteger(instruction_value),
         .check_cmp_int64 => try self.emitCheckCompareInt64(instruction_value),
         .check_gc => {
-            if (try self.newClosurePatternContaining(instruction_id) == null) {
-                if (!try self.checkGcClosesDeferredTableAllocation(instruction_id))
-                    return Error.UnsupportedControlFlow;
+            if (self.plan.closureContaining(instruction_id) == null) {
                 try self.body.localGet(self.allocator, 0);
                 try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
                 try self.emitReloadBase();
@@ -291,7 +333,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         ir_cmd_get_table, ir_cmd_set_table => {
             if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
                 return Error.UnsupportedControlFlow;
-            try self.emitGeneralTableOperation(instruction_value);
+            try self.emitGeneralTableOperation(instruction_id, instruction_value);
         },
         .set_savedpc => {
             try self.emitSavedPcLocation(instruction_value);
@@ -302,31 +344,53 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                     (try self.tableAllocationPatternAt(instruction_id + 1) != null or
                         try self.dupTablePatternAt(instruction_id + 1) != null))
                 {} else if (instruction_id + 2 < self.function.instruction_count and
+                    (try self.instruction(instruction_id + 1)).command == .check_gc and
+                    try self.tableAllocationPatternAt(instruction_id + 2) != null)
+                {} else if (instruction_id + 2 < self.function.instruction_count and
                     (try self.instruction(instruction_id + 2)).command == .newclosure)
                 {
-                    _ = try self.newClosurePattern(instruction_id + 2);
+                    if (self.plan.closureContaining(instruction_id + 2) == null)
+                        return Error.UnsupportedControlFlow;
                 } else if (instruction_id + 1 >= self.function.instruction_count or
                     ((try self.instruction(instruction_id + 1)).command != .call and
+                        (try self.instruction(instruction_id + 1)).command != .cmp_any and
+                        (try self.instruction(instruction_id + 1)).command != .do_arith and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_do_len and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_concat and
                         (try self.instruction(instruction_id + 1)).command != ir_cmd_get_table and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table))
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_invoke_fastcall and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_forgloop_fallback and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_gettableks and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_settableks and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_getglobal and
+                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_setglobal))
                     return Error.UnsupportedControlFlow;
             }
         },
         .capture => {
-            if (try self.newClosurePatternContaining(instruction_id) == null and
-                !try self.isDupClosureCapture(instruction_id))
+            if (self.plan.closureContaining(instruction_id) == null and
+                !self.plan.dupClosureCaptureContaining(instruction_id))
                 return Error.UnsupportedControlFlow;
         },
         .findupval => {
-            if (try self.newClosurePatternContaining(instruction_id) == null)
+            if (self.plan.closureContaining(instruction_id) == null)
                 return Error.UnsupportedControlFlow;
         },
         .close_upvals => try self.emitCloseUpvalues(instruction_id),
         .do_arith => {
-            if (block_kind != .fallback)
-                return Error.UnsupportedControlFlow;
+            if (block_kind != .fallback) {
+                if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+                    return Error.UnsupportedControlFlow;
+            }
             try self.emitDoArith(instruction_id, instruction_value);
         },
+        ir_cmd_do_len => {
+            if (block_kind != .fallback)
+                return Error.UnsupportedControlFlow;
+            try self.emitDoLen(instruction_id, instruction_value);
+        },
+        ir_cmd_concat => try self.emitGeneralConcat(instruction_id, instruction_value),
         .check_safe_env => {
             const guards_dynamic_global = instruction_id + 1 < self.function.instruction_count and
                 (try self.instruction(instruction_id + 1)).command == .get_cached_import;
@@ -338,6 +402,21 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         ir_cmd_invoke_libm => try self.emitLibm(instruction_id, instruction_value),
         ir_cmd_fastcall => try self.emitDirectFastcall(instruction_value),
+        ir_cmd_invoke_fastcall => try self.emitGeneralInvokeFastcall(instruction_id, instruction_value),
+        ir_cmd_forgloop => {
+            try self.emitGeneralForgLoop(instruction_value);
+            return true;
+        },
+        ir_cmd_forgloop_fallback => {
+            try self.emitGeneralForgLoopFallback(instruction_id, instruction_value);
+            return true;
+        },
+        ir_cmd_fallback_gettableks => try self.emitGeneralGetTableKs(instruction_value),
+        ir_cmd_fallback_settableks => try self.emitGeneralSetTableKs(instruction_value),
+        ir_cmd_fallback_getglobal => try self.emitGeneralGetGlobal(instruction_value),
+        ir_cmd_fallback_setglobal => try self.emitGeneralSetGlobal(instruction_value),
+        ir_cmd_new_userdata => try self.emitNewUserdata(instruction_id, instruction_value),
+        ir_cmd_table_len => try self.emitGeneralTableLen(instruction_id, instruction_value),
         ir_cmd_string_len => try self.emitStringLen(instruction_id, instruction_value),
         .coverage => try self.emitCoverage(instruction_id, instruction_value),
         .interrupt => try self.emitInterrupt(instruction_id, instruction_value),
@@ -435,28 +514,19 @@ pub noinline fn emitInstructionRange(self: anytype, start: u32, finish: u32, blo
 }
 
 fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snapshot_v1.IrBlock, progress: *u32) Error!bool {
-    const dynamic_length = try self.dynamicLengthPattern(block);
-    const semantic_array = try self.semanticArrayOperation(block);
     var terminated = false;
     var instruction_id = start;
     while (instruction_id <= finish) : (instruction_id += 1) {
         progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
-        if (try self.integerCreatePatternAt(instruction_id)) |pattern| {
-            try self.emitIntegerCreate(pattern);
-            instruction_id = pattern.finish;
-            continue;
-        }
-        if (try self.linearizedPowPattern(instruction_id, block)) |pattern| {
-            try self.emitSavedPcLocation(pattern.marker);
-            try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
-            instruction_id = pattern.finish;
+        if (self.plan.clusterAt(instruction_id)) |_| {
+            terminated = try self.emitInstruction(instruction_id, block.kind);
             continue;
         }
         if (try self.globalHeadPatternAt(instruction_id, block)) |pattern| {
             try self.emitGlobalOperation(pattern);
-            try self.body.branch(self.allocator, 1);
+            try self.body.branch(self.allocator, self.loop_branch_depth);
             instruction_id = block.finish;
             terminated = true;
             continue;
@@ -498,19 +568,24 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             instruction_id = operation.finish;
             continue;
         }
-        if (dynamic_length) |pattern| {
+        if (try self.guardedLiteralFieldSetPatternAt(instruction_id)) |pattern| {
+            try self.emitLiteralFieldSet(pattern);
+            instruction_id = pattern.finish;
+            continue;
+        }
+        if (try self.dynamicLengthPattern(block)) |pattern| {
             if (instruction_id == pattern.start) {
                 try self.emitDynamicLength(pattern);
-                try self.body.branch(self.allocator, 1);
+                try self.body.branch(self.allocator, self.loop_branch_depth);
                 instruction_id = block.finish;
                 terminated = true;
                 continue;
             }
         }
-        if (semantic_array) |operation| {
+        if (try self.semanticArrayOperation(block)) |operation| {
             if (instruction_id == operation.pattern.start) {
                 try self.emitArrayOperation(operation.pattern, operation.kind);
-                try self.body.branch(self.allocator, 1);
+                try self.body.branch(self.allocator, self.loop_branch_depth);
                 instruction_id = block.finish;
                 terminated = true;
                 continue;
@@ -521,54 +596,85 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
     return terminated;
 }
 pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
-    if (try self.stringEqualityPattern(block)) |pattern|
-        return self.emitStringEqualityBlock(block_id, block, pattern);
-    if (try self.constantPowPattern(block)) |pattern|
-        return self.emitConstantArithmeticBlock(block_id, block, pattern);
-    if (try self.constantArithmeticPattern(block)) |pattern|
-        return self.emitConstantArithmeticBlock(block_id, block, pattern);
-    if (try self.powPattern(block)) |pattern|
-        return self.emitPowBlock(block_id, block, pattern);
-    if (try self.isFastcallFallback(block_id, block))
-        return self.emitFastcallFallbackBlock(block_id, block);
-    if (try self.specializedIpairsPattern(block)) |pattern|
-        return self.emitGenericIterationBlock(block_id, pattern, true);
-    if (try self.genericIterationPattern(block)) |pattern|
-        return self.emitGenericIterationBlock(block_id, pattern, true);
-    if (try self.genericIterationFallbackPattern(block)) |pattern|
-        return self.emitGenericIterationBlock(block_id, pattern, false);
-    if (try self.xnextFastPreparationPattern(block)) |pattern|
-        return self.emitXnextFastPreparationBlock(block_id, block, pattern);
-    if (try self.xnextPreparationPattern(block)) |pattern|
-        return self.emitXnextPreparationBlock(block_id, pattern);
-    if (try self.globalPattern(block)) |pattern|
-        return self.emitGlobalOperationBlock(block_id, block, pattern);
-    if (try self.genericTablePattern(block)) |pattern|
-        return self.emitGenericTableOperationBlock(block_id, block, pattern);
-    if (try self.stringTablePattern(block)) |pattern|
-        return self.emitStringTableOperationBlock(block_id, block, pattern);
-    if (try self.dynamicLengthPattern(block)) |pattern|
-        return self.emitDynamicLengthBlock(block_id, block, pattern);
-    if (try self.semanticArrayOperation(block)) |operation|
-        return self.emitArrayOperationBlock(block_id, block, operation.pattern, operation.kind);
-    if (block.kind == .fallback and !try self.supportsFallback(block))
-        return Error.UnsupportedControlFlow;
-
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
-
+    switch (self.plan.blockKind(block_id)) {
+        .string_equality => {
+            const pattern = (try self.stringEqualityPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitStringEqualityBlock(block_id, block, pattern);
+        },
+        .constant_pow => {
+            const pattern = (try self.constantPowPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitConstantArithmeticBlock(block_id, block, pattern);
+        },
+        .constant_arith => {
+            const pattern = (try self.constantArithmeticPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitConstantArithmeticBlock(block_id, block, pattern);
+        },
+        .pow => {
+            const pattern = (try self.powPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitPowBlock(block_id, block, pattern);
+        },
+        .namecall => {
+            const pattern = (try self.plainTableNamecallPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitPlainTableNamecallBlock(block_id, block, pattern);
+        },
+        .ordinary_call_fallback, .fastcall_fallback => {
+            if (self.plan.blockKind(block_id) == .fastcall_fallback)
+                return self.emitFastcallFallbackBlock(block_id, block);
+            return emitDispatchBlock(self, block);
+        },
+        .specialized_ipairs => {
+            const pattern = (try self.specializedIpairsPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericIterationBlock(block_id, pattern, true);
+        },
+        .generic_iteration => {
+            const pattern = (try self.genericIterationPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericIterationBlock(block_id, pattern, true);
+        },
+        .generic_iteration_fallback => {
+            const pattern = (try self.genericIterationFallbackPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericIterationBlock(block_id, pattern, false);
+        },
+        .xnext_fast => {
+            const pattern = (try self.xnextFastPreparationPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitXnextFastPreparationBlock(block_id, block, pattern);
+        },
+        .xnext_prep => {
+            const pattern = (try self.xnextPreparationPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitXnextPreparationBlock(block_id, pattern);
+        },
+        .global => {
+            const pattern = (try self.globalPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGlobalOperationBlock(block_id, block, pattern);
+        },
+        .generic_table => {
+            const pattern = (try self.genericTablePattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitGenericTableOperationBlock(block_id, block, pattern);
+        },
+        .string_table => {
+            const pattern = (try self.stringTablePattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitStringTableOperationBlock(block_id, block, pattern);
+        },
+        .dynamic_length => {
+            const pattern = (try self.dynamicLengthPattern(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitDynamicLengthBlock(block_id, block, pattern);
+        },
+        .semantic_array => {
+            const operation = (try self.semanticArrayOperation(block)) orelse return Error.UnsupportedControlFlow;
+            return self.emitArrayOperationBlock(block_id, block, operation.pattern, operation.kind);
+        },
+        .dispatch, .none => {
+            if (block.kind == .fallback and !try admission.supportsFallback(self, block))
+                return Error.UnsupportedControlFlow;
+            return emitDispatchBlock(self, block);
+        },
+    }
+}
+fn emitDispatchBlock(self: anytype, block: snapshot_v1.IrBlock) Error!void {
     const terminated = try self.emitInstructionRange(block.start, block.finish, block);
     if (!terminated)
         return Error.InvalidBlockTermination;
-    try self.body.end(self.allocator);
 }
 pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuation) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(continuation.dispatch_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
     switch (continuation.action) {
         .call_suffix => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
@@ -578,12 +684,12 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
         },
         .generic_iteration => |pattern| {
             try self.emitGenericIterationFinish(pattern);
-            try self.body.branch(self.allocator, 1);
+            try self.body.branch(self.allocator, self.loop_branch_depth);
         },
         .interrupt_block_retry => |retry| {
             try self.body.i32Const(self.allocator, @intCast(retry.block_id));
             try self.body.localSet(self.allocator, self.dispatch_local);
-            try self.body.branch(self.allocator, 1);
+            try self.body.branch(self.allocator, self.loop_branch_depth);
         },
         .interrupt_suffix => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
@@ -604,5 +710,4 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
                 return Error.InvalidBlockTermination;
         },
     }
-    try self.body.end(self.allocator);
 }

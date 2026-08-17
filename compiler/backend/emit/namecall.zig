@@ -19,6 +19,7 @@ const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
 const lua_tag_table = abi.lua_tag_table;
+const lua_utag_limit = abi.lua_utag_limit;
 
 pub fn blockReferenceCount(self: anytype, target: u32) Error!u32 {
     return self.plan.blockReferences(target) orelse Error.UnsupportedControlFlow;
@@ -202,35 +203,19 @@ pub noinline fn plainTableNamecallPattern(self: anytype, block: snapshot_v1.IrBl
         .rejoin = first_rejoin.value,
     };
 }
-pub noinline fn isBypassedPlainTableNamecallBlock(self: anytype, block_id: u32) Error!bool {
-    if (self.function.entry_block == block_id)
-        return false;
-    var source_block_id: u32 = 0;
-    while (source_block_id < self.function.block_count) : (source_block_id += 1) {
-        const source_block = try self.snapshot.irBlock(self.function, source_block_id);
-        if (try self.plainTableNamecallPattern(source_block)) |pattern|
-            if (block_id == pattern.first_fast or block_id == pattern.second_fast or block_id == pattern.fallback)
-                return true;
-    }
-    return false;
-}
 pub noinline fn emitPlainTableNamecallBlock(
     self: anytype,
     block_id: u32,
     block: snapshot_v1.IrBlock,
     pattern: PlainTableNamecallPattern,
 ) Error!void {
-    try self.body.localGet(self.allocator, self.dispatch_local);
-    try self.body.i32Const(self.allocator, @intCast(block_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    _ = block_id;
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
-            return Error.InvalidBlockTermination;
+            return;
     }
     try self.emitPlainTableNamecallOperation(pattern);
-    try self.body.branch(self.allocator, 1);
-    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitFallbackNamecall(
     self: anytype,
@@ -267,16 +252,6 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
     try self.emitReloadBase();
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
-}
-pub noinline fn tableAllocationPatternContaining(self: anytype, instruction_id: u32) Error!?TableAllocationPattern {
-    var back: u32 = 0;
-    while (back <= 3 and back <= instruction_id) : (back += 1) {
-        if (try self.tableAllocationPatternAt(instruction_id - back)) |pattern| {
-            if (instruction_id <= pattern.finish)
-                return pattern;
-        }
-    }
-    return null;
 }
 pub noinline fn emitTableAllocation(self: anytype, pattern: TableAllocationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -320,6 +295,19 @@ pub noinline fn emitUserdataAllocationInstruction(
         return;
     }
     return Error.UnsupportedControlFlow;
+}
+pub noinline fn emitNewUserdata(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    const byte_size = try self.uintConstant(try self.operand(instruction_value, 0));
+    const user_tag = try self.uintConstant(try self.operand(instruction_value, 1));
+    if (user_tag >= lua_utag_limit)
+        return Error.InvalidOperandType;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(byte_size));
+    try self.body.i32Const(self.allocator, @intCast(user_tag));
+    try self.body.call(self.allocator, self.new_userdata orelse return Error.UnsupportedCommand);
+    try self.emitInstructionResultSet(instruction_id);
+    try self.emitReloadBase();
 }
 pub noinline fn emitSetList(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (instruction_value.operand_count != 6)
@@ -390,16 +378,6 @@ pub noinline fn concatPatternAt(self: anytype, start: u32) Error!?ConcatPattern 
     if (loaded_source != source or stored.kind != .instruction or stored.value != start + 2)
         return null;
     return .{ .start = start, .finish = finish, .destination = destination, .source = source, .count = count };
-}
-pub noinline fn concatPatternContaining(self: anytype, instruction_id: u32) Error!?ConcatPattern {
-    var distance: u32 = 0;
-    while (distance < 5 and distance <= instruction_id) : (distance += 1) {
-        if (try self.concatPatternAt(instruction_id - distance)) |pattern| {
-            if (instruction_id <= pattern.finish)
-                return pattern;
-        }
-    }
-    return null;
 }
 pub noinline fn emitConcat(self: anytype, pattern: ConcatPattern) Error!void {
     try self.emitSavedPcLocation(try self.instruction(pattern.start));

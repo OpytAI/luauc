@@ -14,9 +14,11 @@ const tables = @import("luauc_backend_emit_tables");
 const table_values = @import("luauc_backend_emit_table_values");
 const operators = @import("luauc_backend_emit_operators");
 const iteration = @import("luauc_backend_emit_iteration");
+const closures = @import("luauc_backend_emit_closures");
 const control = @import("luauc_backend_emit_control");
 const calls = @import("luauc_backend_emit_calls");
 const dispatch = @import("luauc_backend_emit_dispatch");
+const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const ValueSlot = model.ValueSlot;
@@ -27,7 +29,7 @@ pub const Context = struct {
     snapshot: snapshot_v1.Snapshot,
     proto: snapshot_v1.Proto,
     function: snapshot_v1.IrFunction,
-    plan: *const FunctionPlan,
+    plan: *FunctionPlan,
     slots: []const ValueSlot,
     builtin_number_sources: []u32,
     coverage_site_ids: []const u32,
@@ -38,11 +40,19 @@ pub const Context = struct {
     do_arith: ?wasm.FunctionRef,
     compare_any: ?wasm.FunctionRef,
     dupclosure: ?wasm.FunctionRef,
+    dupclosure_capture: ?wasm.FunctionRef,
+    newclosure_empty: ?wasm.FunctionRef,
     newclosure_capture: ?wasm.FunctionRef,
     get_upvalue: ?wasm.FunctionRef,
     set_upvalue: ?wasm.FunctionRef,
     close_upvalues: ?wasm.FunctionRef,
-    call: ?wasm.FunctionRef,
+    prepare_compiled_call: ?wasm.FunctionRef,
+    finish_compiled_call: ?wasm.FunctionRef,
+    count_direct_call: ?wasm.FunctionRef,
+    count_indirect_call: ?wasm.FunctionRef,
+    generated_type: u32,
+    self_function: wasm.FunctionRef,
+    planned_function_id: u32,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
     new_table: ?wasm.FunctionRef,
@@ -67,6 +77,8 @@ pub const Context = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    set_userdata_metatable: ?wasm.FunctionRef,
+    table_store: ?wasm.FunctionRef,
     barrier_table_forward: ?wasm.FunctionRef,
     hash_node_addr: ?wasm.FunctionRef,
     slot_node_addr: ?wasm.FunctionRef,
@@ -92,6 +104,7 @@ pub const Context = struct {
     libm: ?wasm.FunctionRef,
     builtin_type_error: ?wasm.FunctionRef,
     builtin_number: ?wasm.FunctionRef,
+    forn_prepare: ?wasm.FunctionRef,
     buffer_bounds_error: ?wasm.FunctionRef,
     prep_varargs: ?wasm.FunctionRef,
     get_varargs_fixed: ?wasm.FunctionRef,
@@ -102,10 +115,12 @@ pub const Context = struct {
     proto_id_by_bytecode_id: []const u32,
     base_local: u32,
     dispatch_local: u32,
+    loop_branch_depth: u32,
     status_local: u32,
     continuation_local: u32,
     table_index_local: u32,
     call_continuations: []const CallContinuation,
+    continuation_indices: []const u32,
     string_keys: *StringKeyPool,
 
     // core
@@ -127,13 +142,14 @@ pub const Context = struct {
     pub const requireInstructionStore = core.requireInstructionStore;
     pub const requireTValueStore = core.requireTValueStore;
     pub const initializedCapture = core.initializedCapture;
-    pub const newClosurePatternContaining = core.newClosurePatternContaining;
+
     pub const isDupClosureCapture = core.isDupClosureCapture;
     pub const setUpvaluePattern = core.setUpvaluePattern;
     pub const emitCopyTValueRegisters = core.emitCopyTValueRegisters;
     pub const emitStoreTValueOperand = core.emitStoreTValueOperand;
     pub const emitCopyTValueRegisterToAddress = core.emitCopyTValueRegisterToAddress;
     pub const emitStoreSplitTValue = core.emitStoreSplitTValue;
+    pub const emitLoadEnv = core.emitLoadEnv;
     pub const emitVmConstantAddress = core.emitVmConstantAddress;
     pub const emitI32Value = core.emitI32Value;
     pub const emitPointerValue = core.emitPointerValue;
@@ -170,11 +186,12 @@ pub const Context = struct {
     pub const emitStoreI64 = scalar.emitStoreI64;
     pub const emitStoreVector = scalar.emitStoreVector;
     pub const emitStoreTValue = scalar.emitStoreTValue;
-    pub const emitGetUpvalue = scalar.emitGetUpvalue;
-    pub const emitNewClosure = scalar.emitNewClosure;
-    pub const emitCaptureCall = scalar.emitCaptureCall;
-    pub const emitSetUpvalue = scalar.emitSetUpvalue;
-    pub const emitCloseUpvalues = scalar.emitCloseUpvalues;
+    pub const emitGetUpvalue = closures.emitGetUpvalue;
+    pub const emitNewClosure = closures.emitNewClosure;
+    pub const emitCaptureCall = closures.emitCaptureCall;
+    pub const emitDupClosureCapture = closures.emitDupClosureCapture;
+    pub const emitSetUpvalue = closures.emitSetUpvalue;
+    pub const emitCloseUpvalues = closures.emitCloseUpvalues;
     pub const emitAddNumber = scalar.emitAddNumber;
     pub const emitUnaryI32 = scalar.emitUnaryI32;
     pub const emitUnaryI64 = scalar.emitUnaryI64;
@@ -236,6 +253,7 @@ pub const Context = struct {
     // memory
     pub const emitCheckDivInt64 = memory.emitCheckDivInt64;
     pub const emitBuiltinTypeError = memory.emitBuiltinTypeError;
+    pub const emitFornPreparation = memory.emitFornPreparation;
     pub const emitCheckTag = memory.emitCheckTag;
     pub const emitInvalidSignedConversion = memory.emitInvalidSignedConversion;
     pub const emitNumToInt = memory.emitNumToInt;
@@ -276,10 +294,7 @@ pub const Context = struct {
     pub const nonnegativeConstant = memory.nonnegativeConstant;
     pub const genericIterationAux = memory.genericIterationAux;
     pub const sameOperand = memory.sameOperand;
-    pub const operandIntConstant = memory.operandIntConstant;
-    pub const compilableBlockContaining = memory.compilableBlockContaining;
     pub const bufferAccessWidth = memory.bufferAccessWidth;
-    pub const bufferIndexOffset = memory.bufferIndexOffset;
     pub const bufferOperationOwnedByRange = memory.bufferOperationOwnedByRange;
     pub const integerCreatePatternAt = memory.integerCreatePatternAt;
     pub const emitIntegerCreate = memory.emitIntegerCreate;
@@ -290,48 +305,42 @@ pub const Context = struct {
     pub const emitTableLayoutGuard = table_values.emitTableLayoutGuard;
     pub const emitForwardTableBarrier = table_values.emitForwardTableBarrier;
     pub const emitGeneralTableOperation = table_values.emitGeneralTableOperation;
-    pub const supportsGeneralTableFallback = table_values.supportsGeneralTableFallback;
+    pub const supportsGeneralTableFallback = admission.supportsGeneralTableFallback;
 
     // allocations
     pub const tableAllocationPatternAt = allocations.tableAllocationPatternAt;
     pub const isDeferredTableInitializationCommand = allocations.isDeferredTableInitializationCommand;
-    pub const checkGcClosesDeferredTableAllocation = allocations.checkGcClosesDeferredTableAllocation;
     pub const userdataWriteWidth = allocations.userdataWriteWidth;
     pub const userdataAllocationPatternAt = allocations.userdataAllocationPatternAt;
-    pub const userdataAllocationPatternContaining = allocations.userdataAllocationPatternContaining;
     pub const materializedConstantTag = allocations.materializedConstantTag;
     pub const constantLoadPatternAt = allocations.constantLoadPatternAt;
-    pub const constantLoadPatternContaining = allocations.constantLoadPatternContaining;
     pub const emitConstantLoad = allocations.emitConstantLoad;
     pub const constantTruthyFallbackPatternAt = allocations.constantTruthyFallbackPatternAt;
-    pub const constantTruthyFallbackPatternContaining = allocations.constantTruthyFallbackPatternContaining;
     pub const emitConstantTruthyFallback = allocations.emitConstantTruthyFallback;
     pub const dupTablePatternAt = allocations.dupTablePatternAt;
-    pub const dupTablePatternContaining = allocations.dupTablePatternContaining;
     pub const emitDupTable = allocations.emitDupTable;
     pub const tableRegisterForPointer = allocations.tableRegisterForPointer;
     pub const dupTableRegisterForPointer = allocations.dupTableRegisterForPointer;
     pub const literalFieldSetPatternAt = allocations.literalFieldSetPatternAt;
-    pub const literalFieldSetPatternContaining = allocations.literalFieldSetPatternContaining;
+    pub const guardedLiteralFieldSetPatternAt = allocations.guardedLiteralFieldSetPatternAt;
     pub const emitLiteralFieldSet = allocations.emitLiteralFieldSet;
     pub const tableInsertAppendPatternAt = allocations.tableInsertAppendPatternAt;
-    pub const tableInsertAppendPatternContaining = allocations.tableInsertAppendPatternContaining;
     pub const emitTableInsertAppend = allocations.emitTableInsertAppend;
 
     // namecall
     pub const blockReferenceCount = namecall.blockReferenceCount;
     pub const plainTableNamecallPattern = namecall.plainTableNamecallPattern;
-    pub const isBypassedPlainTableNamecallBlock = namecall.isBypassedPlainTableNamecallBlock;
+    pub const isBypassedPlainTableNamecallBlock = admission.isBypassedPlainTableNamecallBlock;
     pub const emitPlainTableNamecallBlock = namecall.emitPlainTableNamecallBlock;
     pub const emitFallbackNamecall = namecall.emitFallbackNamecall;
     pub const emitPlainTableNamecallOperation = namecall.emitPlainTableNamecallOperation;
-    pub const tableAllocationPatternContaining = namecall.tableAllocationPatternContaining;
+
     pub const emitTableAllocation = namecall.emitTableAllocation;
     pub const emitUserdataAllocationInstruction = namecall.emitUserdataAllocationInstruction;
+    pub const emitNewUserdata = namecall.emitNewUserdata;
     pub const emitSetList = namecall.emitSetList;
     pub const commandRangeMatches = namecall.commandRangeMatches;
     pub const concatPatternAt = namecall.concatPatternAt;
-    pub const concatPatternContaining = namecall.concatPatternContaining;
     pub const emitConcat = namecall.emitConcat;
 
     // builtin_patterns
@@ -355,6 +364,7 @@ pub const Context = struct {
     pub const inlineStringGetPatternAt = builtin_patterns.inlineStringGetPatternAt;
     pub const inlineGeneralStringSetPatternAt = builtin_patterns.inlineGeneralStringSetPatternAt;
     pub const inlinePreloadedStringSetPatternAt = builtin_patterns.inlinePreloadedStringSetPatternAt;
+    pub const inlineOwnedStringSetPatternAt = builtin_patterns.inlineOwnedStringSetPatternAt;
     pub const inlineStringSetPatternAt = builtin_patterns.inlineStringSetPatternAt;
     pub const stringTablePattern = builtin_patterns.stringTablePattern;
 
@@ -365,26 +375,28 @@ pub const Context = struct {
     pub const globalHeadPatternAt = tables.globalHeadPatternAt;
     pub const genericTableFallback = tables.genericTableFallback;
     pub const inlineGenericTableSetPatternAt = tables.inlineGenericTableSetPatternAt;
-    pub const inlineGenericTableSetPatternContaining = tables.inlineGenericTableSetPatternContaining;
     pub const semanticTableReloadPatternAt = tables.semanticTableReloadPatternAt;
-    pub const semanticTableReloadPatternContaining = tables.semanticTableReloadPatternContaining;
     pub const emitSemanticTableReload = tables.emitSemanticTableReload;
     pub const emitDirectGenericTableOperation = tables.emitDirectGenericTableOperation;
     pub const genericTableSetPattern = tables.genericTableSetPattern;
     pub const genericTableGetPattern = tables.genericTableGetPattern;
     pub const constantGenericTableGetPattern = tables.constantGenericTableGetPattern;
     pub const inlineConstantTableGetPatternAt = tables.inlineConstantTableGetPatternAt;
-    pub const inlineConstantTableGetPatternContaining = tables.inlineConstantTableGetPatternContaining;
     pub const genericTablePattern = tables.genericTablePattern;
     pub const arraySetPattern = tables.arraySetPattern;
     pub const arrayGetPattern = tables.arrayGetPattern;
     pub const trustedArrayGetPattern = tables.trustedArrayGetPattern;
     pub const trustedArrayAddress = tables.trustedArrayAddress;
     pub const inlineArrayGetPatternAt = tables.inlineArrayGetPatternAt;
-    pub const inlineArrayGetPatternContaining = tables.inlineArrayGetPatternContaining;
     pub const emitInlineArrayGet = tables.emitInlineArrayGet;
+    pub const emitGeneralGetGlobal = tables.emitGeneralGetGlobal;
+    pub const emitGeneralSetGlobal = tables.emitGeneralSetGlobal;
+    pub const emitGeneralGetTableKs = tables.emitGeneralGetTableKs;
+    pub const emitGeneralSetTableKs = tables.emitGeneralSetTableKs;
     pub const tableLenPattern = tables.tableLenPattern;
     pub const dynamicLengthPattern = tables.dynamicLengthPattern;
+    pub const emitPlainTableLen = tables.emitPlainTableLen;
+    pub const emitGeneralTableLen = tables.emitGeneralTableLen;
 
     // operators
     pub const powPattern = operators.powPattern;
@@ -407,15 +419,17 @@ pub const Context = struct {
     pub const xnextFastPreparationPattern = iteration.xnextFastPreparationPattern;
     pub const emitXnextFastPreparationBlock = iteration.emitXnextFastPreparationBlock;
     pub const emitXnextPreparationBlock = iteration.emitXnextPreparationBlock;
-    pub const supportsGenericIterationFallback = iteration.supportsGenericIterationFallback;
-    pub const supportsSpecializedIpairsFallback = iteration.supportsSpecializedIpairsFallback;
+    pub const supportsGenericIterationFallback = admission.supportsGenericIterationFallback;
+    pub const supportsSpecializedIpairsFallback = admission.supportsSpecializedIpairsFallback;
     pub const specializedIpairsPattern = iteration.specializedIpairsPattern;
-    pub const isBypassedSpecializedIpairsPublishBlock = iteration.isBypassedSpecializedIpairsPublishBlock;
+    pub const isBypassedSpecializedIpairsPublishBlock = admission.isBypassedSpecializedIpairsPublishBlock;
     pub const emitGenericIterationCall = iteration.emitGenericIterationCall;
     pub const emitGenericIterationFinish = iteration.emitGenericIterationFinish;
     pub const emitGenericIterationFallbackCall = iteration.emitGenericIterationFallbackCall;
     pub const emitGenericIterationBlock = iteration.emitGenericIterationBlock;
     pub const emitGenericIterationPrep = iteration.emitGenericIterationPrep;
+    pub const emitGeneralForgLoop = iteration.emitGeneralForgLoop;
+    pub const emitGeneralForgLoopFallback = iteration.emitGeneralForgLoopFallback;
     pub const emitArrayOperationBlock = iteration.emitArrayOperationBlock;
     pub const emitArrayOperation = iteration.emitArrayOperation;
     pub const semanticArrayOperation = iteration.semanticArrayOperation;
@@ -428,33 +442,41 @@ pub const Context = struct {
     pub const emitGenericTableDirectAttempt = iteration.emitGenericTableDirectAttempt;
     pub const emitGenericTableOperationBlock = iteration.emitGenericTableOperationBlock;
     pub const emitInlineGenericTableSet = iteration.emitInlineGenericTableSet;
-    pub const isBypassedStringLinearizedBlock = iteration.isBypassedStringLinearizedBlock;
-    pub const isBypassedGenericTableLinearizedBlock = iteration.isBypassedGenericTableLinearizedBlock;
-    pub const isBypassedGlobalLinearizedBlock = iteration.isBypassedGlobalLinearizedBlock;
-    pub const isBypassedPowLinearizedBlock = iteration.isBypassedPowLinearizedBlock;
-    pub const isBypassedConstantArithmeticLinearizedBlock = iteration.isBypassedConstantArithmeticLinearizedBlock;
-    pub const isBypassedStringEqualityBlock = iteration.isBypassedStringEqualityBlock;
+    pub const isBypassedStringLinearizedBlock = admission.isBypassedStringLinearizedBlock;
+    pub const isBypassedGenericTableLinearizedBlock = admission.isBypassedGenericTableLinearizedBlock;
+    pub const isBypassedGlobalLinearizedBlock = admission.isBypassedGlobalLinearizedBlock;
+    pub const isBypassedPowLinearizedBlock = admission.isBypassedPowLinearizedBlock;
+    pub const isBypassedConstantArithmeticLinearizedBlock = admission.isBypassedConstantArithmeticLinearizedBlock;
+    pub const isBypassedStringEqualityBlock = admission.isBypassedStringEqualityBlock;
 
     // control
     pub const sourceLine = control.sourceLine;
     pub const emitSavedPcLocation = control.emitSavedPcLocation;
     pub const emitPcLocation = control.emitPcLocation;
     pub const emitDoArith = control.emitDoArith;
+    pub const emitDoLen = control.emitDoLen;
+    pub const emitGeneralConcat = control.emitGeneralConcat;
     pub const comparisonOperation = control.comparisonOperation;
     pub const emitCompareAny = control.emitCompareAny;
     pub const stringEqualityPattern = control.stringEqualityPattern;
     pub const emitStringEqualityBlock = control.emitStringEqualityBlock;
-    pub const supportsArithmeticFallback = control.supportsArithmeticFallback;
-    pub const supportsComparisonFallback = control.supportsComparisonFallback;
-    pub const supportsMaterializedComparisonFallback = control.supportsMaterializedComparisonFallback;
-    pub const supportsFallback = control.supportsFallback;
-    pub const supportsNamecallFallback = control.supportsNamecallFallback;
-    pub const supportsOrdinaryCallFallback = control.supportsOrdinaryCallFallback;
-    pub const isOwnedSemanticTableFallbackBlock = control.isOwnedSemanticTableFallbackBlock;
-    pub const isOwnedDynamicLengthFallbackBlock = control.isOwnedDynamicLengthFallbackBlock;
-    pub const isBypassedEmissionBlock = control.isBypassedEmissionBlock;
-    pub const isBypassedXnextFastPreparationBlock = control.isBypassedXnextFastPreparationBlock;
-    pub const isFastcallFallbackBlock = control.isFastcallFallbackBlock;
+    pub const supportsArithmeticFallback = admission.supportsArithmeticFallback;
+    pub const supportsComparisonFallback = admission.supportsComparisonFallback;
+    pub const supportsMaterializedComparisonFallback = admission.supportsMaterializedComparisonFallback;
+    pub const supportsLengthFallback = admission.supportsLengthFallback;
+    pub fn supportsFallback(self: anytype, block: snapshot_v1.IrBlock) model.Error!bool {
+        return admission.supportsFallback(self, block);
+    }
+    pub const supportsNamecallFallback = admission.supportsNamecallFallback;
+    pub const supportsOrdinaryCallFallback = admission.supportsOrdinaryCallFallback;
+    pub const ordinaryCallFallbackTarget = admission.ordinaryCallFallbackTarget;
+    pub const isOwnedSemanticTableFallbackBlock = admission.isOwnedSemanticTableFallbackBlock;
+    pub const isOwnedDynamicLengthFallbackBlock = admission.isOwnedDynamicLengthFallbackBlock;
+    pub fn isBypassedEmissionBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) model.Error!bool {
+        return admission.isBypassedEmissionBlock(self, block_id, block);
+    }
+    pub const isBypassedXnextFastPreparationBlock = admission.isBypassedXnextFastPreparationBlock;
+    pub const isFastcallFallbackBlock = admission.isFastcallFallbackBlock;
     pub const emitInterrupt = control.emitInterrupt;
     pub const emitCoverage = control.emitCoverage;
     pub const emitJump = control.emitJump;
@@ -468,7 +490,7 @@ pub const Context = struct {
     pub const emitJumpCompareNumber = control.emitJumpCompareNumber;
     pub const emitJumpFornLoopCondition = control.emitJumpFornLoopCondition;
     pub const emitReturn = control.emitReturn;
-    pub const emitDupClosure = control.emitDupClosure;
+    pub const emitDupClosure = closures.emitDupClosure;
     pub const callContinuation = control.callContinuation;
     pub const emitExchangeContinuation = control.emitExchangeContinuation;
     pub const emitUnexpectedContinuationReturn = control.emitUnexpectedContinuationReturn;
@@ -481,7 +503,11 @@ pub const Context = struct {
     pub const vmString = calls.vmString;
     pub const builtinIdentityMatches = calls.builtinIdentityMatches;
     pub const builtinFallback = calls.builtinFallback;
+    pub const guardFailureBlock = calls.guardFailureBlock;
+    pub const isGuardFailure = calls.isGuardFailure;
+    pub const guardFailureIsBuiltin = calls.guardFailureIsBuiltin;
     pub const emitSingleGlobalImport = calls.emitSingleGlobalImport;
+    pub const emitDecodedGlobalImport = calls.emitDecodedGlobalImport;
     pub const staticRequireTarget = calls.staticRequireTarget;
     pub const emitStaticRequire = calls.emitStaticRequire;
     pub const isTableInsertAppendSafeEnv = calls.isTableInsertAppendSafeEnv;
@@ -491,6 +517,7 @@ pub const Context = struct {
     pub const emitAdjustStackDynamic = calls.emitAdjustStackDynamic;
     pub const emitAdjustStackToTop = calls.emitAdjustStackToTop;
     pub const emitDirectFastcall = calls.emitDirectFastcall;
+    pub const emitGeneralInvokeFastcall = calls.emitGeneralInvokeFastcall;
     pub const emitFastcallCluster = calls.emitFastcallCluster;
     pub const isFastcallFallback = calls.isFastcallFallback;
     pub const emitFastcallFallbackBlock = calls.emitFastcallFallbackBlock;

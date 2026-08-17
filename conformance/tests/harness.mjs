@@ -9,15 +9,64 @@ const packageFunctionSymbols = (count) => Array.from(
   (_, id) => `luauc_runtime_v1_function_${String(id).padStart(8, "0")}`,
 );
 const packageSymbols = packageFunctionSymbols(3);
+const preparedCallImports = [
+  ["env", "luauc_runtime_v1_prepare_compiled_call", "function"],
+  ["env", "luauc_runtime_v1_finish_compiled_call", "function"],
+  ["env", "luauc_runtime_v1_count_direct_call", "function"],
+  ["env", "luauc_runtime_v1_count_indirect_call", "function"],
+];
+const preparedCallScratch = 20000;
+const preparedMetaScratch = 20032;
+const PREPARED_CALL_STATUS = 4;
 
-function runfile(relative, variable) {
+function withPreparedCallImports(expected) {
+  return expected.flatMap((entry) => entry[1] === "luauc_runtime_v1_call" ? preparedCallImports : [entry]);
+}
+
+function functionTableIndex(instance, fn) {
+  const table = instance.exports.__indirect_function_table;
+  if (!table) throw new Error("generated module has no function table");
+  for (let index = 0; index < table.length; index++) {
+    try {
+      if (table.get(index) === fn) return index;
+    } catch {
+      // empty slot
+    }
+  }
+  for (let index = 0; index < table.length; index++) {
+    try {
+      table.set(index, fn);
+      return index;
+    } catch {
+      // immutable slot
+    }
+  }
+  throw new Error("cannot place callee in the function table");
+}
+
+function writePreparedCall(view, tableIndex, functionId) {
+  view.setUint32(preparedCallScratch, PREPARED_CALL_STATUS, true);
+  view.setUint32(preparedCallScratch + 4, tableIndex, true);
+  view.setUint32(preparedCallScratch + 8, preparedMetaScratch, true);
+  view.setUint32(preparedMetaScratch + 44, functionId, true);
+  return preparedCallScratch;
+}
+
+function writePreparedDone(view) {
+  view.setUint32(preparedCallScratch, 0, true);
+  view.setUint32(preparedCallScratch + 4, 0, true);
+  view.setUint32(preparedCallScratch + 8, 0, true);
+  return preparedCallScratch;
+}
+
+export function runfile(relative, variable) {
   if (!relative) throw new Error(`${variable} is not set`);
   if (relative.startsWith("/")) return relative;
   if (!process.env.RUNFILES_DIR) throw new Error("RUNFILES_DIR is not set");
   return join(process.env.RUNFILES_DIR, relative);
 }
 
-async function instantiateZeroImport(path, label) {
+export async function instantiateZeroImport(path, label) {
   const module = await WebAssembly.compile(readFileSync(path));
   const imports = WebAssembly.Module.imports(module);
   if (imports.length !== 0) throw new Error(`${label} is not zero-import: ${JSON.stringify(imports)}`);
@@ -36,7 +85,7 @@ const wasmLd = runfile(process.env.LUAUC_WASM_LD, "LUAUC_WASM_LD");
 
 const encoder = new TextEncoder();
 
-function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans = null) {
+export function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans = null) {
   const api = frontend.exports;
   api.luauc_frontend_v1_init();
   const source = encoder.encode(sourceText);
@@ -94,7 +143,7 @@ function frontendSnapshot(sourceText, chunkText, coverageLevel = 0, inlinePlans 
   return snapshot;
 }
 
-function backendObject(snapshot, functionId) {
+export function backendObject(snapshot, functionId) {
   const api = backend.exports;
   const snapshotPointer = api.luauc_backend_v1_alloc(snapshot.length);
   const resultPointer = api.luauc_backend_v1_alloc(24);
@@ -120,7 +169,7 @@ function backendObject(snapshot, functionId) {
   return object;
 }
 
-function backendPackage(snapshot) {
+export function backendPackage(snapshot) {
   const api = backend.exports;
   const snapshotPointer = api.luauc_backend_v1_alloc(snapshot.length);
   const resultPointer = api.luauc_backend_v1_alloc(24);
@@ -146,7 +195,7 @@ function backendPackage(snapshot) {
   return object;
 }
 
-function staticPackageFrame(moduleName, snapshot) {
+export function staticPackageFrame(moduleName, snapshot) {
   const name = Buffer.from(moduleName);
   const sourceName = Buffer.from(`@${moduleName}.luau`);
   const headerSize = 24;
@@ -173,7 +222,7 @@ function staticPackageFrame(moduleName, snapshot) {
   return frame;
 }
 
-function backendStaticPackage(frame) {
+export function backendStaticPackage(frame) {
   const api = backend.exports;
   const framePointer = api.luauc_backend_v1_alloc(frame.length);
   const resultPointer = api.luauc_backend_v1_alloc(24);
@@ -199,7 +248,7 @@ function backendStaticPackage(frame) {
   return object;
 }
 
-function snapshotSection(snapshot, wantedKind) {
+export function snapshotSection(snapshot, wantedKind) {
   const sectionCount = snapshot.readUInt32LE(204);
   for (let index = 0; index < sectionCount; index++) {
     const descriptor = 224 + index * 32;
@@ -213,8 +262,9 @@ function snapshotSection(snapshot, wantedKind) {
   throw new Error(`snapshot is missing section ${wantedKind}`);
 }
 
-function snapshotShape(snapshot) {
+export function snapshotShape(snapshot) {
   const protos = snapshotSection(snapshot, 3);
+  const bytecode = snapshotSection(snapshot, 5);
   const lineinfo = snapshotSection(snapshot, 11);
   const abslineinfo = snapshotSection(snapshot, 12);
   const functions = snapshotSection(snapshot, 15);
@@ -245,6 +295,16 @@ function snapshotShape(snapshot) {
       if (functionId >= functions.count) throw new Error(`function ${functionId} is out of bounds`);
       return snapshot.readUInt32LE(functionOffset(functionId) + 28);
     },
+    bytecodeWord(functionId, pc) {
+      if (functionId >= functions.count) throw new Error(`function ${functionId} is out of bounds`);
+      const protoId = snapshot.readUInt32LE(functionOffset(functionId) + 4);
+      if (protoId >= protos.count) throw new Error(`proto ${protoId} is out of bounds`);
+      const proto = protos.offset + protoId * protos.recordSize;
+      const codeStart = snapshot.readUInt32LE(proto + 36);
+      const codeCount = snapshot.readUInt32LE(proto + 40);
+      if (pc >= codeCount) throw new Error(`bytecode ${functionId}/${pc} is out of bounds`);
+      return snapshot.readUInt32LE(bytecode.offset + (codeStart + pc) * bytecode.recordSize);
+    },
     sourceLine(protoId, pc) {
       if (protoId >= protos.count) throw new Error(`proto ${protoId} is out of bounds`);
       const proto = protos.offset + protoId * protos.recordSize;
@@ -270,6 +330,7 @@ function snapshotShape(snapshot) {
       const operandCount = snapshot.readUInt32LE(instructionOffset + 12);
       return {
         command: snapshot[instructionOffset],
+        offset: instructionOffset,
         operandCount,
         operand(operandId) {
           if (operandId >= operandCount)
@@ -290,7 +351,7 @@ function snapshotShape(snapshot) {
   };
 }
 
-function capturedSnapshotOffsets(snapshot) {
+export function capturedSnapshotOffsets(snapshot) {
   const protos = snapshotSection(snapshot, 3);
   const functions = snapshotSection(snapshot, 15);
   const blocks = snapshotSection(snapshot, 16);
@@ -322,7 +383,7 @@ function capturedSnapshotOffsets(snapshot) {
   };
 }
 
-function referenceSnapshotOffsets(snapshot) {
+export function referenceSnapshotOffsets(snapshot) {
   const protos = snapshotSection(snapshot, 3);
   const functions = snapshotSection(snapshot, 15);
   const blocks = snapshotSection(snapshot, 16);
@@ -360,7 +421,7 @@ function referenceSnapshotOffsets(snapshot) {
   };
 }
 
-function expectPackageRejection(snapshot, label) {
+export function expectPackageRejection(snapshot, label) {
   try {
     backendPackage(snapshot);
   } catch {
@@ -369,7 +430,7 @@ function expectPackageRejection(snapshot, label) {
   throw new Error(`package mutation was accepted: ${label}`);
 }
 
-function executeForwardedCapturePackageShape() {
+export function executeForwardedCapturePackageShape() {
   const name = "forwarded-capture-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_FORWARDED_CAPTURE_SOURCE, "LUAUC_FORWARDED_CAPTURE_SOURCE"),
@@ -395,7 +456,7 @@ function executeForwardedCapturePackageShape() {
   return { objectSize: first.length };
 }
 
-async function executeRecursiveCallPackageShape() {
+export async function executeRecursiveCallPackageShape() {
   const name = "recursive-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_RECURSIVE_CALL_SOURCE, "LUAUC_RECURSIVE_CALL_SOURCE"),
@@ -479,7 +540,7 @@ async function executeRecursiveCallPackageShape() {
   return { objectSize: first.length, functionCount: generatedFunctions.length };
 }
 
-async function executeCoveragePackageShape() {
+export async function executeCoveragePackageShape() {
   const name = "coverage-package-shape";
   const source = "return function(value) if value > 0 then return value + 1 end return value - 1 end";
   const firstSnapshot = frontendSnapshot(source, "@aot/coverage_shape.luau", 1);
@@ -521,7 +582,42 @@ async function executeCoveragePackageShape() {
   return { objectSize: first.length, sites: irSites };
 }
 
-function executeEmbedNamecallFamilyPackageShape() {
+export function executeUserdataHooksPackageShape() {
+  const name = "userdata-hooks-package-shape";
+  const source = readFileSync(
+    runfile(process.env.LUAUC_USERDATA_HOOKS_SOURCE, "LUAUC_USERDATA_HOOKS_SOURCE"),
+    "utf8",
+  );
+  const snapshot = frontendSnapshot(source, "@userdata_hooks.luau");
+  const shape = snapshotShape(snapshot);
+  const commandCounts = new Map();
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
+      const command = shape.instruction(functionId, instructionId).command;
+      commandCounts.set(command, (commandCounts.get(command) ?? 0) + 1);
+    }
+    try {
+      backendObject(snapshot, functionId);
+    } catch (error) {
+      const commands = Array.from(
+        { length: shape.instructionCount(functionId) },
+        (_, id) => {
+          const instruction = shape.instruction(functionId, id);
+          const ops = Array.from({ length: instruction.operandCount }, (_, operandId) => {
+            const operand = instruction.operand(operandId);
+            return `${operand.kind}:${operand.value}`;
+          });
+          return `${id}:${instruction.command}(${ops.join(",")})`;
+        },
+      );
+      throw new Error(`${name}: function ${functionId} failed: ${error.message}; commands ${commands.join(" ")}`);
+    }
+  }
+  const object = backendPackage(snapshot);
+  return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
+}
+
+export function executeEmbedNamecallFamilyPackageShape() {
   const name = "embed-namecall-family-package-shape";
   const source = readFileSync(
     runfile(process.env.LUAUC_EMBED_LIB_SOURCE, "LUAUC_EMBED_LIB_SOURCE"),
@@ -531,8 +627,37 @@ function executeEmbedNamecallFamilyPackageShape() {
   const shape = snapshotShape(snapshot);
   const commandCounts = new Map();
   const operandKinds = new Map();
+  const safeEnvironmentVmExits = [];
   let arrayAddressOperand = null;
+  let crossBlockTablePointerLoad = null;
+  let setListCountOperand = null;
+  let setListSourceOperand = null;
+  let setListKnownSizeOperand = null;
+  let dupTableConstantOperand = null;
+  let tableLenPointerOperand = null;
+  let newTableNodeOperand = null;
+  let deferredAllocAfter = null;
+  const setUpvalueIndexes = new Set();
+  let newclosureEnvOperand = null;
+  let captureKindOperand = null;
+  let dupclosureConstantOperand = null;
+  const importDepths = new Set();
+  let importPayload1Offset = null;
+  let getglobalKeyOperand = null;
+  let globalEnvPointerOperand = null;
+  let ksFallbackCommand = null;
+  let ksKeyOperand = null;
+  let ksTableOperand = null;
+  let ksRejoinOperand = null;
+  let ksJumpOffset = null;
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    const blockByInstruction = new Map();
+    for (let blockId = 0; blockId < shape.blockCount(functionId); blockId++) {
+      const block = shape.block(functionId, blockId);
+      if (block.start === 0xffffffff) continue;
+      for (let instructionId = block.start; instructionId <= block.finish; instructionId++)
+        blockByInstruction.set(instructionId, blockId);
+    }
     for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
       const instruction = shape.instruction(functionId, instructionId);
       const command = instruction.command;
@@ -543,6 +668,91 @@ function executeEmbedNamecallFamilyPackageShape() {
       );
       if (command === 9 && arrayAddressOperand === null)
         arrayAddressOperand = instruction.operand(0);
+      if (command === 167 && instruction.operandCount >= 2 && instruction.operand(1).kind === 4)
+        newclosureEnvOperand ??= instruction.operand(1);
+      if (command === 152 && instruction.operandCount >= 2)
+        captureKindOperand ??= instruction.operand(1);
+      if (command === 168 && instruction.operandCount >= 3 && instruction.operand(2).kind === 7)
+        dupclosureConstantOperand ??= instruction.operand(2);
+      if (command === 127 && instruction.operandCount >= 2 && instruction.operand(1).kind === 7) {
+        const protos = snapshotSection(snapshot, 3);
+        const vm = snapshotSection(snapshot, 6);
+        const functions = snapshotSection(snapshot, 15);
+        const protoId = snapshot.readUInt32LE(functions.offset + functionId * functions.recordSize + 4);
+        const proto = protos.offset + protoId * protos.recordSize;
+        const constant = vm.offset +
+          (snapshot.readUInt32LE(proto + 44) + instruction.operand(1).value) * vm.recordSize;
+        importDepths.add(snapshot.readUInt32LE(constant + 8));
+        importPayload1Offset ??= constant + 8;
+      }
+      if ((command === 160 || command === 161) && instruction.operandCount >= 3)
+        getglobalKeyOperand ??= instruction.operand(2);
+      if (command === 10 && instruction.operandCount >= 1 && instruction.operand(0).kind === 4) {
+        const producer = shape.instruction(functionId, instruction.operand(0).value);
+        if (producer.command === 8)
+          globalEnvPointerOperand ??= instruction.operand(0);
+      }
+      if (command === 130 && instruction.operandCount >= 1 && instruction.operand(0).kind === 8)
+        setUpvalueIndexes.add(instruction.operand(0).value);
+      if (command === 98 && tableLenPointerOperand === null)
+        tableLenPointerOperand = instruction.operand(0);
+      if (command === 100 && instruction.operandCount === 2 && newTableNodeOperand === null)
+        newTableNodeOperand = instruction.operand(1);
+      if (command === 101 && instruction.operandCount === 1) {
+        const source = instruction.operand(0);
+        if (source.kind === 4) {
+          const producer = shape.instruction(functionId, source.value);
+          if (producer.command === 2 && producer.operandCount === 1 && producer.operand(0).kind === 7)
+            dupTableConstantOperand ??= producer.operand(0);
+        }
+      }
+      if (command === 153 && instruction.operandCount === 6) {
+        setListCountOperand ??= instruction.operand(3);
+        setListSourceOperand ??= instruction.operand(2);
+        if (instruction.operand(5).kind === 2)
+          setListKnownSizeOperand ??= instruction.operand(5);
+      }
+      if (command === 100 && instruction.operandCount === 2 && deferredAllocAfter === null) {
+        const blockId = blockByInstruction.get(instructionId);
+        const block = blockId === undefined ? null : shape.block(functionId, blockId);
+        if (block && instructionId + 2 <= block.finish) {
+          const storePointer = shape.instruction(functionId, instructionId + 1);
+          const storeTag = shape.instruction(functionId, instructionId + 2);
+          const nextCommand = instructionId + 3 <= block.finish
+            ? shape.instruction(functionId, instructionId + 3).command
+            : null;
+          if (storePointer.command === 15 && storeTag.command === 13 && nextCommand !== 146 && nextCommand !== 0) {
+            deferredAllocAfter = { functionId, after: instructionId + 2 };
+          }
+        }
+      }
+      if (command === 21 && instruction.operandCount >= 3 && instruction.operand(1).kind === 2 &&
+          instruction.operand(2).kind === 4 &&
+          instruction.constant(1).bits === 7n)
+      {
+        const producerId = instruction.operand(2).value;
+        const producer = shape.instruction(functionId, producerId);
+        if (producer.command === 2 && producer.operandCount === 1 && producer.operand(0).kind === 6 &&
+            blockByInstruction.get(producerId) !== blockByInstruction.get(instructionId))
+          crossBlockTablePointerLoad ??= producer.operand(0);
+      }
+      if (command === 135 && instruction.operand(0).kind === 9) {
+        safeEnvironmentVmExits.push(`${functionId}:${instructionId}/pc${instruction.operand(0).value}`);
+      }
+      if ((command === 162 || command === 163) && instruction.operandCount >= 4) {
+        ksFallbackCommand ??= { functionId, instructionId, offset: instruction.offset, command };
+        ksTableOperand ??= instruction.operand(2);
+        ksKeyOperand ??= instruction.operand(3);
+        const blockId = blockByInstruction.get(instructionId);
+        const block = blockId === undefined ? null : shape.block(functionId, blockId);
+        if (block && block.finish > instructionId) {
+          const jump = shape.instruction(functionId, block.finish);
+          if (jump.command === 88 && jump.operandCount === 1) {
+            ksRejoinOperand ??= jump.operand(0);
+            ksJumpOffset ??= jump.offset;
+          }
+        }
+      }
     }
     try {
       backendObject(snapshot, functionId);
@@ -631,7 +841,13 @@ function executeEmbedNamecallFamilyPackageShape() {
       throw new Error(`${name}: function ${functionId} failed: ${error.message}${blockContext}`);
     }
   }
-  for (const command of [1, 2, 7, 9, 10, 11, 21, 97, 103, 104, 125, 126, 133, 134, 136, 137, 138, 139, 149, 164])
+  if (safeEnvironmentVmExits.length)
+    throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
+  for (const command of [
+    1, 2, 7, 8, 9, 10, 11, 12, 21, 33, 83, 97, 98, 100, 101, 102, 103, 104, 123, 124, 125, 126, 128, 129, 130, 131, 132, 133, 134, 135,
+    136, 137, 138, 139, 142, 143, 144, 146, 149, 151, 152, 153, 156, 157, 160, 161, 162, 163, 164, 167, 168, 169, 172, 200,
+    127,
+  ])
     if (!commandCounts.get(command))
       throw new Error(`${name}: natural source did not emit command ${command}`);
   const requireOperandKind = (command, operand, kind) => {
@@ -651,16 +867,146 @@ function executeEmbedNamecallFamilyPackageShape() {
   requireOperandKind(125, 2, 2); // GET_TABLE immediate numeric key
   requireOperandKind(126, 2, 6); // SET_TABLE dynamic TValue key
   requireOperandKind(126, 2, 2); // SET_TABLE immediate numeric key
+  requireOperandKind(135, 0, 5); // CHECK_SAFE_ENV compiled slow arm
+  if (setUpvalueIndexes.size < 2)
+    throw new Error(`${name}: SET_UPVALUE did not emit two distinct vm_upvalue indexes`);
   if (arrayAddressOperand?.kind !== 4)
     throw new Error(`${name}: missing instruction-proven array address`);
   const malformedAddress = Buffer.from(snapshot);
   malformedAddress.writeUInt32LE(0, arrayAddressOperand.offset + 4);
   expectPackageRejection(malformedAddress, "array address without proven table/bounds ownership");
+  if (crossBlockTablePointerLoad === null)
+    throw new Error(`${name}: missing cross-block table-pointer rematerialization evidence`);
+  const malformedTablePointer = Buffer.from(snapshot);
+  malformedTablePointer.writeUInt32LE(0, crossBlockTablePointerLoad.offset + 4);
+  expectPackageRejection(malformedTablePointer, "cross-block table pointer lost its guarded VM register");
+  if (setListCountOperand === null || setListSourceOperand === null)
+    throw new Error(`${name}: missing SETLIST count/source operands`);
+  const malformedSetListCount = Buffer.from(snapshot);
+  malformedSetListCount.writeUInt32LE(0, setListCountOperand.offset + 4);
+  expectPackageRejection(malformedSetListCount, "SETLIST rejected the validated array range");
+  const malformedSetListSource = Buffer.from(snapshot);
+  malformedSetListSource.writeUInt32LE(250, setListSourceOperand.offset + 4);
+  expectPackageRejection(malformedSetListSource, "SETLIST source+count past maxstacksize");
+  if (setListKnownSizeOperand !== null) {
+    const malformedSetListSize = Buffer.from(snapshot);
+    malformedSetListSize.writeUInt32LE(0, setListKnownSizeOperand.offset + 4);
+    expectPackageRejection(malformedSetListSize, "SETLIST known-size constant is below the last written index");
+  }
+  if (dupTableConstantOperand === null)
+    throw new Error(`${name}: missing DUP_TABLE template constant`);
+  const malformedDupTable = Buffer.from(snapshot);
+  malformedDupTable.writeUInt32LE(0, dupTableConstantOperand.offset + 4);
+  expectPackageRejection(malformedDupTable, "DUP_TABLE rejected a non-table template");
+  if (tableLenPointerOperand === null)
+    throw new Error(`${name}: missing TABLE_LEN pointer`);
+  const malformedTableLen = Buffer.from(snapshot);
+  malformedTableLen.writeUInt32LE(0, tableLenPointerOperand.offset + 4);
+  expectPackageRejection(malformedTableLen, "TABLE_LEN pointer lost its guarded VM register");
+  if (newTableNodeOperand === null)
+    throw new Error(`${name}: missing NEW_TABLE node operand`);
+  const malformedNewTableNode = Buffer.from(snapshot);
+  malformedNewTableNode.writeUInt8(1, newTableNodeOperand.offset);
+  expectPackageRejection(malformedNewTableNode, "NEW_TABLE node operand rewritten to a non-uint");
+  if (deferredAllocAfter === null)
+    throw new Error(`${name}: missing deferred NEW_TABLE later CHECK_GC`);
+  const malformedDeferredGc = Buffer.from(snapshot);
+  let removedDeferredGc = false;
+  for (let later = deferredAllocAfter.after + 1; later < shape.instructionCount(deferredAllocAfter.functionId); later++) {
+    const candidate = shape.instruction(deferredAllocAfter.functionId, later);
+    if (candidate.command !== 146) continue;
+    malformedDeferredGc.writeUInt8(0, candidate.offset);
+    removedDeferredGc = true;
+  }
+  if (!removedDeferredGc)
+    throw new Error(`${name}: deferred NEW_TABLE has no later CHECK_GC to delete`);
+  expectPackageRejection(malformedDeferredGc, "deferred NEW_TABLE lost collector ownership");
+  if (captureKindOperand === null)
+    throw new Error(`${name}: missing CAPTURE kind operand`);
+  const malformedCapture = Buffer.from(snapshot);
+  malformedCapture.writeUInt32LE(3, captureKindOperand.offset + 4);
+  expectPackageRejection(malformedCapture, "CAPTURE kind/source no longer matches initialized capture");
+  if (newclosureEnvOperand === null)
+    throw new Error(`${name}: missing NEWCLOSURE env operand`);
+  const malformedEnv = Buffer.from(snapshot);
+  malformedEnv.writeUInt32LE(0, newclosureEnvOperand.offset + 4);
+  expectPackageRejection(malformedEnv, "LOAD_ENV env operand of NEWCLOSURE rewritten away from the previous instruction");
+  if (dupclosureConstantOperand === null)
+    throw new Error(`${name}: missing FALLBACK_DUPCLOSURE child constant`);
+  const malformedDupclosure = Buffer.from(snapshot);
+  malformedDupclosure.writeUInt8(6, dupclosureConstantOperand.offset);
+  expectPackageRejection(malformedDupclosure, "FALLBACK_DUPCLOSURE child proto is not a child");
+  if (!importDepths.has(2) || !importDepths.has(3))
+    throw new Error(`${name}: GET_CACHED_IMPORT did not emit 2-key and 3-key depths: ${[...importDepths]}`);
+  if (importPayload1Offset === null)
+    throw new Error(`${name}: missing GET_CACHED_IMPORT payload1`);
+  const malformedImportZero = Buffer.from(snapshot);
+  malformedImportZero.writeUInt32LE(0, importPayload1Offset);
+  expectPackageRejection(malformedImportZero, "import payload1 rewritten to 0");
+  const malformedImportFour = Buffer.from(snapshot);
+  malformedImportFour.writeUInt32LE(4, importPayload1Offset);
+  expectPackageRejection(malformedImportFour, "import payload1 rewritten to 4");
+  if (getglobalKeyOperand === null)
+    throw new Error(`${name}: missing GETGLOBAL/SETGLOBAL key`);
+  const malformedGlobalKey = Buffer.from(snapshot);
+  malformedGlobalKey.writeUInt8(6, getglobalKeyOperand.offset);
+  expectPackageRejection(malformedGlobalKey, "GETGLOBAL/SETGLOBAL key rewritten to a non-string vm_const");
+  if (globalEnvPointerOperand === null)
+    throw new Error(`${name}: missing global-cluster LOAD_ENV pointer`);
+  const malformedGlobalEnv = Buffer.from(snapshot);
+  malformedGlobalEnv.writeUInt32LE(
+    globalEnvPointerOperand.value === 0 ? 1 : 0,
+    globalEnvPointerOperand.offset + 4,
+  );
+  expectPackageRejection(malformedGlobalEnv, "LOAD_ENV of a global cluster rewritten so GET_SLOT_NODE_ADDR pointer is not that instruction");
+  if (ksFallbackCommand === null || ksKeyOperand === null || ksTableOperand === null)
+    throw new Error(`${name}: missing KS fallback operands`);
+  const malformedKsNop = Buffer.from(snapshot);
+  malformedKsNop.writeUInt8(0, ksFallbackCommand.offset);
+  expectPackageRejection(malformedKsNop, "KS fallback rewritten to NOP");
+  const malformedKsKey = Buffer.from(snapshot);
+  malformedKsKey.writeUInt8(6, ksKeyOperand.offset);
+  expectPackageRejection(malformedKsKey, "KS key no longer a string vm_const");
+  const malformedKsTable = Buffer.from(snapshot);
+  malformedKsTable.writeUInt32LE(250, ksTableOperand.offset + 4);
+  expectPackageRejection(malformedKsTable, "KS table/value register out of frame");
+  if (ksJumpOffset !== null) {
+    const malformedKsRejoin = Buffer.from(snapshot);
+    malformedKsRejoin.writeUInt8(0, ksJumpOffset);
+    expectPackageRejection(malformedKsRejoin, "KS fallback no longer jumps to the fast rejoin");
+  }
   const object = backendPackage(snapshot);
   return { objectSize: object.length, functionCount: shape.functionCount, commandCounts };
 }
 
-async function executeTableInsertAppendPackageShape() {
+export async function executeTableAssignEmptyPackage() {
+  const name = "table-assign-empty-package";
+  const source = readFileSync(
+    runfile(process.env.LUAUC_TABLE_ASSIGN_EMPTY_SOURCE, "LUAUC_TABLE_ASSIGN_EMPTY_SOURCE"),
+    "utf8",
+  );
+  const snapshot = frontendSnapshot(source, "@aot/table_assign_empty.luau");
+  const shape = snapshotShape(snapshot);
+  if (shape.protoCount !== 2 || shape.functionCount !== 2)
+    throw new Error(`${name}: expected one wrapper and one function, got ${shape.protoCount}/${shape.functionCount}`);
+
+  const first = backendPackage(snapshot);
+  const second = backendPackage(snapshot);
+  if (!first.equals(second)) throw new Error(`${name}: package backend is nondeterministic`);
+  const module = await WebAssembly.compile(linkPackage(first, packageFunctionSymbols(2)));
+  const helpers = WebAssembly.Module.imports(module).map(({ name: importName }) => importName);
+  const usesSetNumber = helpers.includes("luauc_runtime_v1_table_set_number");
+  const usesSet = helpers.includes("luauc_runtime_v1_table_set");
+  if (!usesSetNumber && !usesSet)
+    throw new Error(`${name}: ordinary t[k] = {} must import table_set_number or table_set: ${JSON.stringify(helpers)}`);
+  if (helpers.includes("luauc_runtime_v1_table_store"))
+    throw new Error(`${name}: ordinary t[k] = {} imported table_store: ${JSON.stringify(helpers)}`);
+  if (helpers.includes("luauc_runtime_v1_set_userdata_metatable"))
+    throw new Error(`${name}: ordinary t[k] = {} imported set_userdata_metatable: ${JSON.stringify(helpers)}`);
+  return { objectSize: first.length };
+}
+
+export async function executeTableInsertAppendPackageShape() {
   const name = "table-clone-append-package-shape";
   const snapshot = frontendSnapshot(
     "return function(value) local first = { count = 17, kind = 'seed', ready = true } local second = { count = 17, kind = 'seed', ready = true } table.insert(first, value) return first, second end",
@@ -726,8 +1072,16 @@ async function executeTableInsertAppendPackageShape() {
   const barrier = shape.instruction(1, appendStart + 7);
   const tableRegister = pointer.operand(0);
   const sourceRegister = load.operand(0);
+  const appendFailure = readonly.operand(1);
+  const appendFallback = appendFailure.kind === 5 ? shape.block(1, appendFailure.value) : null;
+  const appendFallbackCommands = appendFallback === null ? [] : Array.from(
+    { length: appendFallback.finish - appendFallback.start + 1 },
+    (_, offset) => shape.instruction(1, appendFallback.start + offset).command,
+  );
   if (pointer.command !== 2 || tableRegister.kind !== 6 ||
       readonly.command !== 133 || readonly.operand(0).kind !== 4 || readonly.operand(0).value !== appendStart ||
+      appendFailure.kind !== 5 || !appendFallbackCommands.includes(127) ||
+      !appendFallbackCommands.includes(154) || appendFallbackCommands.at(-1) !== 88 ||
       length.command !== 98 || length.operand(0).kind !== 4 || length.operand(0).value !== appendStart ||
       increment.command !== 22 || increment.operand(0).kind !== 4 || increment.operand(0).value !== appendStart + 2 ||
       increment.constant(1).bits !== 1n ||
@@ -740,6 +1094,15 @@ async function executeTableInsertAppendPackageShape() {
       barrier.operand(1).kind !== 6 || barrier.operand(1).value !== sourceRegister.value || barrier.operand(2).kind !== 1)
     throw new Error(`${name}: optimized append graph changed`);
 
+  const safeEnvironmentVmExits = commands.flatMap((command, instructionId) => {
+    if (command !== 135) return [];
+    const failure = shape.instruction(1, instructionId).operand(0);
+    if (failure.kind !== 9) return [];
+    return [`${instructionId}/pc${failure.value}`];
+  });
+  if (safeEnvironmentVmExits.length)
+    throw new Error(`${name}: safe-environment VM exits ${safeEnvironmentVmExits.join(",")}`);
+
   const object = backendPackage(snapshot);
   const module = await WebAssembly.compile(linkPackage(object, packageFunctionSymbols(2)));
   const helperNames = WebAssembly.Module.imports(module).map(({ name: importName }) => importName);
@@ -750,7 +1113,7 @@ async function executeTableInsertAppendPackageShape() {
   return { objectSize: object.length };
 }
 
-async function executePreloadedFieldAndInvertedCompare() {
+export async function executePreloadedFieldAndInvertedCompare() {
   const name = "preloaded-field-and-inverted-compare";
   const snapshot = frontendSnapshot(
     "return function(target, other) target.generated_by = 'agent-plan' return target ~= other end",
@@ -767,7 +1130,7 @@ async function executePreloadedFieldAndInvertedCompare() {
   return { objectSize: object.length };
 }
 
-async function executeLinearizedStringFieldWrites() {
+export async function executeLinearizedStringFieldWrites() {
   const name = "linearized-string-field-writes";
   const snapshot = frontendSnapshot(
     `local inputPath = arg[1]
@@ -808,7 +1171,7 @@ assert(sys.fs.write(outputPath, json.encode(plan)))`,
   return { objectSize: object.length };
 }
 
-async function executePlainTableNamecallPackageShape() {
+export async function executePlainTableNamecallPackageShape() {
   const name = "plain-table-namecall-package-shape";
   const snapshot = frontendSnapshot(
     "return function(amount) local receiver = { value = 10 } function receiver:bump(delta) return delta + 10 end return receiver:bump(amount) end",
@@ -844,7 +1207,7 @@ async function executePlainTableNamecallPackageShape() {
   const key = branch.operand(1);
   if (check.operand(0).kind !== 4 || check.operand(0).value !== 35 ||
       check.constant(1).kind !== 4 || check.constant(1).bits !== 7n ||
-      check.operand(2).kind !== 9 || check.operand(2).value !== 8 ||
+      check.operand(2).kind !== 5 || check.operand(2).value !== 6 ||
       hash.operand(0).kind !== 4 || hash.operand(0).value !== 37 ||
       hash.constant(1).kind !== 2 || hash.constant(1).bits !== 8460347n ||
       key.kind !== 7 || branch.operand(2).kind !== 5 || branch.operand(2).value !== 7 ||
@@ -891,12 +1254,12 @@ async function executePlainTableNamecallPackageShape() {
   const semanticBlocks = [5, 6, 7, 8].map((blockId) => shape.block(1, blockId));
   const expectedBlocks = [
     { kind: 2, useCount: 3, start: 60, finish: 64 },
-    { kind: 1, useCount: 4, start: 58, finish: 59 },
+    { kind: 1, useCount: 5, start: 58, finish: 59 },
     { kind: 2, useCount: 1, start: 40, finish: 44 },
     { kind: 2, useCount: 1, start: 45, finish: 57 },
   ];
   if (JSON.stringify(semanticBlocks) !== JSON.stringify(expectedBlocks) ||
-      JSON.stringify(blockReferences.slice(5)) !== JSON.stringify([3, 4, 1, 1]))
+      JSON.stringify(blockReferences.slice(5)) !== JSON.stringify([3, 5, 1, 1]))
     throw new Error(`${name}: NAMECALL block ownership changed: ${JSON.stringify({ semanticBlocks, blockReferences })}`);
 
   {
@@ -930,16 +1293,20 @@ async function executePlainTableNamecallPackageShape() {
     .filter(({ module: importModule, kind }) => importModule === "env" && kind === "function")
     .map(({ name: importName }) => importName);
   const expectedNamecallHelpers = [
-    "luauc_runtime_v1_check_node_no_next",
-    "luauc_runtime_v1_hash_node_addr",
     "luauc_runtime_v1_namecall_plain",
-    "luauc_runtime_v1_node_slot_match",
     "luauc_runtime_v1_set_location",
-    "luauc_runtime_v1_slot_node_addr",
-    "luauc_runtime_v1_try_get_tm",
   ];
   if (expectedNamecallHelpers.some((helper) => helpers.filter((candidate) => candidate === helper).length !== 1))
     throw new Error(`${name}: NAMECALL helper/location imports changed: ${JSON.stringify(helpers)}`);
+  for (const obsolete of [
+    "luauc_runtime_v1_check_node_no_next",
+    "luauc_runtime_v1_hash_node_addr",
+    "luauc_runtime_v1_node_slot_match",
+    "luauc_runtime_v1_slot_node_addr",
+    "luauc_runtime_v1_try_get_tm",
+  ])
+    if (helpers.includes(obsolete))
+      throw new Error(`${name}: fused NAMECALL retained raw node helper ${obsolete}`);
 
   const productSource = readFileSync(
     runfile(process.env.LUAUC_TABLE_NAMECALL_SOURCE, "LUAUC_TABLE_NAMECALL_SOURCE"),
@@ -959,7 +1326,7 @@ async function executePlainTableNamecallPackageShape() {
   return { objectSize: productObject.length };
 }
 
-async function executeYieldCallPackage() {
+export async function executeYieldCallPackage() {
   const name = "yield-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_YIELD_CALL_SOURCE, "LUAUC_YIELD_CALL_SOURCE"),
@@ -1001,7 +1368,7 @@ async function executeYieldCallPackage() {
   return { objectSize: first.length, functionCount: functionSymbols.length };
 }
 
-async function executeDynamicArrayTablePackage() {
+export async function executeDynamicArrayTablePackage() {
   const name = "dynamic-array-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE, "LUAUC_DYNAMIC_ARRAY_TABLE_SOURCE"),
@@ -1028,18 +1395,19 @@ async function executeDynamicArrayTablePackage() {
       "luauc_runtime_v1_array_set",
       "luauc_runtime_v1_array_get",
       "luauc_runtime_v1_do_len",
+      "luauc_runtime_v1_table_set_number",
     ].includes(importName));
   if (JSON.stringify(helpers) !== JSON.stringify([
     "luauc_runtime_v1_new_table",
     "luauc_runtime_v1_set_list",
-    "luauc_runtime_v1_array_set",
     "luauc_runtime_v1_array_get",
     "luauc_runtime_v1_do_len",
+    "luauc_runtime_v1_table_set_number",
   ])) throw new Error(`${name}: unexpected table helper imports ${JSON.stringify(helpers)}`);
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeDynamicHashTablePackage() {
+export async function executeDynamicHashTablePackage() {
   const name = "dynamic-hash-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_DYNAMIC_HASH_TABLE_SOURCE, "LUAUC_DYNAMIC_HASH_TABLE_SOURCE"),
@@ -1088,7 +1456,7 @@ async function executeDynamicHashTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeDynamicStringPackage() {
+export async function executeDynamicStringPackage() {
   const name = "dynamic-string-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_DYNAMIC_STRING_SOURCE, "LUAUC_DYNAMIC_STRING_SOURCE"),
@@ -1139,7 +1507,7 @@ async function executeDynamicStringPackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGenericIterationPackage() {
+export async function executeGenericIterationPackage() {
   const name = "generic-iteration-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_GENERIC_ITERATION_SOURCE, "LUAUC_GENERIC_ITERATION_SOURCE"),
@@ -1198,7 +1566,7 @@ async function executeGenericIterationPackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGenericTablePackage() {
+export async function executeGenericTablePackage() {
   const name = "generic-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_GENERIC_TABLE_SOURCE, "LUAUC_GENERIC_TABLE_SOURCE"),
@@ -1269,7 +1637,7 @@ async function executeGenericTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGeneralDynamicObjectGraph() {
+export async function executeGeneralDynamicObjectGraph() {
   const name = "general-dynamic-object-graph";
   const source = `return function(object, key, value)
     object[key] = value
@@ -1315,7 +1683,7 @@ end`;
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executePowMetamethodGraph() {
+export async function executePowMetamethodGraph() {
   const name = "pow-metamethod-graph";
   const snapshot = frontendSnapshot(
     "return function(left, right) return left ^ right end",
@@ -1349,7 +1717,7 @@ async function executePowMetamethodGraph() {
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executeRepeatedPowMetamethodGraph() {
+export async function executeRepeatedPowMetamethodGraph() {
   const name = "repeated-pow-metamethod-graph";
   const snapshot = frontendSnapshot(
     "return function(left, right) local value = left ^ right; value = value ^ right; value = value ^ right; return value end",
@@ -1393,7 +1761,7 @@ async function executeRepeatedPowMetamethodGraph() {
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executeMixedTablePackage() {
+export async function executeMixedTablePackage() {
   const name = "mixed-table-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_MIXED_TABLE_SOURCE, "LUAUC_MIXED_TABLE_SOURCE"),
@@ -1478,7 +1846,7 @@ async function executeMixedTablePackage() {
   return { objectSize: first.length, functionCount: 3 };
 }
 
-async function executeGlobalStatePackage() {
+export async function executeGlobalStatePackage() {
   const name = "global-state-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_GLOBAL_STATE_SOURCE, "LUAUC_GLOBAL_STATE_SOURCE"),
@@ -1486,43 +1854,43 @@ async function executeGlobalStatePackage() {
   );
   const snapshot = frontendSnapshot(source, "@aot/global_state.luau");
   const shape = snapshotShape(snapshot);
-  const globalImport = shape.instruction(1, 1);
-  const getEnv = shape.instruction(1, 2);
-  const getSlot = shape.instruction(1, 3);
-  const getMatch = shape.instruction(1, 4);
-  const getFallback = shape.instruction(1, 8);
-  const setEnv = shape.instruction(1, 23);
-  const setSlot = shape.instruction(1, 24);
-  const setMatch = shape.instruction(1, 25);
-  const readonly = shape.instruction(1, 26);
-  const barrier = shape.instruction(1, 29);
-  const setFallback = shape.instruction(1, 31);
-  if (snapshot.length !== 8333 || shape.protoCount !== 2 || shape.functionCount !== 2 ||
+  const globalImport = shape.instruction(1, 0);
+  const getEnv = shape.instruction(1, 1);
+  const getSlot = shape.instruction(1, 2);
+  const getMatch = shape.instruction(1, 3);
+  const getFallback = shape.instruction(1, 7);
+  const setEnv = shape.instruction(1, 22);
+  const setSlot = shape.instruction(1, 23);
+  const setMatch = shape.instruction(1, 24);
+  const readonly = shape.instruction(1, 25);
+  const barrier = shape.instruction(1, 28);
+  const setFallback = shape.instruction(1, 30);
+  if (snapshot.length !== 8309 || shape.protoCount !== 2 || shape.functionCount !== 2 ||
       globalImport.command !== 127 || globalImport.operand(0).kind !== 6 ||
       globalImport.operand(0).value !== 2 || globalImport.operand(1).kind !== 7 ||
       globalImport.operand(1).value !== 1 || globalImport.constant(2).bits !== 0x40000000n ||
       globalImport.constant(3).bits !== 1n ||
       getEnv.command !== 8 || getEnv.operandCount !== 0 || getSlot.command !== 10 ||
-      getSlot.operand(0).kind !== 4 || getSlot.operand(0).value !== 2 ||
+      getSlot.operand(0).kind !== 4 || getSlot.operand(0).value !== 1 ||
       getSlot.constant(1).bits !== 2n || getSlot.operand(2).kind !== 7 || getSlot.operand(2).value !== 2 ||
-      getMatch.command !== 137 || getMatch.operand(0).value !== 3 || getMatch.operand(1).value !== 2 ||
+      getMatch.command !== 137 || getMatch.operand(0).value !== 2 || getMatch.operand(1).value !== 2 ||
       getMatch.operand(2).kind !== 5 || getMatch.operand(2).value !== 1 ||
-      shape.instruction(1, 5).command !== 7 || shape.instruction(1, 6).command !== 20 ||
-      shape.instruction(1, 6).operand(0).value !== 4 || shape.instruction(1, 7).command !== 88 ||
-      shape.instruction(1, 7).operand(0).value !== 13 || getFallback.command !== 160 ||
+      shape.instruction(1, 4).command !== 7 || shape.instruction(1, 5).command !== 20 ||
+      shape.instruction(1, 5).operand(0).value !== 4 || shape.instruction(1, 6).command !== 88 ||
+      shape.instruction(1, 6).operand(0).value !== 13 || getFallback.command !== 160 ||
       getFallback.constant(0).bits !== 2n || getFallback.operand(1).value !== 4 ||
-      getFallback.operand(2).value !== 2 || shape.instruction(1, 9).command !== 88 ||
-      shape.instruction(1, 9).operand(0).value !== 2 || setEnv.command !== 8 ||
+      getFallback.operand(2).value !== 2 || shape.instruction(1, 8).command !== 88 ||
+      shape.instruction(1, 8).operand(0).value !== 2 || setEnv.command !== 8 ||
       setSlot.command !== 10 || setSlot.constant(1).bits !== 5n || setSlot.operand(2).value !== 2 ||
       setMatch.command !== 137 || setMatch.operand(2).value !== 5 || readonly.command !== 133 ||
-      readonly.operand(0).value !== 23 || readonly.operand(1).value !== 5 ||
-      shape.instruction(1, 27).command !== 7 || shape.instruction(1, 27).operand(0).value !== 3 ||
-      shape.instruction(1, 28).command !== 20 || barrier.command !== 149 ||
-      barrier.operand(0).value !== 23 || barrier.operand(1).value !== 3 || barrier.operand(2).kind !== 1 ||
-      shape.instruction(1, 30).command !== 88 || shape.instruction(1, 30).operand(0).value !== 6 ||
+      readonly.operand(0).value !== 22 || readonly.operand(1).value !== 5 ||
+      shape.instruction(1, 26).command !== 7 || shape.instruction(1, 26).operand(0).value !== 3 ||
+      shape.instruction(1, 27).command !== 20 || barrier.command !== 149 ||
+      barrier.operand(0).value !== 22 || barrier.operand(1).value !== 3 || barrier.operand(2).kind !== 1 ||
+      shape.instruction(1, 29).command !== 88 || shape.instruction(1, 29).operand(0).value !== 6 ||
       setFallback.command !== 161 || setFallback.constant(0).bits !== 5n ||
       setFallback.operand(1).value !== 3 || setFallback.operand(2).value !== 2 ||
-      shape.instruction(1, 32).command !== 88 || shape.instruction(1, 32).operand(0).value !== 6)
+      shape.instruction(1, 31).command !== 88 || shape.instruction(1, 31).operand(0).value !== 6)
     throw new Error(`${name}: pinned decoded global get/set IR shape changed`);
 
   for (let functionId = 0; functionId < 2; functionId++) {
@@ -1552,7 +1920,7 @@ async function executeGlobalStatePackage() {
   return { objectSize: first.length, functionCount: 2 };
 }
 
-async function executeFastBuiltinsPackage() {
+export async function executeFastBuiltinsPackage() {
   const name = "fast-builtins-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_FAST_BUILTINS_SOURCE, "LUAUC_FAST_BUILTINS_SOURCE"),
@@ -1563,17 +1931,35 @@ async function executeFastBuiltinsPackage() {
   if (shape.protoCount !== 16 || shape.functionCount !== 16)
     throw new Error(`${name}: expected the complete 16-function builtin capability package`);
   const commandCounts = new Map();
+  const safeEnvironmentVmExits = [];
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
     for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
-      const command = shape.instruction(functionId, instructionId).command;
+      const instruction = shape.instruction(functionId, instructionId);
+      const command = instruction.command;
       commandCounts.set(command, (commandCounts.get(command) ?? 0) + 1);
+      if (command === 135 && instruction.operand(0).kind === 9) {
+        const pc = instruction.operand(0).value;
+        safeEnvironmentVmExits.push(
+          `${functionId}:${instructionId}/pc${pc}/op${shape.bytecodeWord(functionId, pc) & 0xff}`,
+        );
+      }
     }
   }
+  if (safeEnvironmentVmExits.length)
+    throw new Error(`${name}: safe-environment VM exits remain: ${safeEnvironmentVmExits.join(", ")}`);
   for (const [command, label] of [
+    [33, "CHECK_DIV_INT64"],
     [99, "STRING_LEN"],
     [120, "FASTCALL"],
     [121, "INVOKE_FASTCALL"],
     [122, "CHECK_FASTCALL_RES"],
+    [131, "CHECK_TAG"],
+    [132, "CHECK_TRUTHY"],
+    [135, "CHECK_SAFE_ENV"],
+    [142, "CHECK_CMP_NUM"],
+    [143, "CHECK_CMP_INT"],
+    [144, "CHECK_CMP_INT64"],
+    [146, "CHECK_GC"],
     [154, "CALL fallback"],
     [197, "INVOKE_LIBM"],
     [198, "GET_TYPE"],
@@ -1581,6 +1967,54 @@ async function executeFastBuiltinsPackage() {
   ]) {
     if (!commandCounts.get(command))
       throw new Error(`${name}: complete source graph lost ${label}`);
+  }
+
+  const failureOperandByCommand = new Map([
+    [33, 2],
+    [131, 2],
+    [132, 2],
+    [135, 0],
+    [142, 3],
+    [143, 3],
+    [144, 3],
+  ]);
+  const guardedSlowArms = new Set();
+  const guardedFailureSites = new Map();
+  const guardedFallbackCalls = new Map();
+  for (let functionId = 0; functionId < shape.functionCount; functionId++) {
+    for (let instructionId = 0; instructionId < shape.instructionCount(functionId); instructionId++) {
+      const instruction = shape.instruction(functionId, instructionId);
+      const failureOperand = failureOperandByCommand.get(instruction.command);
+      if (failureOperand === undefined || failureOperand >= instruction.operandCount) continue;
+      const failure = instruction.operand(failureOperand);
+      if (failure.kind !== 5) continue;
+      guardedSlowArms.add(instruction.command);
+      if (!guardedFailureSites.has(instruction.command))
+        guardedFailureSites.set(instruction.command, failure);
+      const fallback = shape.block(functionId, failure.value);
+      for (let fallbackId = fallback.start; fallbackId <= fallback.finish; fallbackId++) {
+        if (shape.instruction(functionId, fallbackId).command === 154)
+          guardedFallbackCalls.set(`${functionId}/${fallbackId}`, { functionId, instructionId: fallbackId });
+      }
+    }
+  }
+  for (const command of failureOperandByCommand.keys())
+    if (!guardedSlowArms.has(command))
+      throw new Error(`${name}: guard ${command} did not target a compiled slow arm`);
+  if (guardedFallbackCalls.size === 0)
+    throw new Error(`${name}: guarded builtin slow arms contain no real CALL`);
+  for (const [command, failure] of guardedFailureSites) {
+    const mutated = Buffer.from(snapshot);
+    mutated[failure.offset] = 1;
+    expectPackageRejection(mutated, `guard ${command} accepted an undefined failure destination`);
+  }
+
+  {
+    const mutated = Buffer.from(snapshot);
+    const offsets = referenceSnapshotOffsets(mutated);
+    for (const fallback of guardedFallbackCalls.values())
+      mutated[offsets.instruction(fallback.functionId, fallback.instructionId)] = 0;
+    expectPackageRejection(mutated, "guarded builtin slow arms lost every real CALL");
   }
 
   for (let functionId = 0; functionId < shape.functionCount; functionId++) {
@@ -1600,7 +2034,6 @@ async function executeFastBuiltinsPackage() {
     "luauc_runtime_v1_fastcall",
     "luauc_runtime_v1_libm",
     "luauc_runtime_v1_type_name",
-    "luauc_runtime_v1_builtin_type_error",
     "luauc_runtime_v1_table_insert_append",
     "luauc_runtime_v1_table_get_string",
   ]) {
@@ -1612,7 +2045,7 @@ async function executeFastBuiltinsPackage() {
   return { objectSize: first.length, functionCount: shape.functionCount };
 }
 
-async function executeBufferScalarMatrixPackage() {
+export async function executeBufferScalarMatrixPackage() {
   const name = "buffer-scalar-matrix-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_BUFFER_SCALAR_MATRIX_SOURCE, "LUAUC_BUFFER_SCALAR_MATRIX_SOURCE"),
@@ -1622,22 +2055,27 @@ async function executeBufferScalarMatrixPackage() {
   const secondSnapshot = frontendSnapshot(source, "@aot/buffer_scalar_matrix.luau");
   if (!firstSnapshot.equals(secondSnapshot)) throw new Error(`${name}: frontend snapshot is nondeterministic`);
   const shape = snapshotShape(firstSnapshot);
-  const functions = snapshotSection(firstSnapshot, 15);
-  const childFunction = functions.offset + functions.recordSize;
-  if (shape.protoCount !== 9 || shape.functionCount !== 9 ||
-      firstSnapshot.readUInt32LE(childFunction + 20) !== 16 ||
-      firstSnapshot.readUInt32LE(childFunction + 28) !== 286 ||
-      shape.instruction(1, 9).command !== 110 || shape.instruction(1, 10).command !== 140 ||
-      shape.instruction(1, 10).constant(2).bits !== 0n || shape.instruction(1, 10).constant(3).bits !== 27n ||
-      shape.instruction(1, 13).command !== 203 || shape.instruction(1, 34).command !== 206 ||
-      shape.instruction(1, 55).command !== 208 || shape.instruction(1, 76).command !== 210 ||
-      shape.instruction(1, 96).command !== 212 || shape.instruction(1, 116).command !== 214 ||
-      shape.instruction(1, 127).command !== 201 || shape.instruction(1, 141).command !== 202 ||
-      shape.instruction(1, 161).command !== 204 || shape.instruction(1, 181).command !== 205 ||
-      shape.instruction(1, 201).command !== 207 || shape.instruction(1, 221).command !== 207 ||
-      shape.instruction(1, 241).command !== 209 || shape.instruction(1, 261).command !== 211 ||
-      shape.instruction(1, 280).command !== 213 || shape.instruction(1, 285).command !== 155)
-    throw new Error(`${name}: pinned dynamic-base buffer graph changed`);
+  if (shape.protoCount !== 9 || shape.functionCount !== 9)
+    throw new Error(`${name}: expected the complete nine-function buffer package`);
+  const idsFor = (command) => Array.from(
+    { length: shape.instructionCount(1) },
+    (_, id) => id,
+  ).filter((id) => shape.instruction(1, id).command === command);
+  for (const [command, minimum] of [
+    [201, 1], [202, 1], [203, 1], [204, 1], [205, 1], [206, 1], [207, 2],
+    [208, 1], [209, 1], [210, 1], [211, 1], [212, 1], [213, 1], [214, 1],
+  ]) {
+    if (idsFor(command).length < minimum)
+      throw new Error(`${name}: command ${command} count is ${idsFor(command).length}, expected at least ${minimum}`);
+  }
+  const mergedGuardId = idsFor(140).find((id) => {
+    const guard = shape.instruction(1, id);
+    return guard.operandCount >= 5 && guard.operand(2).kind === 2 && guard.operand(3).kind === 2;
+  });
+  const firstWriteId = idsFor(203)[0];
+  const firstNumToUintId = idsFor(112)[0];
+  if (mergedGuardId === undefined || idsFor(155).length === 0)
+    throw new Error(`${name}: dynamic-base guard/conversion/return graph changed`);
 
   for (let functionId = 0; functionId < 9; functionId++)
     backendObject(firstSnapshot, functionId);
@@ -1645,35 +2083,36 @@ async function executeBufferScalarMatrixPackage() {
   const offsets = referenceSnapshotOffsets(firstSnapshot);
   {
     const mutated = Buffer.from(firstSnapshot);
-    mutated.writeUInt32LE(11, offsets.operand(1, 10, 4) + 4);
+    mutated.writeUInt32LE(firstWriteId, offsets.operand(1, mergedGuardId, 4) + 4);
     expectPackageRejection(mutated, "buffer exact-integer guard no longer uses the original base double");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
-    mutated.writeUInt32LE(8, offsets.operand(1, 13, 0) + 4);
+    mutated.writeUInt32LE(firstWriteId, offsets.operand(1, firstWriteId, 0) + 4);
     expectPackageRejection(mutated, "buffer write no longer uses the guarded buffer pointer");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
     const numberTag = offsets.findConstant(1, 4, 3n);
-    mutated.writeUInt32LE(numberTag, offsets.operand(1, 13, 3) + 4);
+    mutated.writeUInt32LE(numberTag, offsets.operand(1, firstWriteId, 3) + 4);
     expectPackageRejection(mutated, "buffer write carries NUMBER instead of BUFFER tag");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
     const truncatedRange = offsets.findConstant(1, 0, 19n);
-    mutated.writeUInt32LE(truncatedRange, offsets.operand(1, 10, 3) + 4);
+    mutated.writeUInt32LE(truncatedRange, offsets.operand(1, mergedGuardId, 3) + 4);
     expectPackageRejection(mutated, "merged buffer bound no longer covers all 27 packed bytes");
   }
-  {
+  if (firstNumToUintId !== undefined) {
     const mutated = Buffer.from(firstSnapshot);
-    mutated.writeUInt32LE(53, offsets.operand(1, 33, 0) + 4);
+    mutated.writeUInt32LE(firstWriteId, offsets.operand(1, firstNumToUintId, 0) + 4);
     expectPackageRejection(mutated, "NUM_TO_UINT no longer consumes its checked runtime value");
   }
   {
     const mutated = Buffer.from(firstSnapshot);
-    mutated[offsets.instruction(1, 221)] = 208;
-    expectPackageRejection(mutated, "unsigned read command was replaced by a write command");
+    for (const readI32Id of idsFor(207))
+      mutated[offsets.instruction(1, readI32Id)] = 208;
+    expectPackageRejection(mutated, "every signed/unsigned read command was replaced by a write command");
   }
 
   const frame = staticPackageFrame("aot_buffer_scalar_matrix", firstSnapshot);
@@ -1686,29 +2125,28 @@ async function executeBufferScalarMatrixPackage() {
   const expectedImports = [
     ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
+    ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
-    ["env", "luauc_runtime_v1_newclosure_capture", "function"],
+    ["env", "luauc_runtime_v1_dupclosure_capture", "function"],
     ["env", "luauc_runtime_v1_get_upvalue", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
     ["env", "luauc_runtime_v1_exchange_continuation", "function"],
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_new_table", "function"],
     ["env", "luauc_runtime_v1_load_constant", "function"],
+    ["env", "luauc_runtime_v1_table_get_string", "function"],
     ["env", "luauc_runtime_v1_get_global", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
     ["env", "luauc_runtime_v1_get_varargs_fixed", "function"],
     ["env", "luauc_runtime_v1_get_varargs_multret", "function"],
     ["env", "luauc_runtime_v1_check_safe_env", "function"],
-    ["env", "luauc_runtime_v1_builtin_type_error", "function"],
-    ["env", "luauc_runtime_v1_builtin_number", "function"],
-    ["env", "luauc_runtime_v1_buffer_bounds_error", "function"],
   ];
-  if (JSON.stringify(imports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(imports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(imports)}`);
   return { objectSize: first.length, functionCount: 9 };
 }
 
-function linkObject(object, name) {
+export function linkObject(object, name) {
   const directory = mkdtempSync(join(process.env.TEST_TMPDIR || tmpdir(), `luau-aot-${name}-`));
   const objectPath = join(directory, `${name}.o`);
   const wasmPath = join(directory, `${name}.wasm`);
@@ -1719,6 +2157,7 @@ function linkObject(object, name) {
       "--no-entry",
       "--allow-undefined",
       "--export-memory",
+      "--export-table",
       `--export=${generatedSymbol}`,
       objectPath,
       "-o",
@@ -1733,7 +2172,7 @@ function linkObject(object, name) {
   return bytes;
 }
 
-function linkPackage(object, functionSymbols = packageSymbols, extraExports = []) {
+export function linkPackage(object, functionSymbols = packageSymbols, extraExports = []) {
   const directory = mkdtempSync(join(process.env.TEST_TMPDIR || tmpdir(), "luau-aot-package-"));
   const objectPath = join(directory, "package.o");
   const wasmPath = join(directory, "package.wasm");
@@ -1744,6 +2183,7 @@ function linkPackage(object, functionSymbols = packageSymbols, extraExports = []
       "--no-entry",
       "--allow-undefined",
       "--export-memory",
+      "--export-table",
       ...functionSymbols.map((symbol) => `--export=${symbol}`),
       ...extraExports.map((symbol) => `--export=${symbol}`),
       objectPath,
@@ -1759,7 +2199,7 @@ function linkPackage(object, functionSymbols = packageSymbols, extraExports = []
   return bytes;
 }
 
-async function executeCase(name, source, inputs) {
+export async function executeCase(name, source, inputs) {
   const snapshot = frontendSnapshot(source, `@aot/${name}.luau`);
   const functions = snapshotSection(snapshot, 15);
   const constants = snapshotSection(snapshot, 19);
@@ -1777,6 +2217,8 @@ async function executeCase(name, source, inputs) {
   expectedImports.push(["env", "luauc_runtime_v1_do_arith", "function"]);
   expectedImports.push(["env", "luauc_runtime_v1_exchange_continuation", "function"]);
   expectedImports.push(["env", "luauc_runtime_v1_set_location", "function"]);
+  if (name === "loop")
+    expectedImports.push(["env", "luauc_runtime_v1_forn_prepare", "function"]);
   if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
@@ -1797,6 +2239,15 @@ async function executeCase(name, source, inputs) {
         committed = view.getFloat64(source, true);
       },
       luauc_runtime_v1_set_location() {},
+      luauc_runtime_v1_forn_prepare(state, baseRegister) {
+        if (state !== 1024) throw new Error(`${name}: invalid numeric loop preparation state`);
+        const view = new DataView(instance.exports.memory.buffer);
+        const base = view.getUint32(state + 12, true) + baseRegister * 16;
+        if ([0, 1, 2].every((offset) => view.getUint32(base + offset * 16 + 12, true) === 3))
+          throw new Error(`${name}: numeric loop preparation slow arm ran for numeric operands`);
+        arithmeticTypeErrors++;
+        throw new TypeError(`${name}: numeric loop preparation rejected a non-number operand`);
+      },
       luauc_runtime_v1_exchange_continuation(state, nextId) {
         if (state !== 1024) throw new Error(`${name}: invalid continuation state`);
         const previous = continuationState;
@@ -1887,7 +2338,7 @@ async function executeCase(name, source, inputs) {
   return { objectSize: object.length, interrupts };
 }
 
-async function executeSilentRoot() {
+export async function executeSilentRoot() {
   const name = "silent-root";
   const source = readFileSync(
     runfile(process.env.LUAUC_SILENT_SOURCE, "LUAUC_SILENT_SOURCE"),
@@ -1948,7 +2399,7 @@ async function executeSilentRoot() {
   return { objectSize: object.length, interrupts };
 }
 
-async function executeSlowAdd() {
+export async function executeSlowAdd() {
   const name = "slow-add";
   const source = readFileSync(
     runfile(process.env.LUAUC_SLOW_ADD_SOURCE, "LUAUC_SLOW_ADD_SOURCE"),
@@ -2035,7 +2486,7 @@ async function executeSlowAdd() {
   return { objectSize: object.length, interrupts, helperCalls };
 }
 
-async function executeCompiledCallPackage() {
+export async function executeCompiledCallPackage() {
   const name = "compiled-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_COMPILED_CALL_SOURCE, "LUAUC_COMPILED_CALL_SOURCE"),
@@ -2058,7 +2509,7 @@ async function executeCompiledCallPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
-  if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
   let instance;
@@ -2066,6 +2517,7 @@ async function executeCompiledCallPackage() {
   let interrupts = 0;
   let nestedCalls = 0;
   let continuationState = 0;
+  let pendingCall = null;
   const closureChildren = [];
   const state = 1024;
   const initialBase = 2048;
@@ -2119,7 +2571,7 @@ async function executeCompiledCallPackage() {
         continuationState = nextId;
         return previous;
       },
-      luauc_runtime_v1_call(callState, functionRegister, parameterCount, resultCount) {
+      luauc_runtime_v1_prepare_compiled_call(callState, functionRegister, parameterCount, resultCount) {
         if (callState !== state || functionRegister !== 3 || parameterCount !== 2 || resultCount !== 1)
           throw new Error(`${name}: invalid fixed call ABI`);
         const memory = new Uint8Array(instance.exports.memory.buffer);
@@ -2137,20 +2589,24 @@ async function executeCompiledCallPackage() {
         );
         view.setUint32(state + 12, childBase, true);
         returned = null;
-        const callerContinuation = continuationState;
+        pendingCall = { functionRegister, callerContinuation: continuationState };
         continuationState = 0;
-        const childStatus = instance.exports[packageSymbols[2]](state, 0);
-        const childContinuation = continuationState;
-        continuationState = callerContinuation;
-        if (childStatus !== 0 || childContinuation !== 0 || returned?.tag !== 3)
-          throw new Error(`${name}: nested child failed with ${childStatus}/${childContinuation}/${JSON.stringify(returned)}`);
-
-        const childResult = returned.value;
-        view.setUint32(state + 12, relocatedCallerBase, true);
-        writeNumber(view, relocatedCallerBase, functionRegister, childResult);
-        nestedCalls++;
-        return 0;
+        return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
+      luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        if (finishState !== state || status !== 0 || !pendingCall)
+          throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
+        if (continuationState !== 0 || returned?.tag !== 3)
+          throw new Error(`${name}: nested child failed with ${continuationState}/${JSON.stringify(returned)}`);
+        const view = new DataView(instance.exports.memory.buffer);
+        view.setUint32(state + 12, relocatedCallerBase, true);
+        writeNumber(view, relocatedCallerBase, pendingCall.functionRegister, returned.value);
+        continuationState = pendingCall.callerContinuation;
+        pendingCall = null;
+        nestedCalls++;
+      },
+      luauc_runtime_v1_count_direct_call() {},
+      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -2180,7 +2636,7 @@ async function executeCompiledCallPackage() {
   return { objectSize: first.length, nestedCalls, interrupts };
 }
 
-async function executeCapturedCallPackage() {
+export async function executeCapturedCallPackage() {
   const name = "captured-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_CAPTURED_CALL_SOURCE, "LUAUC_CAPTURED_CALL_SOURCE"),
@@ -2237,7 +2693,7 @@ async function executeCapturedCallPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
-  if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
   let instance;
@@ -2246,6 +2702,7 @@ async function executeCapturedCallPackage() {
   let interrupts = 0;
   let nestedCalls = 0;
   let continuationState = 0;
+  let pendingCall = null;
   let captureCount = 0;
   const closureChildren = [];
   const state = 1024;
@@ -2324,7 +2781,7 @@ async function executeCapturedCallPackage() {
         continuationState = nextId;
         return previous;
       },
-      luauc_runtime_v1_call(callState, functionRegister, parameterCount, resultCount) {
+      luauc_runtime_v1_prepare_compiled_call(callState, functionRegister, parameterCount, resultCount) {
         if (callState !== state || functionRegister !== 3 || parameterCount !== 1 || resultCount !== 1)
           throw new Error(`${name}: invalid fixed call ABI`);
         const memory = new Uint8Array(instance.exports.memory.buffer);
@@ -2342,20 +2799,24 @@ async function executeCapturedCallPackage() {
         );
         view.setUint32(state + 12, childBase, true);
         returned = null;
-        const callerContinuation = continuationState;
+        pendingCall = { functionRegister, callerContinuation: continuationState };
         continuationState = 0;
-        const childStatus = instance.exports[packageSymbols[2]](state, 0);
-        const childContinuation = continuationState;
-        continuationState = callerContinuation;
-        if (childStatus !== 0 || childContinuation !== 0 || returned?.tag !== 3)
-          throw new Error(`${name}: captured child failed with ${childStatus}/${childContinuation}/${JSON.stringify(returned)}`);
-
-        const childResult = returned.value;
-        view.setUint32(state + 12, finalCallerBase, true);
-        writeNumber(view, finalCallerBase, functionRegister, childResult);
-        nestedCalls++;
-        return 0;
+        return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
+      luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        if (finishState !== state || status !== 0 || !pendingCall)
+          throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
+        if (continuationState !== 0 || returned?.tag !== 3)
+          throw new Error(`${name}: captured child failed with ${continuationState}/${JSON.stringify(returned)}`);
+        const view = new DataView(instance.exports.memory.buffer);
+        view.setUint32(state + 12, finalCallerBase, true);
+        writeNumber(view, finalCallerBase, pendingCall.functionRegister, returned.value);
+        continuationState = pendingCall.callerContinuation;
+        pendingCall = null;
+        nestedCalls++;
+      },
+      luauc_runtime_v1_count_direct_call() {},
+      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -2387,7 +2848,7 @@ async function executeCapturedCallPackage() {
   return { objectSize: first.length, nestedCalls, captureCount, interrupts };
 }
 
-async function executeReferenceCapturePackage() {
+export async function executeReferenceCapturePackage() {
   const name = "reference-capture-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_REFERENCE_CAPTURE_SOURCE, "LUAUC_REFERENCE_CAPTURE_SOURCE"),
@@ -2675,7 +3136,7 @@ async function executeReferenceCapturePackage() {
   return { objectSize: first.length, referenceClosures, closes, upvalueWrites, interrupts };
 }
 
-async function executeMultiResultCallPackage() {
+export async function executeMultiResultCallPackage() {
   const name = "multi-result-call-package";
   const source = readFileSync(
     runfile(process.env.LUAUC_MULTI_RESULT_CALL_SOURCE, "LUAUC_MULTI_RESULT_CALL_SOURCE"),
@@ -2698,7 +3159,7 @@ async function executeMultiResultCallPackage() {
     ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
-  if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
+  if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
 
   let instance;
@@ -2707,6 +3168,7 @@ async function executeMultiResultCallPackage() {
   let nestedCalls = 0;
   let pairReturns = 0;
   let continuationState = 0;
+  let pendingCall = null;
   const closureChildren = [];
   const state = 1024;
   const initialBase = 2048;
@@ -2764,7 +3226,7 @@ async function executeMultiResultCallPackage() {
         continuationState = nextId;
         return previous;
       },
-      luauc_runtime_v1_call(callState, functionRegister, parameterCount, resultCount) {
+      luauc_runtime_v1_prepare_compiled_call(callState, functionRegister, parameterCount, resultCount) {
         if (callState !== state || functionRegister !== 3 || parameterCount !== 2 || resultCount !== 2)
           throw new Error(`${name}: invalid fixed call ABI`);
         const memory = new Uint8Array(instance.exports.memory.buffer);
@@ -2782,20 +3244,25 @@ async function executeMultiResultCallPackage() {
         );
         view.setUint32(state + 12, childBase, true);
         returned = [];
-        const callerContinuation = continuationState;
+        pendingCall = { functionRegister, callerContinuation: continuationState };
         continuationState = 0;
-        const childStatus = instance.exports[packageSymbols[2]](state, 0);
-        const childContinuation = continuationState;
-        continuationState = callerContinuation;
-        if (childStatus !== 0 || childContinuation !== 0 || returned.length !== 2 || returned.some((value) => value.tag !== 3))
-          throw new Error(`${name}: nested pair failed with ${childStatus}/${childContinuation}/${JSON.stringify(returned)}`);
-
-        view.setUint32(state + 12, relocatedCallerBase, true);
-        writeNumber(view, relocatedCallerBase, functionRegister, returned[0].value);
-        writeNumber(view, relocatedCallerBase, functionRegister + 1, returned[1].value);
-        nestedCalls++;
-        return 0;
+        return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
+      luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        if (finishState !== state || status !== 0 || !pendingCall)
+          throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
+        if (continuationState !== 0 || returned.length !== 2 || returned.some((value) => value.tag !== 3))
+          throw new Error(`${name}: nested pair failed with ${continuationState}/${JSON.stringify(returned)}`);
+        const view = new DataView(instance.exports.memory.buffer);
+        view.setUint32(state + 12, relocatedCallerBase, true);
+        writeNumber(view, relocatedCallerBase, pendingCall.functionRegister, returned[0].value);
+        writeNumber(view, relocatedCallerBase, pendingCall.functionRegister + 1, returned[1].value);
+        continuationState = pendingCall.callerContinuation;
+        pendingCall = null;
+        nestedCalls++;
+      },
+      luauc_runtime_v1_count_direct_call() {},
+      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -2822,7 +3289,7 @@ async function executeMultiResultCallPackage() {
   return { objectSize: first.length, nestedCalls, pairReturns, interrupts };
 }
 
-async function executeProtoIdentityControlPackageShape() {
+export async function executeProtoIdentityControlPackageShape() {
   const name = "Proto identity control";
   const source = readFileSync(
     runfile(process.env.LUAUC_PROTO_IDENTITY_SOURCE, "LUAUC_PROTO_IDENTITY_SOURCE"),
@@ -2881,82 +3348,3 @@ async function executeProtoIdentityControlPackageShape() {
   return { objectSize: firstObject.length, functionCount: shape.functionCount };
 }
 
-const scalar = await executeCase(
-  "scalar",
-  "return function(n) return n * 2 + 1 end",
-  [
-    [1, 3],
-    [4, 9],
-    [7, 15],
-  ],
-);
-const loop = await executeCase(
-  "loop",
-  "return function(n) local sum = 0 for i = 1, n do sum += i end return sum end",
-  [
-    [1, 1],
-    [4, 10],
-    [7, 28],
-  ],
-);
-const silent = await executeSilentRoot();
-const slowAdd = await executeSlowAdd();
-const compiledCall = await executeCompiledCallPackage();
-const capturedCall = await executeCapturedCallPackage();
-const referenceCapture = await executeReferenceCapturePackage();
-const multiResultCall = await executeMultiResultCallPackage();
-const forwardedCapture = executeForwardedCapturePackageShape();
-const recursiveCall = await executeRecursiveCallPackageShape();
-const coverage = await executeCoveragePackageShape();
-const tableInsertAppend = await executeTableInsertAppendPackageShape();
-const preloadedFieldCompare = await executePreloadedFieldAndInvertedCompare();
-const linearizedStringFields = await executeLinearizedStringFieldWrites();
-const plainTableNamecall = await executePlainTableNamecallPackageShape();
-const yieldCall = await executeYieldCallPackage();
-const dynamicArrayTable = await executeDynamicArrayTablePackage();
-const dynamicHashTable = await executeDynamicHashTablePackage();
-const dynamicString = await executeDynamicStringPackage();
-const genericIteration = await executeGenericIterationPackage();
-const genericTable = await executeGenericTablePackage();
-const generalDynamicObject = await executeGeneralDynamicObjectGraph();
-const powMetamethod = await executePowMetamethodGraph();
-const repeatedPowMetamethod = await executeRepeatedPowMetamethodGraph();
-const mixedTable = await executeMixedTablePackage();
-const globalState = await executeGlobalStatePackage();
-const fastBuiltins = await executeFastBuiltinsPackage();
-const bufferScalarMatrix = await executeBufferScalarMatrixPackage();
-const embedNamecallFamily = executeEmbedNamecallFamilyPackageShape();
-const protoIdentityControl = await executeProtoIdentityControlPackageShape();
-
-console.log(
-  `frontend -> IR -> relocatable wasm: scalar ${scalar.objectSize} bytes, loop ${loop.objectSize} bytes; ` +
-    `silent root ${silent.objectSize} bytes, slow add ${slowAdd.objectSize} bytes; ` +
-    `compiled call package ${compiledCall.objectSize} bytes/${compiledCall.nestedCalls} nested calls; ` +
-    `captured call package ${capturedCall.objectSize} bytes/${capturedCall.captureCount} captures; ` +
-    `reference capture package ${referenceCapture.objectSize} bytes/${referenceCapture.closes} closes; ` +
-    `forwarded capture package ${forwardedCapture.objectSize} bytes; ` +
-    `recursive call package ${recursiveCall.objectSize} bytes/${recursiveCall.functionCount} functions; ` +
-    `coverage package ${coverage.objectSize} bytes/${coverage.sites} sites; ` +
-    `table.insert append package ${tableInsertAppend.objectSize} bytes; ` +
-    `preloaded field/inverted compare ${preloadedFieldCompare.objectSize} bytes; ` +
-    `linearized string fields ${linearizedStringFields.objectSize} bytes; ` +
-    `plain table NAMECALL package ${plainTableNamecall.objectSize} bytes; ` +
-    `yield call package ${yieldCall.objectSize} bytes/${yieldCall.functionCount} functions; ` +
-    `dynamic array table ${dynamicArrayTable.objectSize} bytes/${dynamicArrayTable.functionCount} functions; ` +
-    `dynamic hash table ${dynamicHashTable.objectSize} bytes/${dynamicHashTable.functionCount} functions; ` +
-    `dynamic string ${dynamicString.objectSize} bytes/${dynamicString.functionCount} functions; ` +
-    `generic iteration ${genericIteration.objectSize} bytes/${genericIteration.functionCount} functions; ` +
-    `generic table ${genericTable.objectSize} bytes/${genericTable.functionCount} functions; ` +
-    `general dynamic object ${generalDynamicObject.objectSize} bytes/${generalDynamicObject.functionCount} functions; ` +
-    `pow metamethod ${powMetamethod.objectSize} bytes/${powMetamethod.functionCount} functions; ` +
-    `repeated pow metamethod ${repeatedPowMetamethod.objectSize} bytes/${repeatedPowMetamethod.functionCount} functions; ` +
-    `mixed table ${mixedTable.objectSize} bytes/${mixedTable.functionCount} functions; ` +
-    `global state ${globalState.objectSize} bytes/${globalState.functionCount} functions; ` +
-    `fast builtins ${fastBuiltins.objectSize} bytes/${fastBuiltins.functionCount} functions; ` +
-    `buffer scalar matrix ${bufferScalarMatrix.objectSize} bytes/${bufferScalarMatrix.functionCount} functions; ` +
-    `embed NAMECALL family ${embedNamecallFamily.objectSize} bytes/${embedNamecallFamily.functionCount} functions; ` +
-    `Proto identity control ${protoIdentityControl.objectSize} bytes/${protoIdentityControl.functionCount} functions; ` +
-    `multi-result package ${multiResultCall.objectSize} bytes/${multiResultCall.pairReturns} pair returns; ` +
-    `interrupt calls ${scalar.interrupts}/${loop.interrupts}/${silent.interrupts}/${slowAdd.interrupts}; ` +
-    `slow helpers ${slowAdd.helperCalls}`,
-);

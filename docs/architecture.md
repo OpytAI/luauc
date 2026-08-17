@@ -44,5 +44,8 @@ artifact bytes. Context handles are bounded and generational, so destroyed handl
 later context.
 
 The reference conformance gate instantiates the same zero-import compiler in JavaScript and Wasmtime,
-compiles the same multi-module request, compares artifact SHA-256, executes the artifact over three
-runtime inputs, and compares results with a separately linked pinned Luau interpreter.
+compiles the same four-module request (`lib`, `main`, `proto_identity`, `userdata_hooks`), compares
+artifact SHA-256, executes the artifact over three runtime inputs, and compares results with a
+separately linked pinned Luau interpreter. Public wire types live in `schema/`: 240-byte
+`SourcePackageV1`, 320-byte `CompileResultV1`, and a six-digest `luauc.link.v1` payload. There is
+no second package version and no second invoke.

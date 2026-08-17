@@ -364,7 +364,7 @@ pub fn rangeHasPreservedStringGuard(self: anytype, source: u32, start: u32, fini
         const failure = try self.operand(check, 2);
         if (checked.kind != .instruction or checked.value + 1 != check_id or
             expected.kind != .constant or (try self.constant(expected.value)).tagValue() != lua_tag_string or
-            failure.kind != .vm_exit)
+            !try self.isGuardFailure(failure))
             continue;
         const load = try self.instruction(checked.value);
         if (load.command != .load_tag or load.operand_count != 1 or
@@ -462,18 +462,12 @@ pub fn hasPublishedTValue(
 }
 
 pub fn compilableOwnerBlock(self: anytype, instruction_id: u32) Error!?snapshot_v1.IrBlock {
-    var owner: ?snapshot_v1.IrBlock = null;
-    var block_id: u32 = 0;
-    while (block_id < self.function.block_count) : (block_id += 1) {
-        const block = try self.snapshot.irBlock(self.function, block_id);
-        if (!block.kind.isCompilable() or block.isEmpty() or
-            instruction_id < block.start or instruction_id > block.finish)
-            continue;
-        if (owner != null)
-            return null;
-        owner = block;
-    }
-    return owner;
+    const block_id = self.plan.instructionBlock(instruction_id) orelse return null;
+    const block = try self.snapshot.irBlock(self.function, block_id);
+    if (!block.kind.isCompilable() or block.isEmpty() or
+        instruction_id < block.start or instruction_id > block.finish)
+        return null;
+    return block;
 }
 pub fn publishedNumberPayloadRegister(
     self: anytype,
@@ -704,7 +698,8 @@ pub noinline fn stringSetPattern(self: anytype, block: snapshot_v1.IrBlock) Erro
             return null;
         table = (try self.dupTableRegisterForPointer(pointer_operand.value)) orelse return null;
     } else {
-        const allocation = (try self.tableAllocationPatternContaining(pointer_operand.value)) orelse return null;
+        const covering = self.plan.tableAllocCovering(pointer_operand.value) orelse return null;
+        const allocation = (try self.tableAllocationPatternAt(covering.start)) orelse return null;
         if (allocation.start != pointer_operand.value or allocation.node_count != 4)
             return null;
         table = allocation.destination;
@@ -991,10 +986,112 @@ pub noinline fn inlinePreloadedStringSetPatternAt(self: anytype, start: u32, blo
         .finish = start + 9,
     };
 }
+
+pub noinline fn inlineOwnedStringSetPatternAt(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?InlineStringTablePattern {
+    const cloned_commands = [_]snapshot_v1.IrCommand{
+        ir_cmd_get_slot_node_addr, ir_cmd_check_slot_match, ir_cmd_check_readonly,
+        .load_tvalue,              .store_tvalue,           ir_cmd_barrier_table_forward,
+    };
+    const trusted_commands = [_]snapshot_v1.IrCommand{
+        ir_cmd_get_slot_node_addr, ir_cmd_check_slot_match, .nop,
+        .load_tvalue,              .store_tvalue,           ir_cmd_barrier_table_forward,
+    };
+    if (!block.kind.isCompilable() or block.isEmpty() or start < block.start or start > block.finish or
+        block.finish - start < cloned_commands.len - 1)
+        return null;
+    const cloned = try self.commandRangeMatches(start, &cloned_commands);
+    if (!cloned and !try self.commandRangeMatches(start, &trusted_commands))
+        return null;
+
+    const slot = try self.instruction(start);
+    const match = try self.instruction(start + 1);
+    const ownership = try self.instruction(start + 2);
+    const load = try self.instruction(start + 3);
+    const store = try self.instruction(start + 4);
+    const barrier = try self.instruction(start + 5);
+    if (slot.operand_count != 3 or match.operand_count != 3 or
+        (load.operand_count != 1 and load.operand_count != 3) or
+        store.operand_count != 3 or barrier.operand_count != 3)
+        return null;
+
+    const pointer = try self.operand(slot, 0);
+    const pc_operand = try self.operand(slot, 1);
+    const key_operand = try self.operand(slot, 2);
+    const matched_slot = try self.operand(match, 0);
+    const matched_key = try self.operand(match, 1);
+    const fallback = try self.operand(match, 2);
+    const source = try self.operand(load, 0);
+    const store_slot = try self.operand(store, 0);
+    const store_value = try self.operand(store, 1);
+    const store_offset = try self.operand(store, 2);
+    const barrier_pointer = try self.operand(barrier, 0);
+    const barrier_source = try self.operand(barrier, 1);
+    const barrier_tag = try self.operand(barrier, 2);
+    if (pointer.kind != .instruction or pc_operand.kind != .constant or key_operand.kind != .vm_const or
+        matched_slot.kind != .instruction or matched_slot.value != start or
+        matched_key.kind != .vm_const or matched_key.value != key_operand.value or fallback.kind != .block or
+        source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
+        store_slot.kind != .instruction or store_slot.value != start or
+        store_value.kind != .instruction or store_value.value != start + 3 or
+        !try self.intOperandEquals(store_offset, 0) or
+        barrier_pointer.kind != .instruction or barrier_pointer.value != pointer.value or
+        barrier_source.kind != .vm_reg or barrier_source.value != source.value)
+        return null;
+
+    if (load.operand_count == 1) {
+        if (barrier_tag.kind != .undef)
+            return null;
+    } else {
+        const load_offset = try self.operand(load, 1);
+        const load_tag = try self.operand(load, 2);
+        if (!try self.intOperandEquals(load_offset, 0) or load_tag.kind != .constant or
+            (try self.constant(load_tag.value)).tagValue() == null or barrier_tag.kind != .constant or
+            (try self.constant(barrier_tag.value)).tagValue() != (try self.constant(load_tag.value)).tagValue())
+            return null;
+    }
+
+    const table = if (cloned) blk: {
+        if (ownership.operand_count != 2 or
+            (try self.operand(ownership, 0)).kind != .instruction or
+            (try self.operand(ownership, 0)).value != pointer.value or
+            (try self.operand(ownership, 1)).kind != .block or
+            (try self.operand(ownership, 1)).value != fallback.value)
+            return null;
+        break :blk (try self.dupTableRegisterForPointer(pointer.value)) orelse return null;
+    } else blk: {
+        if (ownership.operand_count != 0)
+            return null;
+        const covering = self.plan.tableAllocCovering(pointer.value) orelse return null;
+        const allocation = (try self.tableAllocationPatternAt(covering.start)) orelse return null;
+        if (allocation.start != pointer.value)
+            return null;
+        break :blk allocation.destination;
+    };
+    const pc = (try self.constant(pc_operand.value)).uintValue() orelse return null;
+    const key = (try self.stringKey(key_operand)) orelse return null;
+    const rejoin = (try self.stringFallbackRejoin(fallback.value, .set, pc, source.value, table, key_operand.value)) orelse return null;
+    return .{
+        .pattern = .{
+            .operation = .set,
+            .start = start,
+            .pc = pc,
+            .table = table,
+            .value = source.value,
+            .key = key,
+            .fallback = fallback.value,
+            .fast_target = rejoin,
+            .rejoin = rejoin,
+        },
+        .finish = start + 5,
+    };
+}
+
 pub noinline fn inlineStringSetPatternAt(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?InlineStringTablePattern {
     if (try self.inlineGeneralStringSetPatternAt(start, block)) |pattern|
         return pattern;
-    return self.inlinePreloadedStringSetPatternAt(start, block);
+    if (try self.inlinePreloadedStringSetPatternAt(start, block)) |pattern|
+        return pattern;
+    return self.inlineOwnedStringSetPatternAt(start, block);
 }
 pub noinline fn stringTablePattern(self: anytype, block: snapshot_v1.IrBlock) Error!?StringTablePattern {
     if (try self.stringSetPattern(block)) |pattern|

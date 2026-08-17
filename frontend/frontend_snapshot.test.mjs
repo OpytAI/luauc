@@ -36,19 +36,30 @@ const contractInputs = [
   "third_party/luau/patches/0009-aot-coverage-data.patch",
   "third_party/luau/patches/0010-bytecode-builder-introspection.patch",
   "third_party/luau/patches/0011-compiler-owned-builder.patch",
+  "third_party/luau/patches/0012-aot-builtin-guard-fallbacks.patch",
+  "third_party/luau/patches/0013-aot-xnext-safeenv-fallback.patch",
+  "third_party/luau/patches/0014-aot-fastcall-safeenv-fallback.patch",
+  "third_party/luau/patches/0015-aot-fallback-safeenv-no-entry-exit.patch",
+  "third_party/luau/patches/0016-aot-fastcall-safeenv-retain-fallback.patch",
+  "third_party/luau/patches/0017-aot-cache-independent-imports.patch",
+  "third_party/luau/patches/0018-aot-semantic-type-fallbacks.patch",
+  "third_party/luau/patches/0019-aot-literal-and-namecall-fallbacks.patch",
 ].sort();
 
 function frontendContractDigest() {
   const root = process.env.RUNFILES_DIR;
   if (!root) throw new Error("RUNFILES_DIR is not set");
   const hash = createHash("sha256");
+  const fileDigests = [];
   for (const path of contractInputs) {
+    const bytes = readFileSync(join(root, "_main", path));
     hash.update(path);
     hash.update(Buffer.from([0]));
-    hash.update(readFileSync(join(root, "_main", path)));
+    hash.update(bytes);
     hash.update(Buffer.from([0xff]));
+    fileDigests.push({ path, sha256: createHash("sha256").update(bytes).digest("hex") });
   }
-  return hash.digest("hex");
+  return { digest: hash.digest("hex"), fileDigests };
 }
 
 function workspaceFile(path) {
@@ -348,10 +359,15 @@ return add(20, 22)
 const first = compile(source, "@frontend/closed-graph.luau");
 if (first.status !== 0) throw new Error(`frontend compile failed: ${first.status}: ${first.diagnostic}`);
 if (first.validation !== 0) throw new Error(`Zig rejected C++ FrontendSnapshotV1 with code ${first.validation}`);
-const contractDigest = frontendContractDigest();
+const { digest: contractDigest, fileDigests } = frontendContractDigest();
 const carriedDigest = first.snapshot.subarray(88, 120).toString("hex");
-if (carriedDigest !== contractDigest)
-  throw new Error(`frontend contract identity drifted: carried=${carriedDigest} derived=${contractDigest}`);
+if (carriedDigest !== contractDigest) {
+  const firstPath = fileDigests[0]?.path ?? "(none)";
+  throw new Error(
+    `frontend contract identity drifted: carried=${carriedDigest} derived=${contractDigest}; ` +
+      `first contract-input path=${firstPath}; files=${fileDigests.map((item) => `${item.path}=${item.sha256.slice(0, 8)}`).join(",")}`,
+  );
+}
 const layoutIdentity = JSON.parse(workspaceFile("conformance/maps/luauc_layout.json"));
 const irIdentity = JSON.parse(workspaceFile("conformance/maps/luauc_ir_coverage.json"));
 const carriedPin = first.snapshot.subarray(24, 56).toString("hex");

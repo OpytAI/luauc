@@ -33,9 +33,10 @@ pointer/capacity. The 32-byte result contains status, flags, returned `i64`, and
 Pointers name the artifact's own memory and are valid only for that instance.
 
 Each context owns a real Luau state and a compiled package root. Invocation creates a real Luau
-thread, passes runtime arguments, observes the corpus's outer suspension, keeps the thread rooted,
-forces a full Luau GC, and resumes through generated continuations. It then returns the actual Luau
-number and string results. No host computes expected program behavior.
+thread, passes runtime arguments, and returns the actual Luau number and string results. A
+`"gc-boundary"` yield still forces a full collect and resume so `embed_main.luau` can prove
+GC-while-suspended; zero yields is success. Any other yield string is a product error. No host
+computes expected program behavior.
 
 ## JavaScript
 
@@ -50,9 +51,18 @@ transport is confined to the command-line wrappers.
 host functions, and invocation ABI in Rust. It provides:
 
 ```text
-luauc-embed-wasmtime compile-run <compiler> <profile> <pack> <lib> <main> <number> <text>...
+luauc-embed-wasmtime compile-run <compiler> <profile> <pack> \
+  <lib> <main> <proto_identity> <userdata_hooks> <number> <text>...
 luauc-embed-wasmtime run <artifact> <number> <text>...
 ```
+
+The product package is four modules: `lib`, `main`, `proto_identity`, and `userdata_hooks`.
+
+`embed.vec2` is the published userdata contract. `.Unit` normalizes `(x, y)` by Euclidean
+length (zero length becomes `(0, 0)`). `:Mark(bag)` writes the receiver into `bag[1]` and
+returns the seed's first payload component. Frontend hooks, the pinned interpreter, and the
+embed pack implement that contract identically. Observe it as `seed:Mark + unit:Mark` so a
+zero Unit cannot hide behind `seed:Mark` alone.
 
 The parity gate reuses one compiled Wasmtime `Module` but creates fresh compiler instances for repeat
 compilation. It compares the artifact digest and every runtime result with JavaScript, then compares
