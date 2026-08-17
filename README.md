@@ -25,7 +25,7 @@ The portable compiler is `bazel-bin/compiler/luauc.wasm`. The reference profile 
 ## Compile a package
 
 Module names are logical package IDs, not filesystem paths. This compiles the included natural
-two-module package:
+four-module package (`lib`, `main`, `proto_identity`, `userdata_hooks`):
 
 ```bash
 bazel run //:luauc -- compile \
@@ -34,8 +34,11 @@ bazel run //:luauc -- compile \
   --pack bazel-bin/profiles/embed/embed_v1.pack.wasm \
   --output /tmp/program.wasm \
   --entry main \
+  --inline-plan proto_identity:2:0:0 \
   lib=conformance/sources/embed_lib.luau \
-  main=conformance/sources/embed_main.luau
+  main=conformance/sources/embed_main.luau \
+  proto_identity=conformance/sources/proto_identity.luau \
+  userdata_hooks=conformance/sources/userdata_hooks.luau
 ```
 
 Run that exact artifact in either reference host:
@@ -45,15 +48,16 @@ bazel run //:embed-js -- /tmp/program.wasm 7 beta
 bazel run //:embed-wasmtime -- run /tmp/program.wasm 7 beta
 ```
 
-Both print:
+Both print the pinned-interpreter transcript:
 
 ```text
-result=7|beta|76|beta:8
+result=7|beta|635|beta:8:2/1/11:missing
 ```
 
 The example exercises static modules, closures and calls, protected errors, tables, strings,
-`ipairs`, nested coroutine yield/resume, an outer compiled suspension, and full GC while suspended.
-The same compiled bytes run over multiple inputs and are differentially checked against pinned Luau.
+`ipairs`, nested coroutine yield/resume, an outer compiled suspension, full GC while suspended,
+proto identity, and the published userdata hook. The same compiled bytes run over multiple inputs
+and are differentially checked against pinned Luau.
 
 ## Bazel dependency
 

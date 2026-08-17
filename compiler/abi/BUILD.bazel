@@ -1,0 +1,5 @@
+test_suite(
+    name = "fuzz_parsers_test",
+    tests = ["//tools:fuzz_parsers_test"],
+    visibility = ["//visibility:public"],
+)

@@ -138,6 +138,31 @@ js_test(
 )
 
 js_test(
+    name = "fuzz_parsers_test",
+    size = "large",
+    visibility = ["//visibility:public"],
+    data = [
+        "fuzz_parsers.test.mjs",
+        "ir_ledger.mjs",
+        "//compiler:compiler_wasm",
+        "//compiler/backend:backend_wasm",
+        "//compiler/link:linker_cli",
+        "//frontend:frontend_wasm",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+    ],
+    entry_point = "fuzz_parsers.test.mjs",
+    env = {
+        "LUAUC_BACKEND_WASM": "$(rlocationpath //compiler/backend:backend_wasm)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_FRONTEND_WASM": "$(rlocationpath //frontend:frontend_wasm)",
+        "LUAUC_LINKER_CLI": "$(rlocationpath //compiler/link:linker_cli)",
+    },
+)
+
+js_test(
     name = "maps_test",
     size = "large",
     data = [
