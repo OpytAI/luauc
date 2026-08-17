@@ -4,6 +4,7 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 alias(
     name = "component",
     actual = "//compiler/backend/lower:component",
+    tags = ["manual"],
     visibility = ["//visibility:public"],
 )
 
