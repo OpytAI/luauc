@@ -32,6 +32,8 @@ _PRODUCT_LUAU = [
     "embed_main.luau",
     "proto_identity.luau",
     "userdata_hooks.luau",
+    "userdata_hold.luau",
+    "userdata_store.luau",
 ]
 
 exports_files(

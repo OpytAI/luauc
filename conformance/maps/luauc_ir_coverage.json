@@ -2,9 +2,9 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "ac75086e6f8a40d1ebec5973106a072a02f648d1e3ac30d7f74c3b4f4c2b7204",
+  "compiler_build_digest": "543909054e4c48e957e63d3898f8e3482cba3b86e9ba0acb83558d327f7e0066",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "35c7e683add7d255a76e3b1434070e288e74c9e53c961a8774bd02fb5646507e",
+  "frontend_contract_digest": "65331dc7d2821c6ec8df07225183590a5dae4a0be2ddd97b1cecf6c6391d698b",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,
@@ -58,7 +58,9 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -86,11 +88,14 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -102,6 +107,7 @@
         "//conformance/tests:iteration_test",
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -160,7 +166,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -192,11 +200,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -210,6 +221,7 @@
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -257,7 +269,9 @@
         "proto_identity",
         "table_clone_append",
         "table_namecall",
-        "userdata_hooks"
+        "userdata_hold",
+        "userdata_hooks",
+        "userdata_store"
       ],
       "census_forms": [
         "any"
@@ -277,10 +291,13 @@
         "proto_identity",
         "table_clone_append",
         "table_namecall",
-        "userdata_hooks"
+        "userdata_hold",
+        "userdata_hooks",
+        "userdata_store"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -290,6 +307,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -634,7 +652,7 @@
       "value": 7,
       "class": "layout",
       "status": "partial",
-      "reachability": "census",
+      "reachability": "published_hook",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -681,6 +699,7 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -711,10 +730,12 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -727,6 +748,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -1126,7 +1148,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -1159,11 +1183,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -1178,6 +1205,7 @@
         "//conformance/tests:scalar_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -1323,7 +1351,9 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -1344,11 +1374,14 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -1359,6 +1392,7 @@
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -1667,7 +1701,7 @@
       "value": 20,
       "class": "layout",
       "status": "partial",
-      "reachability": "census",
+      "reachability": "published_hook",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -1714,6 +1748,7 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -1744,10 +1779,12 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -1760,6 +1797,7 @@
         "//conformance/tests:natural_sources_test",
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -5902,7 +5940,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -5934,11 +5974,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -5952,6 +5995,7 @@
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -6709,7 +6753,9 @@
         "generic_iteration",
         "generic_table",
         "mixed_table",
-        "userdata_hooks"
+        "userdata_hold",
+        "userdata_hooks",
+        "userdata_store"
       ],
       "census_forms": [
         "any"
@@ -6723,10 +6769,13 @@
         "generic_iteration",
         "generic_table",
         "mixed_table",
-        "userdata_hooks"
+        "userdata_hold",
+        "userdata_hooks",
+        "userdata_store"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -6734,6 +6783,7 @@
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:iteration_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -7792,7 +7842,7 @@
       "value": 118,
       "class": "layout",
       "status": "partial",
-      "reachability": "census",
+      "reachability": "published_hook",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -7801,18 +7851,12 @@
         }
       ],
       "runtime_symbols": [
-        "luauc_runtime_v1_call",
-        "luauc_runtime_v1_check_safe_env",
-        "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
-        "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
-        "luauc_runtime_v1_require_static",
         "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_get_string"
+        "luauc_runtime_v1_set_location"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -7827,7 +7871,8 @@
         "fast_builtins",
         "natural_bit32",
         "natural_buffer",
-        "natural_integer"
+        "natural_integer",
+        "userdata_store"
       ],
       "census_forms": [
         "any"
@@ -7838,16 +7883,19 @@
         "fast_builtins",
         "natural_bit32",
         "natural_buffer",
-        "natural_integer"
+        "natural_integer",
+        "userdata_store"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance/tests:natural_sources_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -8721,7 +8769,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -8753,11 +8803,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -8771,6 +8824,7 @@
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -9359,10 +9413,6 @@
         }
       ],
       "runtime_symbols": [
-        "luauc_runtime_v1_array_set",
-        "luauc_runtime_v1_barrier_table_back",
-        "luauc_runtime_v1_buffer_bounds_error",
-        "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
@@ -9370,14 +9420,9 @@
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_new_table_deferred",
-        "luauc_runtime_v1_new_userdata",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_list",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_set",
-        "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number"
+        "luauc_runtime_v1_set_location"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -9387,19 +9432,25 @@
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2572; CodeGen/src/IrLoweringA64.cpp:2603",
       "census_sources": [
-        "userdata_hooks"
+        "userdata_hold",
+        "userdata_hooks",
+        "userdata_store"
       ],
       "census_forms": [
         "any",
         "hook_vec2"
       ],
       "lowered_sources": [
-        "userdata_hooks"
+        "userdata_hold",
+        "userdata_hooks",
+        "userdata_store"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -9675,7 +9726,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -9708,11 +9761,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -9727,6 +9783,7 @@
         "//conformance/tests:scalar_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -9776,7 +9833,9 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -9797,11 +9856,14 @@
         "reference_capture",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -9812,6 +9874,7 @@
         "//conformance/tests:closures_test",
         "//conformance/tests:iteration_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -9830,7 +9893,20 @@
           "id": "hold_slot"
         }
       ],
-      "runtime_symbols": [],
+      "runtime_symbols": [
+        "luauc_runtime_v1_barrier_object",
+        "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_check_userdata_tag",
+        "luauc_runtime_v1_dupclosure",
+        "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_interrupt",
+        "luauc_runtime_v1_new_table_deferred",
+        "luauc_runtime_v1_prep_varargs",
+        "luauc_runtime_v1_return",
+        "luauc_runtime_v1_set_location",
+        "luauc_runtime_v1_set_userdata_metatable"
+      ],
       "wasm_features": [],
       "may_allocate": false,
       "may_raise": false,
@@ -9838,11 +9914,22 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2640; CodeGen/src/IrLoweringA64.cpp:2727; luaC_barrierf",
-      "census_sources": [],
-      "census_forms": [],
-      "lowered_sources": [],
-      "executed_gates": [],
-      "tests": [],
+      "census_sources": [
+        "userdata_hold"
+      ],
+      "census_forms": [
+        "any",
+        "hold_slot"
+      ],
+      "lowered_sources": [
+        "userdata_hold"
+      ],
+      "executed_gates": [
+        "//hosts/wasmtime:barrier_parity_test"
+      ],
+      "tests": [
+        "//hosts/wasmtime:barrier_parity_test"
+      ],
       "evidence": {
         "kind": "isolated_hold_strip",
         "gate": "//hosts/wasmtime:barrier_parity_test"
@@ -9862,10 +9949,7 @@
         }
       ],
       "runtime_symbols": [
-        "luauc_runtime_v1_array_set",
         "luauc_runtime_v1_barrier_table_back",
-        "luauc_runtime_v1_buffer_bounds_error",
-        "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
@@ -9873,14 +9957,9 @@
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_new_table_deferred",
-        "luauc_runtime_v1_new_userdata",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_list",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_set",
-        "luauc_runtime_v1_table_set",
-        "luauc_runtime_v1_table_set_number"
+        "luauc_runtime_v1_set_location"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -9890,20 +9969,24 @@
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2643; CodeGen/src/IrLoweringA64.cpp:2748; luaC_barriertable",
       "census_sources": [
-        "userdata_hooks"
+        "userdata_hooks",
+        "userdata_store"
       ],
       "census_forms": [
         "any",
         "store_slot"
       ],
       "lowered_sources": [
-        "userdata_hooks"
+        "userdata_hooks",
+        "userdata_store"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:userdata_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ],
@@ -10030,6 +10113,7 @@
         "table_clone_append",
         "table_namecall",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -10062,10 +10146,12 @@
         "table_clone_append",
         "table_namecall",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -10080,6 +10166,7 @@
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
         "//conformance/tests:userdata_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -10425,7 +10512,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -10458,11 +10547,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -10477,6 +10569,7 @@
         "//conformance/tests:scalar_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -11100,7 +11193,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -11133,11 +11228,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -11152,6 +11250,7 @@
         "//conformance/tests:scalar_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -11344,7 +11443,9 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "census_forms": [
@@ -11376,11 +11477,14 @@
         "slow_add",
         "table_clone_append",
         "table_namecall",
+        "userdata_hold",
         "userdata_hooks",
+        "userdata_store",
         "yield_call"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test"
+        "//hosts/wasmtime:parity_test",
+        "//hosts/wasmtime:barrier_parity_test"
       ],
       "tests": [
         "//conformance/tests:buffers_test",
@@ -11394,6 +11498,7 @@
         "//conformance/tests:proto_identity_test",
         "//conformance/tests:operators_test",
         "//conformance/tests:namecall_test",
+        "//hosts/wasmtime:barrier_parity_test",
         "//conformance/tests:userdata_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -14343,5 +14448,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "784d4cf157d9ff83c0518cef550bd971386a8382d204981eae09813efeacaa1f"
+  "canonical_hash": "2f1ec4848998eb75a818b0e81136e49008867d4e1aa728cb043eb003a6859f60"
 }

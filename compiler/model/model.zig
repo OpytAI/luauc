@@ -100,6 +100,8 @@ pub const ImportNeeds = struct {
     check_userdata_tag: bool = false,
     barrier_object: bool = false,
     barrier_table_back: bool = false,
+    set_userdata_metatable: bool = false,
+    table_store: bool = false,
     barrier_table_forward: bool = false,
     hash_node_addr: bool = false,
     slot_node_addr: bool = false,
@@ -168,6 +170,8 @@ pub const ImportNeeds = struct {
         self.check_userdata_tag = self.check_userdata_tag or other.check_userdata_tag;
         self.barrier_object = self.barrier_object or other.barrier_object;
         self.barrier_table_back = self.barrier_table_back or other.barrier_table_back;
+        self.set_userdata_metatable = self.set_userdata_metatable or other.set_userdata_metatable;
+        self.table_store = self.table_store or other.table_store;
         self.barrier_table_forward = self.barrier_table_forward or other.barrier_table_forward;
         self.hash_node_addr = self.hash_node_addr or other.hash_node_addr;
         self.slot_node_addr = self.slot_node_addr or other.slot_node_addr;
@@ -871,6 +875,19 @@ pub fn scanImportNeedsFor(
                     needs.new_table = true;
                 } else {
                     needs.new_table_deferred = true;
+                }
+                if (instruction_id >= 2) {
+                    const previous = try snapshot.irInstruction(function, instruction_id - 1);
+                    if (previous.command == .check_gc) {
+                        const prefix = try snapshot.irInstruction(function, instruction_id - 2);
+                        if (prefix.command == ir_cmd_check_userdata_tag)
+                            needs.set_userdata_metatable = true;
+                        if (prefix.command == .set_savedpc and instruction_id >= 5) {
+                            const hook = try snapshot.irInstruction(function, instruction_id - 5);
+                            if (hook.command == ir_cmd_check_userdata_tag)
+                                needs.table_store = true;
+                        }
+                    }
                 }
             },
             .check_gc => needs.check_gc = true,

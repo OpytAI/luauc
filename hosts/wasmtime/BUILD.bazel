@@ -49,3 +49,34 @@ js_test(
     },
     size = "large",
 )
+
+js_test(
+    name = "barrier_parity_test",
+    data = [
+        "barrier.test.mjs",
+        "//compiler:compiler_wasm",
+        "//compiler/backend:backend_wasm",
+        "//compiler/link:linker_cli",
+        "//conformance/interpreter:pinned_interpreter",
+        "//conformance/sources:userdata_hold",
+        "//conformance/sources:userdata_store",
+        "//frontend:frontend_wasm",
+        "//hosts/js:host",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+        "//tools:ir_ledger",
+    ],
+    entry_point = "barrier.test.mjs",
+    env = {
+        "LUAUC_BACKEND_WASM": "$(rlocationpath //compiler/backend:backend_wasm)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_FRONTEND_WASM": "$(rlocationpath //frontend:frontend_wasm)",
+        "LUAUC_LINKER_CLI": "$(rlocationpath //compiler/link:linker_cli)",
+        "LUAUC_PINNED_INTERPRETER": "$(rlocationpath //conformance/interpreter:pinned_interpreter)",
+        "LUAUC_USERDATA_HOLD": "$(rlocationpath //conformance/sources:userdata_hold)",
+        "LUAUC_USERDATA_STORE": "$(rlocationpath //conformance/sources:userdata_store)",
+    },
+    size = "large",
+)

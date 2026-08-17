@@ -94,12 +94,16 @@ static bool isHookedUserdataType(uint8_t type) {
 static uint8_t userdataAccessBytecodeType(uint8_t type, const char *member, size_t memberLength) {
     if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Unit"))
         return userdataIndexToType(kUserdataVec2Index);
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Hold"))
+        return LBC_TYPE_TABLE;
     return LBC_TYPE_ANY;
 }
 
 static uint8_t userdataNamecallBytecodeType(uint8_t type, const char *member, size_t memberLength) {
     if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Mark"))
         return LBC_TYPE_NUMBER;
+    if (isHookedUserdataType(type) && compareMemberName(member, memberLength, "Store"))
+        return LBC_TYPE_TABLE;
     return LBC_TYPE_ANY;
 }
 
@@ -108,7 +112,19 @@ static uint8_t userdataNamecallBytecodeType(uint8_t type, const char *member, si
 static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
                            int resultReg, int sourceReg, int pcpos) {
     (void)pcpos;
-    if (!isHookedUserdataType(type) || !compareMemberName(member, memberLength, "Unit"))
+    if (!isHookedUserdataType(type))
+        return false;
+    if (compareMemberName(member, memberLength, "Hold")) {
+        IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+        build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+        build.inst(IrCmd::CHECK_GC);
+        IrOp created = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
+        build.inst(IrCmd::STORE_POINTER, build.vmReg(resultReg), created);
+        build.inst(IrCmd::STORE_TAG, build.vmReg(resultReg), build.constTag(LUA_TTABLE));
+        build.inst(IrCmd::BARRIER_OBJ, udata, build.vmReg(resultReg), build.undef());
+        return true;
+    }
+    if (!compareMemberName(member, memberLength, "Unit"))
         return false;
 
     IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
@@ -135,7 +151,26 @@ static bool userdataAccess(IrBuilder &build, uint8_t type, const char *member, s
 
 static bool userdataNamecall(IrBuilder &build, uint8_t type, const char *member, size_t memberLength,
                              int argResReg, int sourceReg, int params, int results, int pcpos) {
-    if (!isHookedUserdataType(type) || !compareMemberName(member, memberLength, "Mark"))
+    if (!isHookedUserdataType(type))
+        return false;
+    if (compareMemberName(member, memberLength, "Store")) {
+        if (params >= 0 && params < 2)
+            return false;
+        IrOp udata = build.inst(IrCmd::LOAD_POINTER, build.vmReg(sourceReg));
+        build.inst(IrCmd::CHECK_USERDATA_TAG, udata, build.constUint(kTagVec2), build.undef());
+        build.loadAndCheckTag(build.vmReg(argResReg + 2), LUA_TTABLE, build.undef());
+        build.inst(IrCmd::SET_SAVEDPC, build.constUint(uint32_t(pcpos) + 1));
+        build.inst(IrCmd::CHECK_GC);
+        IrOp created = build.inst(IrCmd::NEW_TABLE, build.constUint(0), build.constUint(0));
+        build.inst(IrCmd::STORE_POINTER, build.vmReg(argResReg), created);
+        build.inst(IrCmd::STORE_TAG, build.vmReg(argResReg), build.constTag(LUA_TTABLE));
+        IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(argResReg + 2));
+        build.inst(IrCmd::BARRIER_TABLE_BACK, table);
+        if (results == LUA_MULTRET)
+            build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(argResReg), build.constInt(1));
+        return true;
+    }
+    if (!compareMemberName(member, memberLength, "Mark"))
         return false;
 
     // sourceReg stays the live receiver.

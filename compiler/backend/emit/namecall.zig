@@ -18,8 +18,10 @@ const ir_cmd_check_slot_match = abi.ir_cmd_check_slot_match;
 const ir_cmd_check_node_no_next = abi.ir_cmd_check_node_no_next;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const ir_cmd_jump_slot_match = abi.ir_cmd_jump_slot_match;
+const ir_cmd_check_userdata_tag = abi.ir_cmd_check_userdata_tag;
 const lua_tag_table = abi.lua_tag_table;
 const lua_utag_limit = abi.lua_utag_limit;
+const tvalue_size = abi.tvalue_size;
 
 pub fn blockReferenceCount(self: anytype, target: u32) Error!u32 {
     return self.plan.blockReferences(target) orelse Error.UnsupportedControlFlow;
@@ -259,6 +261,41 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }
+fn holdOwnerRegister(self: anytype, table_alloc_start: u32) Error!?u32 {
+    if (table_alloc_start < 2)
+        return null;
+    const check_gc = try self.instruction(table_alloc_start - 1);
+    if (check_gc.command != .check_gc)
+        return null;
+    const tag_check = try self.instruction(table_alloc_start - 2);
+    if (tag_check.command != ir_cmd_check_userdata_tag)
+        return null;
+    return self.loadedPointerRegister(try self.operand(tag_check, 0));
+}
+
+fn storeTableRegister(self: anytype, table_alloc_start: u32) Error!?u32 {
+    if (table_alloc_start < 6)
+        return null;
+    if ((try self.instruction(table_alloc_start - 1)).command != .check_gc or
+        (try self.instruction(table_alloc_start - 2)).command != .set_savedpc)
+        return null;
+    const tag_check = try self.instruction(table_alloc_start - 3);
+    if (tag_check.command != .check_tag or tag_check.operand_count != 3)
+        return null;
+    const expected = try self.operand(tag_check, 1);
+    if (expected.kind != .constant or (try self.constant(expected.value)).tagValue() != lua_tag_table)
+        return null;
+    const tag_load = try self.instruction(table_alloc_start - 4);
+    if (tag_load.command != .load_tag or tag_load.operand_count != 1)
+        return null;
+    const table = try self.operand(tag_load, 0);
+    if (table.kind != .vm_reg)
+        return null;
+    if ((try self.instruction(table_alloc_start - 5)).command != ir_cmd_check_userdata_tag)
+        return null;
+    return table.value;
+}
+
 pub noinline fn emitTableAllocation(self: anytype, pattern: TableAllocationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
@@ -270,6 +307,20 @@ pub noinline fn emitTableAllocation(self: anytype, pattern: TableAllocationPatte
         self.new_table_deferred;
     try self.body.call(self.allocator, helper orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    if (try holdOwnerRegister(self, pattern.start)) |owner_reg| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, owner_reg * tvalue_size);
+        try self.body.i32Const(self.allocator, @intCast(pattern.destination));
+        try self.body.call(self.allocator, self.set_userdata_metatable orelse return Error.UnsupportedCommand);
+    } else if (try storeTableRegister(self, pattern.start)) |table_reg| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(table_reg));
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.i32Const(self.allocator, @intCast(pattern.destination));
+        try self.body.call(self.allocator, self.table_store orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+    }
 }
 pub noinline fn emitUserdataAllocationInstruction(
     self: anytype,

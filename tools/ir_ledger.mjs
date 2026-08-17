@@ -9,6 +9,7 @@ export const COMMAND_COUNT = 216;
 
 export const QUALIFYING_GATES = Object.freeze([
   "//hosts/wasmtime:parity_test",
+  "//hosts/wasmtime:barrier_parity_test",
   "//conformance:runtime_measurement_test",
 ]);
 

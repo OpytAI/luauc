@@ -251,6 +251,19 @@ uint32_t luauc_runtime_v1_check_userdata_tag(lua_State *state, const void *userd
                                            uint32_t expected_tag);
 void luauc_runtime_v1_barrier_object(lua_State *state, void *owner, uint32_t source_register);
 void luauc_runtime_v1_barrier_table_back(lua_State *state, void *table);
+void luauc_runtime_v1_set_userdata_metatable(lua_State *state, void *owner,
+                                             uint32_t source_register);
+void luauc_runtime_v1_table_store(lua_State *state, uint32_t table_register, uint32_t index,
+                                  uint32_t source_register);
+uint32_t luauc_runtime_v1_gc_step(lua_State *state);
+uint32_t luauc_runtime_v1_gc_state(lua_State *state);
+uint32_t luauc_runtime_v1_gc_isblack(lua_State *state, int stack_index);
+uint32_t luauc_runtime_v1_gc_isdead(lua_State *state, uint32_t object);
+uint32_t luauc_runtime_v1_gc_stop(lua_State *state);
+uint32_t luauc_runtime_v1_gc_restart(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *state);
+uint32_t luauc_runtime_v1_barrier_probe(lua_State *state, uint32_t kind);
 void luauc_runtime_v1_barrier_table_forward(lua_State *state, void *table,
                                            uint32_t source_register);
 void *luauc_runtime_v1_hash_node_addr(lua_State *state, uint32_t table_register, uint32_t hash);

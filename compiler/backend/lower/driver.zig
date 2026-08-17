@@ -171,6 +171,8 @@ fn lowerFunction(
         .check_userdata_tag = imports.check_userdata_tag,
         .barrier_object = imports.barrier_object,
         .barrier_table_back = imports.barrier_table_back,
+        .set_userdata_metatable = imports.set_userdata_metatable,
+        .table_store = imports.table_store,
         .barrier_table_forward = imports.barrier_table_forward,
         .hash_node_addr = imports.hash_node_addr,
         .slot_node_addr = imports.slot_node_addr,

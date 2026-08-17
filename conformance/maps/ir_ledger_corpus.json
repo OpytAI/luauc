@@ -153,6 +153,18 @@
       "hook": true
     },
     {
+      "source": "userdata_hold",
+      "path": "conformance/sources/userdata_hold.luau",
+      "bazel_data": "//conformance/sources:userdata_hold",
+      "hook": true
+    },
+    {
+      "source": "userdata_store",
+      "path": "conformance/sources/userdata_store.luau",
+      "bazel_data": "//conformance/sources:userdata_store",
+      "hook": true
+    },
+    {
       "source": "numeric_loop",
       "path": "conformance/sources/numeric_loop.luau",
       "bazel_data": "//conformance/sources:numeric_loop",

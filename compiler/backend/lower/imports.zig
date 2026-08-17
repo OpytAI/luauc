@@ -41,6 +41,8 @@ const new_userdata_symbol = abi.new_userdata_symbol;
 const check_userdata_tag_symbol = abi.check_userdata_tag_symbol;
 const barrier_object_symbol = abi.barrier_object_symbol;
 const barrier_table_back_symbol = abi.barrier_table_back_symbol;
+const set_userdata_metatable_symbol = abi.set_userdata_metatable_symbol;
+const table_store_symbol = abi.table_store_symbol;
 const barrier_table_forward_symbol = abi.barrier_table_forward_symbol;
 const hash_node_addr_symbol = abi.hash_node_addr_symbol;
 const slot_node_addr_symbol = abi.slot_node_addr_symbol;
@@ -151,6 +153,8 @@ pub const RuntimeImports = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    set_userdata_metatable: ?wasm.FunctionRef,
+    table_store: ?wasm.FunctionRef,
     barrier_table_forward: ?wasm.FunctionRef,
     hash_node_addr: ?wasm.FunctionRef,
     slot_node_addr: ?wasm.FunctionRef,
@@ -224,6 +228,8 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const check_userdata_tag_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const barrier_object_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const barrier_table_back_params = [_]wasm.ValueType{ .i32, .i32 };
+    const set_userdata_metatable_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
+    const table_store_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const barrier_table_forward_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const register_pair_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const set_list_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32 };
@@ -337,6 +343,14 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const barrier_table_back = if (needs.barrier_table_back) blk: {
         const helper_type = try object.addType(.{ .params = &barrier_table_back_params, .results = &no_results });
         break :blk try object.importFunction("env", barrier_table_back_symbol, helper_type);
+    } else null;
+    const set_userdata_metatable = if (needs.set_userdata_metatable) blk: {
+        const helper_type = try object.addType(.{ .params = &set_userdata_metatable_params, .results = &no_results });
+        break :blk try object.importFunction("env", set_userdata_metatable_symbol, helper_type);
+    } else null;
+    const table_store = if (needs.table_store) blk: {
+        const helper_type = try object.addType(.{ .params = &table_store_params, .results = &no_results });
+        break :blk try object.importFunction("env", table_store_symbol, helper_type);
     } else null;
     const barrier_table_forward = if (needs.barrier_table_forward) blk: {
         const helper_type = try object.addType(.{ .params = &barrier_table_forward_params, .results = &no_results });
@@ -545,6 +559,8 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .check_userdata_tag = check_userdata_tag,
         .barrier_object = barrier_object,
         .barrier_table_back = barrier_table_back,
+        .set_userdata_metatable = set_userdata_metatable,
+        .table_store = table_store,
         .barrier_table_forward = barrier_table_forward,
         .hash_node_addr = hash_node_addr,
         .slot_node_addr = slot_node_addr,

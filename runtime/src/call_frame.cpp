@@ -7,6 +7,7 @@
 #include "lbuiltins.h"
 #include "lvm.h"
 
+#include "lapi.h"
 #include "ldebug.h"
 #include "ldo.h"
 #include "lfunc.h"
@@ -1994,6 +1995,177 @@ extern "C" uint32_t luauc_runtime_v1_check_userdata_tag(lua_State *L, const void
     if (!userdata || userdata->tt != LUA_TUSERDATA)
         luaG_runerror(L, "strict AOT userdata tag guard lost validated pointer provenance");
     return userdata->tag == expectedTag;
+}
+
+extern "C" void luauc_runtime_v1_set_userdata_metatable(lua_State *L, void *ownerPointer,
+                                                      uint32_t sourceRegister) {
+    Proto *proto = activeAotFrameProto(L, "userdata metatable store");
+    TValue *source = activeAotRegister(L, proto, sourceRegister, "userdata metatable store");
+    if (source >= L->top)
+        luaG_runerror(L, "strict AOT userdata metatable store requires a published source register");
+    Udata *userdata = static_cast<Udata *>(ownerPointer);
+    if (!userdata || userdata->tt != LUA_TUSERDATA)
+        luaG_runerror(L, "strict AOT userdata metatable store lost owner provenance");
+    if (!ttistable(source))
+        luaG_runerror(L, "strict AOT userdata metatable store requires a table");
+    userdata->metatable = hvalue(source);
+}
+
+extern "C" void luauc_runtime_v1_table_store(lua_State *L, uint32_t tableRegister, uint32_t index,
+                                           uint32_t sourceRegister) {
+    Proto *proto = activeAotFrameProto(L, "table store");
+    LuaTable *table = activeAotPlainTable(L, proto, tableRegister, true, "table store");
+    TValue *source = activeAotRegister(L, proto, sourceRegister, "table store");
+    if (source >= L->top || index == 0)
+        luaG_runerror(L, "strict AOT table store requires a published source and a 1-based index");
+    if (index > INT_MAX)
+        luaG_runerror(L, "strict AOT table store rejected index %u", index);
+    TValue *destination = luaH_setnum(L, table, int(index));
+    source = L->base + sourceRegister;
+    setobj2t(L, destination, source);
+}
+
+static GCObject *stackCollectable(lua_State *L, int index) {
+    const TValue *value = luaA_toobject(L, index);
+    if (!value || !iscollectable(value))
+        return nullptr;
+    return gcvalue(value);
+}
+
+static uint32_t forceGcStep(lua_State *L) {
+    L->global->GCthreshold = 0;
+    luaC_step(L, false);
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_step(lua_State *L) {
+    if (!L || !L->global)
+        return UINT32_MAX;
+    return forceGcStep(L);
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_state(lua_State *L) {
+    return L && L->global ? L->global->gcstate : UINT32_MAX;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_isblack(lua_State *L, int stackIndex) {
+    GCObject *object = L ? stackCollectable(L, stackIndex) : nullptr;
+    return object && isblack(object);
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_isdead(lua_State *L, uint32_t objectPointer) {
+    if (!L || !L->global || objectPointer == 0)
+        return 0;
+    return isdead(L->global, reinterpret_cast<GCObject *>(static_cast<uintptr_t>(objectPointer)));
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_stop(lua_State *L) {
+    if (!L)
+        return UINT32_MAX;
+    lua_gc(L, LUA_GCSTOP, 0);
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_restart(lua_State *L) {
+    if (!L)
+        return UINT32_MAX;
+    lua_gc(L, LUA_GCRESTART, 0);
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *L) {
+    if (!L || !L->global)
+        return UINT32_MAX;
+    uint32_t steps = 0;
+    while (L->global->gcstate != GCSsweep && steps < 4096) {
+        forceGcStep(L);
+        steps++;
+    }
+    return L->global->gcstate;
+}
+
+extern "C" uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *L) {
+    if (!L || !L->global)
+        return UINT32_MAX;
+    uint32_t steps = 0;
+    while (L->global->gcstate != GCSpause && steps < 4096) {
+        forceGcStep(L);
+        steps++;
+    }
+    return L->global->gcstate;
+}
+
+static bool paintSeedAndBagBlack(lua_State *L, int seedIndex, int bagIndex) {
+    for (int attempt = 0; attempt < 24; ++attempt) {
+        lua_gc(L, LUA_GCRESTART, 0);
+        if (L->global->gcstate == GCSpause)
+            forceGcStep(L);
+        uint32_t steps = 0;
+        while (steps++ < 512) {
+            GCObject *seed = stackCollectable(L, seedIndex);
+            GCObject *bag = stackCollectable(L, bagIndex);
+            if (!seed || !bag)
+                return false;
+            if (isblack(seed) && isblack(bag)) {
+                lua_gc(L, LUA_GCSTOP, 0);
+                const int stopped = L->global->gcstate;
+                if (stopped == GCSatomic || stopped == GCSsweep || stopped == GCSpause)
+                    break;
+                return true;
+            }
+            const int state = L->global->gcstate;
+            if (state == GCSatomic || state == GCSsweep || state == GCSpause)
+                break;
+            forceGcStep(L);
+        }
+        while (L->global->gcstate != GCSpause && steps++ < 2048)
+            forceGcStep(L);
+    }
+    return false;
+}
+
+extern "C" uint32_t luauc_runtime_v1_barrier_probe(lua_State *L, uint32_t kind) {
+    if (!L || (kind != 0 && kind != 1) || lua_gettop(L) < 1 || !lua_isfunction(L, 1))
+        return 2;
+
+    lua_settop(L, 1);
+    lua_getglobal(L, "embed");
+    if (!lua_istable(L, -1))
+        return 2;
+    lua_getfield(L, -1, "vec2");
+    lua_remove(L, -2);
+    lua_pushnumber(L, 1.0);
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK)
+        return 2;
+    lua_createtable(L, 1, 0);
+    lua_pushnumber(L, 0);
+    lua_rawseti(L, -2, 1);
+    if (!paintSeedAndBagBlack(L, 2, 3))
+        return 2;
+
+    lua_pushvalue(L, 1);
+    lua_pushvalue(L, 2);
+    if (kind == 1)
+        lua_pushvalue(L, 3);
+    if (lua_pcall(L, kind == 1 ? 2 : 1, 1, 0) != LUA_OK)
+        return 2;
+
+    GCObject *white = nullptr;
+    if (kind == 0) {
+        white = stackCollectable(L, -1);
+        lua_pop(L, 1);
+    } else {
+        lua_rawgeti(L, 3, 1);
+        white = stackCollectable(L, -1);
+        lua_pop(L, 2);
+    }
+    if (!white)
+        return 2;
+
+    const uint32_t markState = luauc_runtime_v1_gc_finish_mark(L);
+    if (markState != GCSsweep)
+        return 2;
+    return luauc_runtime_v1_gc_isdead(L, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(white)));
 }
 
 extern "C" void luauc_runtime_v1_barrier_object(lua_State *L, void *ownerPointer,

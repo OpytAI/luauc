@@ -2,6 +2,13 @@
 #include "luacode.h"
 #include "lualib.h"
 
+#include "lapi.h"
+#include "lgc.h"
+#include "lobject.h"
+#include "lstate.h"
+#include "ltable.h"
+#include "ludata.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -91,6 +98,12 @@ int embedVec2Index(lua_State *L) {
         embedVec2Normalize(payload, src);
         return 1;
     }
+    if (keySize == 4 && memcmp(key, "Hold", 4) == 0) {
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setmetatable(L, 1);
+        return 1;
+    }
     if (keySize == 4 && memcmp(key, "Mark", 4) == 0) {
         lua_pushcfunction(L, embedVec2Mark, "Mark");
         return 1;
@@ -103,6 +116,13 @@ int embedVec2Namecall(lua_State *L) {
     const char *name = lua_namecallatom(L, nullptr);
     if (name && strcmp(name, "Mark") == 0)
         return embedVec2Mark(L);
+    if (name && strcmp(name, "Store") == 0) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, 2, 1);
+        return 1;
+    }
     luaL_error(L, "invalid vec2 namecall");
     return 0;
 }
@@ -246,6 +266,124 @@ bool invoke(lua_State *state, int64_t input, const char *label) {
 
 } // namespace
 
+static GCObject *stackCollectable(lua_State *L, int index) {
+    const TValue *value = luaA_toobject(L, index);
+    if (!value || !iscollectable(value))
+        return nullptr;
+    return gcvalue(value);
+}
+
+static uint32_t forceGcStep(lua_State *L) {
+    L->global->GCthreshold = 0;
+    luaC_step(L, false);
+    return L->global->gcstate;
+}
+
+static bool paintSeedAndBagBlack(lua_State *L, int seedIndex, int bagIndex) {
+    for (int attempt = 0; attempt < 24; ++attempt) {
+        lua_gc(L, LUA_GCRESTART, 0);
+        if (L->global->gcstate == GCSpause)
+            forceGcStep(L);
+        uint32_t steps = 0;
+        while (steps++ < 512) {
+            GCObject *seed = stackCollectable(L, seedIndex);
+            GCObject *bag = stackCollectable(L, bagIndex);
+            if (!seed || !bag)
+                return false;
+            if (isblack(seed) && isblack(bag)) {
+                lua_gc(L, LUA_GCSTOP, 0);
+                const int stopped = L->global->gcstate;
+                if (stopped == GCSatomic || stopped == GCSsweep || stopped == GCSpause)
+                    break;
+                return true;
+            }
+            const int state = L->global->gcstate;
+            if (state == GCSatomic || state == GCSsweep || state == GCSpause)
+                break;
+            forceGcStep(L);
+        }
+        while (L->global->gcstate != GCSpause && steps++ < 2048)
+            forceGcStep(L);
+    }
+    return false;
+}
+
+static bool finishMark(lua_State *L) {
+    uint32_t steps = 0;
+    while (L->global->gcstate != GCSsweep && steps < 4096) {
+        forceGcStep(L);
+        steps++;
+    }
+    return L->global->gcstate == GCSsweep;
+}
+
+static int runColorStrip(bool hold, bool applyBarrier) {
+    lua_State *state = luaL_newstate();
+    if (!state)
+        return 2;
+    luaL_openlibs(state);
+    publishEmbedImport(state);
+    luaL_sandbox(state);
+
+    lua_getglobal(state, "embed");
+    lua_getfield(state, -1, "vec2");
+    lua_remove(state, -2);
+    lua_pushnumber(state, 1.0);
+    if (lua_pcall(state, 1, 1, 0) != LUA_OK) {
+        lua_close(state);
+        return 2;
+    }
+    lua_createtable(state, 1, 0);
+    lua_pushnumber(state, 0);
+    lua_rawseti(state, -2, 1);
+    if (!paintSeedAndBagBlack(state, 1, 2)) {
+        lua_close(state);
+        return 2;
+    }
+
+    lua_newtable(state);
+    GCObject *white = stackCollectable(state, -1);
+    if (!white) {
+        lua_close(state);
+        return 2;
+    }
+    if (hold) {
+        const TValue *seedValue = luaA_toobject(state, 1);
+        if (!seedValue || !ttisuserdata(seedValue)) {
+            lua_close(state);
+            return 2;
+        }
+        Udata *seed = uvalue(seedValue);
+        seed->metatable = hvalue(luaA_toobject(state, -1));
+        if (applyBarrier)
+            luaC_objbarrier(state, seed, seed->metatable);
+    } else {
+        LuaTable *bag = hvalue(luaA_toobject(state, 2));
+        TValue *slot = luaH_setnum(state, bag, 1);
+        setobj2t(state, slot, luaA_toobject(state, -1));
+        white = gcvalue(slot);
+        if (applyBarrier)
+            luaC_barrierfast(state, bag);
+    }
+    lua_pop(state, 1);
+    if (!finishMark(state)) {
+        lua_close(state);
+        return 2;
+    }
+    const int dead = isdead(state->global, white) ? 1 : 0;
+    lua_close(state);
+    printf("strip=%s barrier=%s dead=%d\n", hold ? "hold" : "store", applyBarrier ? "on" : "off",
+           dead);
+    return applyBarrier ? dead : !dead;
+}
+
+int runBarrierStrip() {
+    return runColorStrip(true, true) == 0 && runColorStrip(true, false) == 0 &&
+                   runColorStrip(false, true) == 0 && runColorStrip(false, false) == 0
+               ? 0
+               : 1;
+}
+
 int runHookOnly(const char *hooksPath) {
     std::string userdataHooksSource = readFile(hooksPath);
     if (userdataHooksSource.empty()) {
@@ -298,6 +436,8 @@ int runSingleSource(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--barrier-strip") == 0)
+        return runBarrierStrip();
     if (argc == 3 && strcmp(argv[1], "--hook-only") == 0)
         return runHookOnly(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--source") == 0)

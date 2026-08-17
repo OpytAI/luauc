@@ -344,6 +344,9 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                     (try self.tableAllocationPatternAt(instruction_id + 1) != null or
                         try self.dupTablePatternAt(instruction_id + 1) != null))
                 {} else if (instruction_id + 2 < self.function.instruction_count and
+                    (try self.instruction(instruction_id + 1)).command == .check_gc and
+                    try self.tableAllocationPatternAt(instruction_id + 2) != null)
+                {} else if (instruction_id + 2 < self.function.instruction_count and
                     (try self.instruction(instruction_id + 2)).command == .newclosure)
                 {
                     if (self.plan.closureContaining(instruction_id + 2) == null)

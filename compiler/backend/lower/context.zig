@@ -71,6 +71,8 @@ pub const Context = struct {
     check_userdata_tag: ?wasm.FunctionRef,
     barrier_object: ?wasm.FunctionRef,
     barrier_table_back: ?wasm.FunctionRef,
+    set_userdata_metatable: ?wasm.FunctionRef,
+    table_store: ?wasm.FunctionRef,
     barrier_table_forward: ?wasm.FunctionRef,
     hash_node_addr: ?wasm.FunctionRef,
     slot_node_addr: ?wasm.FunctionRef,

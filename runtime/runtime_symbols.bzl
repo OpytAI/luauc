@@ -56,6 +56,8 @@ AOT_GENERATED_RUNTIME_SYMBOLS = [
     "luauc_runtime_v1_return",
     "luauc_runtime_v1_set_global",
     "luauc_runtime_v1_set_list",
+    "luauc_runtime_v1_set_userdata_metatable",
+    "luauc_runtime_v1_table_store",
     "luauc_runtime_v1_set_location",
     "luauc_runtime_v1_set_upvalue",
     "luauc_runtime_v1_slot_node_addr",

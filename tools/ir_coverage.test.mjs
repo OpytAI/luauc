@@ -70,6 +70,16 @@ if (!hookUnitMarkSatisfied) {
   throw new Error(`hook_unit_mark seeds failed: ${JSON.stringify(hookNumbers)}`);
 }
 
+const stripStdout = execFileSync(pathOf("LUAUC_PINNED_INTERPRETER"), ["--barrier-strip"], {
+  encoding: "utf8",
+});
+if (!stripStdout.includes("strip=hold barrier=on dead=0") ||
+    !stripStdout.includes("strip=hold barrier=off dead=1") ||
+    !stripStdout.includes("strip=store barrier=on dead=0") ||
+    !stripStdout.includes("strip=store barrier=off dead=1")) {
+  throw new Error(`interpreter color strip failed:\n${stripStdout}`);
+}
+
 const generated = await generateIrCoverage({
   frontend: pathOf("LUAUC_FRONTEND_WASM"),
   backend: pathOf("LUAUC_BACKEND_WASM"),
@@ -81,7 +91,7 @@ const generated = await generateIrCoverage({
 }, {
   resolveSource: (entry) => runfile(entry.path, entry.path),
   hookUnitMarkSatisfied,
-  isolatedStripSatisfied: false,
+  isolatedStripSatisfied: true,
 });
 
 const temp = mkdtempSync(join(tmpdir(), "luauc-ir-coverage-"));
@@ -103,7 +113,7 @@ const coverageOptions = {
   existingGates: new Set([...QUALIFYING_GATES, "//hosts/js:embed_test", "//hosts/js:cli_test"]),
   intToNumMayImportUserdata,
   hookUnitMarkSatisfied,
-  isolatedStripSatisfied: false,
+  isolatedStripSatisfied: true,
 };
 
 const errors = validateCoverageMap(generated.document, coverageOptions);
@@ -189,7 +199,7 @@ function expectValidateError(label, document, options, match) {
   expectValidateError(
     "unsatisfied isolated strip",
     rehash(forgedStrip),
-    coverageOptions,
+    { ...coverageOptions, isolatedStripSatisfied: false },
     "isolated strip evidence lock is unsatisfied",
   );
 }
@@ -229,6 +239,20 @@ for (const row of generated.document.commands) {
     if (!allow.labels.includes(row.evidence.gate) || !(row.executed_gates ?? []).includes(row.evidence.gate)) {
       throw new Error(`${row.command}: isolated strip lock requires ${row.evidence.gate}`);
     }
+  }
+}
+
+{
+  const hold = generated.document.commands.find((row) => row.command === "BARRIER_OBJ");
+  const store = generated.document.commands.find((row) => row.command === "BARRIER_TABLE_BACK");
+  if (!hold?.census_sources.includes("userdata_hold") || hold.census_sources.includes("userdata_store")) {
+    throw new Error(`BARRIER_OBJ census is not Hold-only: ${JSON.stringify(hold?.census_sources)}`);
+  }
+  if (!store?.census_sources.includes("userdata_store") || store.census_sources.includes("userdata_hold")) {
+    throw new Error(`BARRIER_TABLE_BACK census is not Store-only: ${JSON.stringify(store?.census_sources)}`);
+  }
+  if (hold.status === "implemented" || store.status === "implemented") {
+    throw new Error("147/148 stay partial until over-approximated lowering is replaced");
   }
 }
 

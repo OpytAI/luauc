@@ -128,6 +128,12 @@ static int embedVec2Index(lua_State *L) {
         embedVec2Normalize(payload, src);
         return 1;
     }
+    if (key_size == 4 && memcmp(key, "Hold", 4) == 0) {
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setmetatable(L, 1);
+        return 1;
+    }
     if (key_size == 4 && memcmp(key, "Mark", 4) == 0) {
         lua_pushcfunction(L, embedVec2Mark, "Mark");
         return 1;
@@ -140,6 +146,13 @@ static int embedVec2Namecall(lua_State *L) {
     const char *name = lua_namecallatom(L, NULL);
     if (name && strcmp(name, "Mark") == 0)
         return embedVec2Mark(L);
+    if (name && strcmp(name, "Store") == 0) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, 2, 1);
+        return 1;
+    }
     luaL_error(L, "invalid vec2 namecall");
     return 0;
 }
@@ -212,6 +225,15 @@ static void collectCoverage(void *context, const char *, int, int depth, const i
 }
 
 extern const LuaucRuntimeProgramV1 *luauc_runtime_v1_program_pointer;
+uint32_t luauc_runtime_v1_gc_step(lua_State *state);
+uint32_t luauc_runtime_v1_gc_state(lua_State *state);
+uint32_t luauc_runtime_v1_gc_isblack(lua_State *state, int stack_index);
+uint32_t luauc_runtime_v1_gc_isdead(lua_State *state, uint32_t object);
+uint32_t luauc_runtime_v1_gc_stop(lua_State *state);
+uint32_t luauc_runtime_v1_gc_restart(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_mark(lua_State *state);
+uint32_t luauc_runtime_v1_gc_finish_sweep(lua_State *state);
+uint32_t luauc_runtime_v1_barrier_probe(lua_State *state, uint32_t kind);
 
 uint32_t luauc_embed_v1_alloc(uint32_t size) {
     return size == 0 ? 0 : (uint32_t)(uintptr_t)malloc(size);
@@ -398,4 +420,54 @@ uint32_t luauc_embed_v1_invoke(uint32_t handle, uint32_t request_pointer,
     result->status = status == LUA_OK ? 0 : 3;
     lua_settop(state, 1);
     return result->status;
+}
+
+static lua_State *embedState(uint32_t handle) {
+    LuaucEmbedContext *context = (LuaucEmbedContext *)(uintptr_t)handle;
+    return context ? context->state : NULL;
+}
+
+uint32_t luauc_embed_v1_gc_step(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_step(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_state(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_state(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_isblack(uint32_t handle, int32_t stack_index) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_isblack(state, stack_index) : 0;
+}
+
+uint32_t luauc_embed_v1_gc_isdead(uint32_t handle, uint32_t object) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_isdead(state, object) : 0;
+}
+
+uint32_t luauc_embed_v1_gc_stop(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_stop(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_restart(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_restart(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_finish_mark(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_finish_mark(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_gc_finish_sweep(uint32_t handle) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_gc_finish_sweep(state) : 0xffffffffu;
+}
+
+uint32_t luauc_embed_v1_barrier_probe(uint32_t handle, uint32_t kind) {
+    lua_State *state = embedState(handle);
+    return state ? luauc_runtime_v1_barrier_probe(state, kind) : 2;
 }

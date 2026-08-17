@@ -111,6 +111,8 @@ const FAMILY_TESTS = Object.freeze({
   embed_lib: "//conformance/tests:frontend_to_wasm_test",
   proto_identity: "//conformance/tests:proto_identity_test",
   userdata_hooks: "//conformance/tests:userdata_test",
+  userdata_hold: "//hosts/wasmtime:barrier_parity_test",
+  userdata_store: "//hosts/wasmtime:barrier_parity_test",
   numeric_loop: "//conformance/tests:natural_sources_test",
   natural_integer: "//conformance/tests:natural_sources_test",
   natural_bit32: "//conformance/tests:natural_sources_test",
@@ -145,13 +147,15 @@ function executedGates(sourceIds, options) {
     gates.push("//hosts/js:embed_test", "//hosts/js:cli_test");
   }
   if (options.measurementGate) gates.push("//conformance:runtime_measurement_test");
+  if (sourceIds.some((id) => id === "userdata_hold" || id === "userdata_store")) {
+    gates.push("//hosts/wasmtime:barrier_parity_test");
+  }
   return [...new Set(gates)];
 }
 
 function classify(row, state, spec, generalArm, options) {
   const census = [...state.census_sources];
   if (census.length === 0) {
-    // Isolated Hold is unpublished; BARRIER_OBJ stays partial until a color strip exists.
     if (spec.evidence?.kind === "isolated_hold_strip") {
       return { status: "partial", reachability: "published_hook" };
     }
@@ -164,7 +168,7 @@ function classify(row, state, spec, generalArm, options) {
   const forms = spec.forms ?? [];
   const missingForms = forms.filter((form) => !state.census_forms.has(form.id));
   const emptyFormsHole = forms.length === 0 && spec.class !== "compile_only";
-  const evidenceOk = evidenceSatisfied(spec.evidence, options);
+  const evidenceOk = evidenceSatisfied(spec.evidence, options, state);
   const tests = existingTests(census);
   const gates = executedGates(census, options);
   const lowered = [...state.lowered_sources];
@@ -186,11 +190,14 @@ function classify(row, state, spec, generalArm, options) {
   return { status: "partial", reachability };
 }
 
-function evidenceSatisfied(evidence, options) {
+function evidenceSatisfied(evidence, options, state) {
   if (!evidence) return true;
   if (evidence.kind === "hook_unit_mark") return options.hookUnitMarkSatisfied === true;
-  if (evidence.kind === "isolated_store_strip" || evidence.kind === "isolated_hold_strip") {
-    return options.isolatedStripSatisfied === true;
+  if (evidence.kind === "isolated_hold_strip") {
+    return options.isolatedStripSatisfied === true && state.census_sources.has("userdata_hold");
+  }
+  if (evidence.kind === "isolated_store_strip") {
+    return options.isolatedStripSatisfied === true && state.census_sources.has("userdata_store");
   }
   return false;
 }
