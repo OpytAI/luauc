@@ -173,6 +173,35 @@ js_test(
 )
 
 js_test(
+    name = "compiler_build_digest_test",
+    data = [
+        "compiler_build_digest.test.mjs",
+        "generate_compiler_build_digest.mjs",
+        "//compiler:compiler_build_digest_json",
+        "//compiler:compiler_build_digest_inputs",
+        "//compiler/backend/emit:compiler_build_digest_inputs",
+        "//compiler/backend/lower:compiler_build_digest_inputs",
+        "//compiler/backend/plan:compiler_build_digest_inputs",
+        "//compiler/link:compiler_build_digest_inputs",
+        "//frontend:compiler_build_digest_inputs",
+        "//schema:compiler_build_digest_inputs",
+    ],
+    no_copy_to_bin = [
+        "//compiler:compiler_build_digest_inputs",
+        "//compiler/backend/emit:compiler_build_digest_inputs",
+        "//compiler/backend/lower:compiler_build_digest_inputs",
+        "//compiler/backend/plan:compiler_build_digest_inputs",
+        "//compiler/link:compiler_build_digest_inputs",
+        "//frontend:compiler_build_digest_inputs",
+        "//schema:compiler_build_digest_inputs",
+    ],
+    entry_point = "compiler_build_digest.test.mjs",
+    env = {
+        "LUAUC_COMPILER_BUILD_DIGEST": "$(rlocationpath //compiler:compiler_build_digest_json)",
+    },
+)
+
+js_test(
     name = "maps_test",
     size = "large",
     data = [

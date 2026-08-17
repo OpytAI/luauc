@@ -92,6 +92,15 @@ pub const Profile = struct {
         return .{ .name = try self.stringAt(readU32(record, 0), readU32(record, 4)), .type_index = readU32(record, 8), .kind = try kind(record[12]) };
     }
 
+    fn runtimeSymbolModule(self: Profile, index: u32) Error!?[]const u8 {
+        if (index >= self.runtime_symbol_count) return Error.ResourceLimit;
+        const record = try self.recordAt(self.runtime_symbol_offset, index, runtime_symbol_record_size);
+        const offset = readU32(record, 16);
+        const size = readU32(record, 20);
+        if (size == 0) return null;
+        return try self.stringAt(offset, size);
+    }
+
     pub fn binding(self: Profile, index: u32) Error!Binding {
         if (index >= self.binding_count) return Error.ResourceLimit;
         const record = try self.recordAt(self.binding_offset, index, binding_record_size);
@@ -100,8 +109,17 @@ pub const Profile = struct {
 
     /// Generated-runtime helpers are imported from this module. Objects emit `"env"`;
     /// the linker rewrites those module strings to this name before `findExport`.
-    pub fn generatedRuntimeModule(_: Profile) []const u8 {
-        return "env";
+    pub fn generatedRuntimeModule(self: Profile) []const u8 {
+        var found: ?[]const u8 = null;
+        var index: u32 = 0;
+        while (index < self.runtime_symbol_count) : (index += 1) {
+            const module = (self.runtimeSymbolModule(index) catch continue) orelse continue;
+            if (found) |previous| {
+                if (!std.mem.eql(u8, previous, module))
+                    return "env";
+            } else found = module;
+        }
+        return found orelse "env";
     }
 
     pub fn bindingName(self: Profile, wanted: Role, wanted_kind: Kind) Error![]const u8 {

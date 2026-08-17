@@ -8,6 +8,15 @@ js_library(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = [
+        "compiler_host.zig",
+        "compiler_entry.zig",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 zig_static_library(
     name = "compiler_component",
     main = "compiler_host.zig",

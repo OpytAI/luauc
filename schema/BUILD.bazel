@@ -2,6 +2,12 @@ load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_zig//zig:defs.bzl", "zig_library", "zig_test")
 
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = glob(["*.zig", "*.h"], exclude = ["*.test.zig"]),
+    visibility = ["//visibility:public"],
+)
+
 exports_files(
     [
         "compiler_result_v1.zig",

@@ -12,6 +12,12 @@ cc_headers(
 )
 
 filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = ["frontend_adapter.cpp"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "compiler_patch_headers",
     srcs = [
         "compiler_error_channel.h",
