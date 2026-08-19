@@ -5,9 +5,9 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
   "input_sha256": {
-    "profile": "58d90ca5e4ad0fbfad1320a29e974aa6f11116c5a4d37b6b890f92509e3e9647",
+    "profile": "0c9518a3b6f243c997d99e73ccdd1cf920d6c5bcccdd9f0ad9e83cc7fde9d84c",
     "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",
-    "pack": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c"
+    "pack": "af5fcf73996cea05c5666b84f368d87d671f9c39a25d1411b811a5ac7d0fc75c"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
@@ -20,7 +20,7 @@
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
     "object_contract_sha256": "cfdc8723b60c127b30f342fa4d52c4fd8520992b3bb57c6e74e51c32a927ae7b",
     "pack_build_sha256": "8c615393d5639fbf161c6061ff65a51c002eb89dc8e5f2d255c5df9ec4096fef",
-    "license_inventory_sha256": "62db69aaae1bfdcf018c8a83254e4aeb91f1e42d8882e8b4cd224bda6045659c"
+    "license_inventory_sha256": "8e10cbc659c50024a618103c11c0cb992721a2bc945af296f845375100d25b60"
   },
   "host_imports": [
     {
@@ -448,5 +448,5 @@
       }
     ]
   },
-  "canonical_hash": "08dfe9c80101b18007d21db6e65090f53dca86aa44cfef9b062c0038a57d3a53"
+  "canonical_hash": "7767d0bf8a6c80bbdd662c5daac54ea4e2259074364b43c45b88a93ecf73150c"
 }

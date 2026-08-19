@@ -199,14 +199,3 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-
-==============================================================================
-
-THIRD-PARTY SOFTWARE
-
-This project builds against Luau 0.725 and contains Luau-derived patches under
-third_party/luau/patches. Luau and its Lua-derived software are available under
-the MIT license terms preserved in:
-
-    third_party/luau/LICENSE.txt
-    third_party/luau/lua_LICENSE.txt

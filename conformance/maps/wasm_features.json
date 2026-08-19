@@ -6,7 +6,7 @@
   "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
   "input_sha256": {
     "compiler": "36d4811e56c2559829be225a60c77088b0e85d591429628bdcd9f66870e9a741",
-    "pack": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c",
+    "pack": "af5fcf73996cea05c5666b84f368d87d671f9c39a25d1411b811a5ac7d0fc75c",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "permitted": [
@@ -61,7 +61,7 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "0994a0896ec3232290533d2153f2b1af470ffcbea79acaf18005f7cb8c8bc78c",
+      "sha256": "af5fcf73996cea05c5666b84f368d87d671f9c39a25d1411b811a5ac7d0fc75c",
       "export_names": [
         "__stack_pointer",
         "_start",
@@ -201,5 +201,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "fbbd9ff335e7f6b286206d0d8af58542147d9cac3233676ac1dee02014f73c06"
+  "canonical_hash": "a3b27ea413359d39d5b6939e927f8d756ec5d36008770bdfaea6c372e94af5dc"
 }
