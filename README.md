@@ -11,7 +11,8 @@ calls, entry conventions, and resource ceilings come from validated profile/pack
 ## Build
 
 Requirements are Bazel 9.2.0 (pinned by `.bazelversion`) and a supported Node.js runtime. Bazel
-downloads the pinned Luau 0.725 source archive and all toolchains.
+downloads the pinned Luau 0.725 source archive and all toolchains. Set the Bazel output root and
+Zig compiler cache in ignored `user.bazelrc`. Do not put those caches under `/tmp`.
 
 ```bash
 bazel build //compiler:compiler_wasm \
