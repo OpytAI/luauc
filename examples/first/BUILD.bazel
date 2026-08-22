@@ -1,0 +1,11 @@
+load("//bazel:defs.bzl", "luauc_package")
+
+luauc_package(
+    name = "program",
+    modules = {
+        "mathlib": "mathlib.luau",
+        "main": "main.luau",
+    },
+    entry = "main",
+    visibility = ["//visibility:public"],
+)
