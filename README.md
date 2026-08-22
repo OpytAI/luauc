@@ -1,11 +1,11 @@
 <div align="center">
   <h1>luauc</h1>
 
-  <p><strong>Compile Luau to one WebAssembly file, runtime included.</strong></p>
+  <p><strong>A compiler from Luau to WebAssembly.</strong></p>
 
   <p>
-    You write ordinary Luau. luauc emits a single <code>.wasm</code> that already<br>
-    contains a pinned Luau VM. A host loads that file. There is no interpreter to install.
+    Pass in a closed package of modules and get back one <code>.wasm</code>
+    with a Luau runtime already linked in.
   </p>
 
   <p>
@@ -28,35 +28,23 @@
 
 ## Why luauc
 
-Luau is usually shipped as source or bytecode. A host process then runs an
-interpreter or a JIT. The VM on the machine has to match what you tested.
+People usually run Luau by shipping source or bytecode and letting a host
+virtual machine interpret it. That works until the VM on the machine is not
+the one you tested.
 
-luauc is a strict ahead-of-time compiler:
+luauc compiles the program ahead of time. You hand it every module up front —
+if something `require`s `mathlib`, `mathlib` has to be in the package — and a
+copy of the Luau VM already built as WebAssembly. The compiler lowers your
+functions and links that VM into the same module. Node, a browser, or
+Wasmtime can load the file and call in.
 
-- You give it a **closed** package of Luau modules. Every `require` must be
-  listed. Nothing is loaded from the network or the filesystem at run time.
-- You also give it a **runtime pack** (a pinned Luau VM, already compiled to
-  WebAssembly) and a **runtime profile** (which of that VM’s symbols the host
-  must keep).
-- It emits **one** `.wasm` file that contains your compiled program *and* that
-  pinned runtime.
-
-A host (Node, a browser, Wasmtime, an embedder) instantiates that module and
-calls into it. There is no separate Luau interpreter to install.
-
-In one sentence: **luauc turns a closed Luau package into a single,
-deterministic WebAssembly artifact with a real Luau runtime fused inside.**
-
-1. **Write Luau, not WebAssembly.** Modules and `require` are ordinary Luau.
-2. **The package must be closed.** The compiler sees the whole graph.
-3. **The VM is an input, not a surprise.** Profile plus pack pin the runtime
-   you ship.
-4. **One `.wasm` out.** Your code and the runtime share one linear memory.
+The `.wasm` is not a new language. It is ordinary Luau, compiled, sitting next
+to a pinned runtime.
 
 ## First program
 
-Two files. That is the whole program. The embed host passes a number and a
-string into the entry function.
+Two files. The host calls the function `main` returns, and passes a number and
+a string.
 
 `examples/first/mathlib.luau`:
 
@@ -77,11 +65,7 @@ return function(n, text)
 end
 ```
 
-A module’s top-level return value is what `require` yields. `main` returns the
-function the host will call. Given `n = 5` it computes `5 * 7 + 10` and returns
-`45` plus a string.
-
-Build the artifact, then run it:
+With `n = 5` that is `5 * 7 + 10`, so `45`, plus a string built from `text`.
 
 ```bash
 bazel build //examples/first:program //:embed-js
@@ -92,54 +76,39 @@ bazel run //:embed-js -- "$PWD/bazel-bin/examples/first/program.wasm" 5 hi
 result=5|hi|45|hi:45
 ```
 
-The same bytes run under `//:embed-wasmtime`. Almost all of the file is the
-pinned VM. The Luau source is a few dozen characters. luauc does not make Luau
-small by itself — it makes Luau *shippable* as one pinned WebAssembly module.
-
-| Term | Meaning |
-|------|---------|
-| **Module** | A Luau source file identified by a logical name (`mathlib`, `main`), not a path. |
-| **Package** | A finite map from module names to source. Closed: every `require` resolves inside it. |
-| **Entry** | The module whose top-level value is the host-callable function. |
-| **Runtime pack** | A prebuilt WebAssembly blob holding the Luau VM and a small embed API. |
-| **Runtime profile** | Which pack exports to keep, and which slots your program replaces. |
-| **Artifact** | The single `.wasm` you get: pack plus compiled Luau, linked together. |
+The same file runs under `//:embed-wasmtime`. Almost all of the bytes are the
+VM. The Luau here is a few dozen characters; luauc is how you ship it, not how
+you make it small.
 
 ## Capabilities
 
-- **Closed packages** — every reachable function is compiled; `require` is
-  resolved at compile time.
-- **Fused runtime** — the output is one module, not “bytecode plus a VM to find
-  later.”
-- **Deterministic artifacts** — identical compiler, profile, pack, and package
-  produce identical bytes.
-- **Reference hosts** — Node (`//:embed-js`) and Wasmtime (`//:embed-wasmtime`)
-  compile and invoke with the same ABI.
-- **Bazel rule** — `luauc_package` turns a module map into that `.wasm`.
+- Compiles a closed package: every `require` is resolved before you run.
+- Emits one module, with the runtime linked in.
+- Repeats the same bytes when the compiler, package, and runtime inputs match.
+- Reference hosts in Node (`//:embed-js`) and Wasmtime (`//:embed-wasmtime`).
+- A Bazel rule, `luauc_package`, if you want the compile on the graph.
 
 ## Build
 
-Requirements are Bazel 9.2.0 (pinned by `.bazelversion`) and a supported
-Node.js runtime. Bazel downloads the pinned Luau 0.725 source archive and all
-toolchains. Set the Bazel output root and Zig compiler cache in ignored
-`user.bazelrc`. Do not put those caches under `/tmp`.
+Bazel 9.2.0 (see `.bazelversion`) and a Node.js runtime. Bazel fetches Luau
+0.725 and the toolchains. Put the Bazel output root and Zig cache in ignored
+`user.bazelrc` — not under `/tmp`.
 
 ```bash
 bazel build //examples/first:program \
   //:luauc //:embed-js //:embed-wasmtime
 ```
 
-The portable compiler is `bazel-bin/compiler/luauc.wasm`. The reference profile
-and pack are `bazel-bin/profiles/embed/embed_v1.profile` and
+`bazel-bin/compiler/luauc.wasm` is the compiler. The reference runtime is
+`embed_v1`: `bazel-bin/profiles/embed/embed_v1.profile` and
 `embed_v1.pack.wasm`.
 
-The four-module embed package under `examples/embed` is the conformance gate
-(closures, errors, coroutines, GC while suspended, userdata). Use
-`examples/first` to learn the pipeline.
+`examples/first` is the tutorial. `examples/embed` is the conformance package
+(closures, errors, coroutines, GC, userdata).
 
-### Compile from the CLI
+### CLI
 
-Module names are logical IDs, not filesystem paths:
+Module names are logical IDs, not paths:
 
 ```bash
 bazel run //:luauc -- compile \
@@ -150,13 +119,11 @@ bazel run //:luauc -- compile \
   --entry main \
   mathlib=examples/first/mathlib.luau \
   main=examples/first/main.luau
-```
 
-```bash
 bazel run //:embed-js -- /tmp/first.wasm 5 hi
 ```
 
-### Bazel dependency
+### From another Bazel repo
 
 ```starlark
 load("@luauc//bazel:defs.bzl", "luauc_package")
@@ -171,14 +138,13 @@ luauc_package(
 )
 ```
 
-The default profile is `embed-v1`. Pass `runtime_profile` and `runtime_pack`
-when you own a different embedding contract. Build a provider-owned pack with
-`luauc_runtime_profile` from `@luauc//profiles:defs.bzl`.
+That uses `embed-v1`. Pass `runtime_profile` and `runtime_pack` if you own a
+different embedding. `luauc_runtime_profile` in `@luauc//profiles:defs.bzl`
+builds a pack from a policy file.
 
-Downstream interpreter and analysis products consume stable component archives
-instead of compiling Luau themselves: `@luauc//luau:interpreter_wasm32_wasi`
-and `@luauc//luau:analysis_wasm32_wasi`. Source and header facades live next to
-those targets. Details are in the docs below.
+Interpreter and analysis archives, if you need Luau without compiling it
+yourself, are `@luauc//luau:interpreter_wasm32_wasi` and
+`@luauc//luau:analysis_wasm32_wasi`. The docs below cover the rest.
 
 ## Docs
 
@@ -190,5 +156,4 @@ those targets. Details are in the docs below.
 | [`docs/runtime-profile.md`](docs/runtime-profile.md) | Profiles and packs |
 | [`docs/embedding.md`](docs/embedding.md) | JavaScript and Wasmtime hosts |
 
-Project-owned code is Apache-2.0. The pinned Luau distribution retains its
-upstream license; see [NOTICE](NOTICE).
+Apache-2.0 for project code. Luau keeps its own license; see [NOTICE](NOTICE).
