@@ -86,6 +86,8 @@ fn lowerFunction(
     function_id_base: u32,
     proto_id_by_bytecode_id: []const u32,
     string_keys: *StringKeyPool,
+    reserved: ?wasm.FunctionRef,
+    siblings: []const wasm.FunctionRef,
 ) Error!wasm.FunctionRef {
     diagnostics.enterFunction(function_id);
     const function = try snapshot.irFunction(function_id);
@@ -179,6 +181,11 @@ fn lowerFunction(
             },
         }
     }
+    if (next_local > max_lowered_locals - 6)
+        return Error.ResourceLimit;
+    const call_func_local = next_local;
+    next_local += 6;
+    try locals.append(allocator, .{ .count = 6, .value_type = .i32 });
 
     var body = try wasm.Body.init(allocator, locals.items);
     defer body.deinit(allocator);
@@ -209,7 +216,8 @@ fn lowerFunction(
         .count_direct_call = imports.count_direct_call,
         .count_indirect_call = imports.count_indirect_call,
         .generated_type = imports.generated_type,
-        .self_function = try object.pendingFunctionRef(imports.generated_type),
+        .self_function = if (reserved) |ref| ref else try object.pendingFunctionRef(imports.generated_type),
+        .sibling_functions = siblings,
         .planned_function_id = std.math.add(u32, function_id_base, function_id) catch return Error.ResourceLimit,
         .exchange_continuation = imports.exchange_continuation,
         .set_location = imports.set_location,
@@ -277,6 +285,12 @@ fn lowerFunction(
         .status_local = 4,
         .continuation_local = 5,
         .table_index_local = 6,
+        .call_func_local = call_func_local,
+        .call_closure_local = call_func_local + 1,
+        .call_proto_local = call_func_local + 2,
+        .call_meta_local = call_func_local + 3,
+        .call_aux_local = call_func_local + 4,
+        .call_cached_closure_local = call_func_local + 5,
         .call_continuations = &.{},
         .continuation_indices = &.{},
         .string_keys = string_keys,
@@ -428,7 +442,22 @@ fn lowerFunction(
     try body.finish(allocator);
     try checkFunctionBodyLimit(body.bytes.items.len);
 
+    if (reserved) |ref| {
+        try object.setFunctionBody(ref, body);
+        return ref;
+    }
     return object.defineFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden, body);
+}
+
+fn reserveNamedFunction(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    global_id: u32,
+) Error!wasm.FunctionRef {
+    const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{global_id});
+    defer allocator.free(symbol_name);
+    return object.reserveFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden);
 }
 
 fn buildProtoIdentityMap(allocator: std.mem.Allocator, snapshot: snapshot_v1.Snapshot) Error![]u32 {
@@ -474,7 +503,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
-    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, proto_id_by_bytecode_id, &string_keys);
+    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, proto_id_by_bytecode_id, &string_keys, null, &.{});
     try emitStringKeyData(&object, string_keys);
     return object.emit();
 }
@@ -498,12 +527,30 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
+    const function_refs = try allocator.alloc(wasm.FunctionRef, @intCast(snapshot.header.ir_function_count));
+    defer allocator.free(function_refs);
+    function_id = 0;
+    while (function_id < snapshot.header.ir_function_count) : (function_id += 1)
+        function_refs[function_id] = try reserveNamedFunction(allocator, &object, imports, function_id);
 
     function_id = 0;
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{function_id});
         defer allocator.free(symbol_name);
-        _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, symbol_name, null, 0, proto_id_by_bytecode_id, &string_keys);
+        _ = try lowerFunction(
+            allocator,
+            snapshot,
+            function_id,
+            &object,
+            imports,
+            symbol_name,
+            null,
+            0,
+            proto_id_by_bytecode_id,
+            &string_keys,
+            function_refs[function_id],
+            function_refs,
+        );
     }
     try emitStringKeyData(&object, string_keys);
     return object.emit();
@@ -932,6 +979,18 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
         const module = try package.module(module_id);
         const snapshot = try snapshot_v1.parse(module.snapshot, snapshot_v1.production_identity);
         const function_base = function_bases[@intCast(module_id)];
+        var function_id: u32 = 0;
+        while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
+            const global_function_id = std.math.add(u32, function_base, function_id) catch return Error.ResourceLimit;
+            function_refs[@intCast(global_function_id)] = try reserveNamedFunction(allocator, &object, imports, global_function_id);
+        }
+    }
+
+    module_id = 0;
+    while (module_id < package.module_count) : (module_id += 1) {
+        const module = try package.module(module_id);
+        const snapshot = try snapshot_v1.parse(module.snapshot, snapshot_v1.production_identity);
+        const function_base = function_bases[@intCast(module_id)];
         const proto_id_by_bytecode_id = try buildProtoIdentityMap(allocator, snapshot);
         defer allocator.free(proto_id_by_bytecode_id);
         var function_id: u32 = 0;
@@ -939,7 +998,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
             const global_function_id = std.math.add(u32, function_base, function_id) catch return Error.ResourceLimit;
             const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{global_function_id});
             defer allocator.free(symbol_name);
-            function_refs[@intCast(global_function_id)] = try lowerFunction(
+            _ = try lowerFunction(
                 allocator,
                 snapshot,
                 function_id,
@@ -950,6 +1009,8 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
                 function_base,
                 proto_id_by_bytecode_id,
                 &string_keys,
+                function_refs[@intCast(global_function_id)],
+                function_refs,
             );
         }
     }

@@ -146,6 +146,10 @@ pub const Body = struct {
         try appendUleb(&self.bytes, allocator, offset);
     }
 
+    pub fn i32Load8U(self: *Body, allocator: std.mem.Allocator, alignment_log2: u32, offset: u32) !void {
+        try self.memoryOp(allocator, 0x2d, alignment_log2, offset);
+    }
+
     pub fn f64Load(self: *Body, allocator: std.mem.Allocator, alignment_log2: u32, offset: u32) !void {
         try self.bytes.append(allocator, 0x2b);
         try appendUleb(&self.bytes, allocator, alignment_log2);
@@ -458,6 +462,42 @@ pub const Object = struct {
         const function_index: u32 = @intCast(self.imports.items.len + self.functions.items.len - 1);
         const symbol_index: u32 = function_index;
         return .{ .function_index = function_index, .symbol_index = symbol_index, .type_index = type_index };
+    }
+
+    pub fn reserveFunction(self: *Object, name: []const u8, type_index: u32, symbol_flags: u32) !FunctionRef {
+        var body = Body{};
+        defer body.deinit(self.allocator);
+        try body.bytes.append(self.allocator, 0);
+        try body.opcode(self.allocator, 0x00);
+        try body.finish(self.allocator);
+        return self.defineFunction(name, type_index, symbol_flags, body);
+    }
+
+    pub fn setFunctionBody(self: *Object, function: FunctionRef, body: Body) !void {
+        if (function.function_index < self.imports.items.len)
+            return Error.InvalidTypeIndex;
+        const defined = function.function_index - self.imports.items.len;
+        if (defined >= self.functions.items.len or function.type_index != self.functions.items[defined].type_index)
+            return Error.InvalidTypeIndex;
+        if (!body.finished or body.bytes.items.len == 0 or body.bytes.items[body.bytes.items.len - 1] != 0x0b)
+            return Error.MissingFunctionEnd;
+        for (body.relocations.items) |item| {
+            if (@as(usize, item.body_offset) + 5 > body.bytes.items.len)
+                return Error.InvalidRelocationOffset;
+            if (item.kind == relocation.memory_addr_sleb and item.data_segment_index == null)
+                return Error.InvalidRelocationOffset;
+            if (item.kind != relocation.memory_addr_sleb and item.data_segment_index != null)
+                return Error.InvalidRelocationOffset;
+        }
+        const owned_body = try self.allocator.dupe(u8, body.bytes.items);
+        errdefer self.allocator.free(owned_body);
+        const owned_relocations = try self.allocator.dupe(Body.Relocation, body.relocations.items);
+        errdefer self.allocator.free(owned_relocations);
+        const slot = &self.functions.items[defined];
+        self.allocator.free(slot.body);
+        self.allocator.free(slot.relocations);
+        slot.body = owned_body;
+        slot.relocations = owned_relocations;
     }
 
     pub fn pendingFunctionRef(self: *const Object, type_index: u32) !FunctionRef {

@@ -52,6 +52,7 @@ pub const Context = struct {
     count_indirect_call: ?wasm.FunctionRef,
     generated_type: u32,
     self_function: wasm.FunctionRef,
+    sibling_functions: []const wasm.FunctionRef = &.{},
     planned_function_id: u32,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
@@ -116,9 +117,19 @@ pub const Context = struct {
     base_local: u32,
     dispatch_local: u32,
     loop_branch_depth: u32,
+    // Set while a straight-line loop copies a specialized block into the wasm loop.
+    // The block body runs and falls through; the rejoin branch stays on the dispatch path.
+    rejoin_fallthrough: bool = false,
     status_local: u32,
     continuation_local: u32,
     table_index_local: u32,
+    // Scratch for the wasm CallInfo install. Instruction slots stay below these.
+    call_func_local: u32,
+    call_closure_local: u32,
+    call_proto_local: u32,
+    call_meta_local: u32,
+    call_aux_local: u32,
+    call_cached_closure_local: u32,
     call_continuations: []const CallContinuation,
     continuation_indices: []const u32,
     string_keys: *StringKeyPool,
@@ -303,6 +314,7 @@ pub const Context = struct {
     pub const emitTryNumberToIndex = table_values.emitTryNumberToIndex;
     pub const emitGetArrayAddress = table_values.emitGetArrayAddress;
     pub const emitTableLayoutGuard = table_values.emitTableLayoutGuard;
+    pub const preservedFreshTablePointer = table_values.preservedFreshTablePointer;
     pub const emitForwardTableBarrier = table_values.emitForwardTableBarrier;
     pub const emitGeneralTableOperation = table_values.emitGeneralTableOperation;
     pub const supportsGeneralTableFallback = admission.supportsGeneralTableFallback;
@@ -350,6 +362,7 @@ pub const Context = struct {
     pub const stringFallbackRejoin = builtin_patterns.stringFallbackRejoin;
     pub const fastcallValueOperand = builtin_patterns.fastcallValueOperand;
     pub const fastcallPatternAt = builtin_patterns.fastcallPatternAt;
+    pub const fixedContiguousFastcallPatternAt = builtin_patterns.fixedContiguousFastcallPatternAt;
     pub const stringLengthPattern = builtin_patterns.stringLengthPattern;
     pub const hasPreservedStringGuard = builtin_patterns.hasPreservedStringGuard;
     pub const preservesRegisterToConsumer = builtin_patterns.preservesRegisterToConsumer;
@@ -375,6 +388,7 @@ pub const Context = struct {
     pub const globalHeadPatternAt = tables.globalHeadPatternAt;
     pub const genericTableFallback = tables.genericTableFallback;
     pub const inlineGenericTableSetPatternAt = tables.inlineGenericTableSetPatternAt;
+    pub const linearizedNumericTableSetAt = tables.linearizedNumericTableSetAt;
     pub const semanticTableReloadPatternAt = tables.semanticTableReloadPatternAt;
     pub const emitSemanticTableReload = tables.emitSemanticTableReload;
     pub const emitDirectGenericTableOperation = tables.emitDirectGenericTableOperation;
@@ -395,7 +409,13 @@ pub const Context = struct {
     pub const emitGeneralSetTableKs = tables.emitGeneralSetTableKs;
     pub const tableLenPattern = tables.tableLenPattern;
     pub const dynamicLengthPattern = tables.dynamicLengthPattern;
+    pub const lengthSequenceAt = tables.lengthSequenceAt;
+    pub const freshTableLenPattern = tables.freshTableLenPattern;
+    pub const emitFreshTableLen = tables.emitFreshTableLen;
+    pub const emitRegisterLength = tables.emitRegisterLength;
     pub const emitPlainTableLen = tables.emitPlainTableLen;
+    pub const emitPlainLenCluster = tables.emitPlainLenCluster;
+    pub const bypassedPlainLenGuard = tables.bypassedPlainLenGuard;
     pub const emitGeneralTableLen = tables.emitGeneralTableLen;
 
     // operators
@@ -480,6 +500,7 @@ pub const Context = struct {
     pub const emitInterrupt = control.emitInterrupt;
     pub const emitCoverage = control.emitCoverage;
     pub const emitJump = control.emitJump;
+    pub const emitDispatchRejoin = control.emitDispatchRejoin;
     pub const emitConditionalDispatch = control.emitConditionalDispatch;
     pub const emitJumpIfTruthy = control.emitJumpIfTruthy;
     pub const emitJumpEqualTag = control.emitJumpEqualTag;
@@ -496,6 +517,7 @@ pub const Context = struct {
     pub const emitUnexpectedContinuationReturn = control.emitUnexpectedContinuationReturn;
     pub const emitClearContinuation = control.emitClearContinuation;
     pub const emitCall = control.emitCall;
+    pub const emitGenericForProtocol = control.emitGenericForProtocol;
 
     // calls
     pub const emitPrepVarargs = calls.emitPrepVarargs;

@@ -215,7 +215,8 @@ pub noinline fn emitPlainTableNamecallBlock(
             return;
     }
     try self.emitPlainTableNamecallOperation(pattern);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    if (!self.rejoin_fallthrough)
+        try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitFallbackNamecall(
     self: anytype,

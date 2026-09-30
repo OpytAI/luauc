@@ -560,6 +560,25 @@ pub const FastcallPattern = struct {
     result_count: i32,
     fallback: u32,
     fast_target: u32,
+
+    // One string and one register index, one number result. Constant indexes stay on the helper.
+    pub fn isStringByteRegister(self: FastcallPattern) bool {
+        return self.builtin_id == abi.lbf_string_byte and
+            self.parameter_count == 2 and
+            self.result_count == 1 and
+            self.argument_three == abi.lbf_operand_none and
+            self.argument_two < 0x8000_0000;
+    }
+
+    // vector.create(x, y) or vector.create(x, y, z), all registers, one result.
+    // Constant operands stay on the helper.
+    pub fn isVectorCreateRegister(self: FastcallPattern) bool {
+        if (self.builtin_id != abi.lbf_vector_create or self.result_count != 1 or self.argument_two >= 0x8000_0000)
+            return false;
+        if (self.parameter_count == 2)
+            return self.argument_three == abi.lbf_operand_none;
+        return self.parameter_count == 3 and self.argument_three < 0x8000_0000;
+    }
 };
 
 pub const TypeNamePattern = struct {
@@ -601,6 +620,8 @@ pub const StringTablePattern = struct {
     table: u32,
     value: u32,
     key: []const u8,
+    // Index of the interned key in this Proto's constant array. Absent keeps the helper.
+    key_constant: ?u32 = null,
     fallback: u32,
     fast_target: u32,
     rejoin: u32,
@@ -860,9 +881,11 @@ pub fn scanImportNeedsFor(
             },
             .get_upvalue => needs.get_upvalue = true,
             .set_upvalue => needs.set_upvalue = true,
-            .close_upvals => needs.close_upvalues = true,
+            .close_upvals, .return_ => needs.close_upvalues = true,
             .call => {
                 needs.call = true;
+                // A fixed Lua call lowers its frame in wasm and assists the collector itself.
+                needs.check_gc = true;
                 if (!static_package or !try isStaticRequireCall(snapshot, function, instruction_id))
                     needs.exchange_continuation = true;
             },
@@ -940,7 +963,8 @@ pub fn scanImportNeedsFor(
             ir_cmd_set_table => {
                 needs.array_set = true;
                 needs.table_set = true;
-                needs.table_array_set = true;
+                // An array hit copies the TValue in wasm and barriers collectables here.
+                needs.barrier_table_forward = true;
                 needs.table_set_number = true;
                 if (instruction_id > 0) {
                     var cursor = instruction_id -| 12;
@@ -958,7 +982,6 @@ pub fn scanImportNeedsFor(
             ir_cmd_get_table => {
                 needs.array_get = true;
                 needs.table_get = true;
-                needs.table_array_get = true;
                 needs.table_get_number = true;
             },
             ir_cmd_get_arr_addr => needs.array_get = true,
@@ -978,6 +1001,8 @@ pub fn scanImportNeedsFor(
                 needs.forg_loop_call = true;
                 needs.forg_loop_finish = true;
                 needs.exchange_continuation = true;
+                // A Lua iterator installs its frame in wasm and assists the collector itself.
+                needs.check_gc = true;
             },
             ir_cmd_forgprep_xnext_fallback => {
                 needs.forgprep_xnext_fallback = true;

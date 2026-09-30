@@ -39,7 +39,10 @@ backend_emit_library(
         "//compiler/backend/plan:admission",
     ],
 )
-backend_emit_library(name = "iteration")
+backend_emit_library(
+    name = "iteration",
+    deps = ["//compiler/backend/emit:tables"],
+)
 backend_emit_library(
     name = "memory",
     deps = ["//compiler/backend/plan:admission"],

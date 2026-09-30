@@ -13,6 +13,7 @@
 #include "lfunc.h"
 #include "lgc.h"
 #include "lmem.h"
+#include "lnumutils.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -27,6 +28,77 @@
 
 static_assert(LUAUC_RUNTIME_V1_MULTRET == LUA_MULTRET, "Luau MULTRET sentinel drift");
 static_assert(sizeof(TValue) == 16, "strict AOT TValue layout mismatch");
+static_assert(LUA_VECTOR_SIZE == 3, "vector lane count");
+static_assert(LUA_TVECTOR == 5, "vector tag");
+static_assert(offsetof(TValue, value) == 0, "TValue.value");
+static_assert(offsetof(TValue, extra) == 8, "TValue.extra holds vector lane 2");
+static_assert(offsetof(TValue, tt) == 12, "TValue.tt");
+static_assert(offsetof(lua_State, global) == 16, "lua_State.global");
+static_assert(offsetof(lua_State, ci) == 20, "lua_State.ci");
+static_assert(offsetof(CallInfo, aotstate) == 12, "CallInfo.aotstate");
+static_assert(offsetof(global_State, cb) + offsetof(lua_Callbacks, interrupt) == 700, "interrupt callback");
+static_assert(offsetof(LuaTable, readonly) == 4, "LuaTable.readonly");
+static_assert(offsetof(LuaTable, safeenv) == 5, "LuaTable.safeenv");
+static_assert(offsetof(LuaTable, sizearray) == 8, "LuaTable.sizearray");
+static_assert(offsetof(LuaTable, metatable) == 16, "LuaTable.metatable");
+static_assert(offsetof(LuaTable, array) == 20, "LuaTable.array");
+static_assert(LUA_CALLINFO_AOT_LINE_MASK == 0x000fffffu, "aot line mask");
+static_assert(LUA_CALLINFO_AOT_CONTINUATION_SHIFT == 20, "aot continuation shift");
+static_assert(LUA_CALLINFO_AOT_CONTINUATION_MASK == 0x00000fffu, "aot continuation mask");
+static_assert(sizeof(CallInfo) == 24, "CallInfo size");
+static_assert(offsetof(CallInfo, base) == 0, "CallInfo.base");
+static_assert(offsetof(CallInfo, func) == 4, "CallInfo.func");
+static_assert(offsetof(CallInfo, top) == 8, "CallInfo.top");
+static_assert(offsetof(CallInfo, nresults) == 16, "CallInfo.nresults");
+static_assert(offsetof(CallInfo, flags) == 20, "CallInfo.flags");
+static_assert(offsetof(lua_State, stack_last) == 24, "lua_State.stack_last");
+static_assert(offsetof(lua_State, marked) == 1, "lua_State.marked");
+static_assert(offsetof(lua_State, end_ci) == 32, "lua_State.end_ci");
+static_assert(offsetof(lua_State, base_ci) == 36, "lua_State.base_ci");
+static_assert(offsetof(lua_State, openupval) == 60, "lua_State.openupval");
+static_assert(offsetof(UpVal, v) == 4, "UpVal.v");
+static_assert(offsetof(TString, len) == 16, "TString.len");
+static_assert(offsetof(TString, data) == 20, "TString.data");
+static_assert(offsetof(TString, hash) == 12, "TString.hash");
+static_assert(offsetof(LuaTable, lsizenode) == 6, "LuaTable.lsizenode");
+static_assert(offsetof(LuaTable, node) == 24, "LuaTable.node");
+static_assert(offsetof(Proto, k) == 8, "Proto.k");
+static_assert(offsetof(Proto, sizek) == 88, "Proto.sizek");
+static_assert(sizeof(LuaNode) == 32, "LuaNode");
+static_assert(offsetof(LuaNode, val) == 0, "LuaNode.val");
+static_assert(offsetof(LuaNode, key) == 16, "LuaNode.key");
+static_assert(sizeof(TKey) == 16, "TKey");
+static_assert(offsetof(TKey, extra) == 8, "TKey.extra");
+// TKey.tt occupies the low 4 bits of the word after extra.
+static_assert(offsetof(Closure, env) == 20, "Closure.env");
+static_assert(offsetof(Closure, isC) == 3, "Closure.isC");
+static_assert(offsetof(Closure, nupvalues) == 4, "Closure.nupvalues");
+static_assert(offsetof(Closure, stacksize) == 5, "Closure.stacksize");
+static_assert(offsetof(Closure, l.p) == 24, "Closure.proto");
+static_assert(offsetof(Proto, nups) == 3, "Proto.nups");
+static_assert(offsetof(Proto, numparams) == 4, "Proto.numparams");
+static_assert(offsetof(Proto, is_vararg) == 5, "Proto.is_vararg");
+static_assert(offsetof(Proto, maxstacksize) == 6, "Proto.maxstacksize");
+static_assert(offsetof(Proto, code) == 12, "Proto.code");
+static_assert(offsetof(Proto, codeentry) == 20, "Proto.codeentry");
+static_assert(offsetof(Proto, execdata) == 24, "Proto.execdata");
+static_assert(offsetof(Proto, source) == 48, "Proto.source");
+static_assert(offsetof(Proto, sizecode) == 72, "Proto.sizecode");
+static_assert(offsetof(LuaucRuntimeProtoV1, abi_version) == 0, "metadata abi");
+static_assert(offsetof(LuaucRuntimeProtoV1, struct_size) == 4, "metadata size");
+static_assert(offsetof(LuaucRuntimeProtoV1, layout_sha256) == 8, "metadata layout");
+static_assert(offsetof(LuaucRuntimeProtoV1, entry) == 40, "metadata entry");
+static_assert(offsetof(LuaucRuntimeProtoV1, function_id) == 44, "metadata function id");
+static_assert(offsetof(LuaucRuntimeProtoV1, num_params) == 56, "metadata num params");
+static_assert(offsetof(LuaucRuntimeProtoV1, nups) == 57, "metadata nups");
+static_assert(offsetof(LuaucRuntimeProtoV1, is_vararg) == 58, "metadata vararg");
+static_assert(offsetof(LuaucRuntimeProtoV1, max_stack_size) == 59, "metadata max stack");
+static_assert(offsetof(global_State, GCthreshold) == 36, "global_State.GCthreshold");
+static_assert(offsetof(global_State, totalbytes) == 40, "global_State.totalbytes");
+static_assert(LUA_TFUNCTION == 8, "function tag");
+static_assert(LUA_CALLINFO_NATIVE == 4, "native callinfo flag");
+static_assert(LUA_CALLINFO_RETURN == 1, "return callinfo flag");
+static_assert(LUA_CALLINFO_OPYIELD == 8, "opyield callinfo flag");
 
 static uint32_t gHelperCalls;
 static uint32_t gTrampolineCalls;
@@ -626,8 +698,42 @@ extern "C" void luauc_runtime_v1_load_constant(lua_State *L, uint32_t destinatio
     setobj2s(L, destination, &proto->k[constantId]);
 }
 
+// Native frame, live registers, plain writable table. Length and growth use the pin's
+// luaH_getn / luaH_setnum. A false return leaves the table unchanged.
+static bool tryLiveInsertAppend(lua_State *L, uint32_t tableRegister, uint32_t sourceRegister) {
+    if (!L || !L->base || !L->ci || L->ci <= L->base_ci || !isLua(L->ci) ||
+        !(L->ci->flags & LUA_CALLINFO_NATIVE) || L->top <= L->base)
+        return false;
+
+    const uint32_t live = uint32_t(L->top - L->base);
+    if (tableRegister >= live || sourceRegister >= live)
+        return false;
+
+    TValue *tableValue = L->base + tableRegister;
+    if (!ttistable(tableValue))
+        return false;
+    LuaTable *table = hvalue(tableValue);
+    if (table->metatable || table->readonly)
+        return false;
+
+    const int length = luaH_getn(table);
+    if (length == INT_MAX)
+        return false;
+
+    TValue *destination = luaH_setnum(L, table, length + 1);
+    TValue *source = L->base + sourceRegister;
+    setobj2t(L, destination, source);
+    luaC_barriert(L, table, source);
+    return true;
+}
+
 extern "C" void luauc_runtime_v1_table_insert_append(lua_State *L, uint32_t tableRegister,
                                                    uint32_t sourceRegister) {
+    if (tryLiveInsertAppend(L, tableRegister, sourceRegister)) {
+        countRuntimeHelper();
+        return;
+    }
+
     Proto *proto = activeAotFrameProto(L, "table.insert append");
     LuaTable *table = activeAotPlainTable(L, proto, tableRegister, true, "table.insert append");
     TValue *tableValue = activeAotRegister(L, proto, tableRegister, "table.insert append");
@@ -765,8 +871,76 @@ extern "C" void luauc_runtime_v1_namecall_plain(lua_State *L, uint32_t destinati
     L->top = restorestack(L, liveTop);
 }
 
+// Match luaH_get's number arm: truncate toward zero, then keep the key only when the
+// integer round-trips and is a positive array index. NaN, zero, negatives, and
+// non-integrals fail the equality and stay on luaV_settable.
+static bool exactPositiveNumberKey(double key, int *index) {
+    int converted;
+    luai_num2int(converted, key);
+    if (converted <= 0 || !luai_numeq(cast_num(converted), key))
+        return false;
+    *index = converted;
+    return true;
+}
+
+// Plain writable table, exact positive number key, non-nil source.
+// luaH_setnum is the pin's array write and growth primitive. Growth can move the
+// stack, so the source address is recomputed before the copy. invalidateTMcache and
+// cachedslot match luaH_setslot / luaV_settable. A false return leaves the table
+// unchanged so the caller can use the full pinned semantic boundary.
+static bool publishPlainNumericSet(lua_State *L, TValue *tableValue, double key,
+                                   uint32_t sourceRegister) {
+    if (!ttistable(tableValue))
+        return false;
+    LuaTable *table = hvalue(tableValue);
+    if (table->metatable || table->readonly)
+        return false;
+
+    int index;
+    if (!exactPositiveNumberKey(key, &index))
+        return false;
+
+    TValue *source = L->base + sourceRegister;
+    if (ttisnil(source))
+        return false;
+
+    invalidateTMcache(table);
+    TValue *slot = luaH_setnum(L, table, index);
+    source = L->base + sourceRegister;
+    setobj2t(L, slot, source);
+    luaC_barriert(L, table, source);
+    L->cachedslot = gval2slot(table, slot);
+    return true;
+}
+
+// The generated miss already holds a native frame. Bound every register by the live
+// stack and publish a plain numeric write without walking Proto metadata. Constant
+// keys, nil sources, metatables, and rejected frames return false with the table
+// unchanged.
+static bool tryLiveRegisterNumericSet(lua_State *L, uint32_t tableRegister, uint32_t keyRegister,
+                                      uint32_t sourceRegister) {
+    if (!L || !L->base || !L->ci || L->ci <= L->base_ci || !isLua(L->ci) ||
+        !(L->ci->flags & LUA_CALLINFO_NATIVE) || L->top <= L->base)
+        return false;
+
+    const uint32_t live = uint32_t(L->top - L->base);
+    if (tableRegister >= live || keyRegister >= live || sourceRegister >= live)
+        return false;
+
+    TValue *keyValue = L->base + keyRegister;
+    if (!ttisnumber(keyValue))
+        return false;
+    return publishPlainNumericSet(L, L->base + tableRegister, nvalue(keyValue), sourceRegister);
+}
+
 extern "C" void luauc_runtime_v1_table_set(lua_State *L, uint32_t tableRegister, uint32_t keyOperand,
                                          uint32_t sourceRegister) {
+    if ((keyOperand & LUAUC_AOT_OPERAND_V1_CONSTANT_FLAG) == 0 &&
+        tryLiveRegisterNumericSet(L, tableRegister, keyOperand, sourceRegister)) {
+        countRuntimeHelper();
+        return;
+    }
+
     Proto *proto = activeAotFrameProto(L, "generic table set");
     TValue *tableValue = activeAotRegister(L, proto, tableRegister, "generic table set");
     TValue *keyValue =
@@ -775,13 +949,15 @@ extern "C" void luauc_runtime_v1_table_set(lua_State *L, uint32_t tableRegister,
     if (tableValue >= L->top || sourceValue >= L->top)
         luaG_runerror(L, "strict AOT generic table set requires published live registers");
 
-    // Use the pinned VM semantic boundary, not a second AOT table implementation. luaV_settable
-    // owns the complete TValue key universe, canonical nil/NaN-key and readonly errors, array/hash
-    // growth and deletion, cached-slot publication, the collector barrier, and __newindex chains
-    // through tables, functions, userdata/type metatables, and the pin's user-defined objects.
-    // Metamethod invocation deliberately remains non-yieldable because upstream calls it through
-    // luaD_call. Register operands are published frame roots and constant operands are rooted by
-    // the active Proto; luaV_settable copies call operands before any stack growth.
+    // Number keys on a plain table publish through luaH_setnum. Every other key, a nil
+    // source, a metatable, or a readonly table uses luaV_settable, which owns deletion,
+    // canonical nil/NaN-key and readonly errors, __newindex chains, and user-defined
+    // objects. Metamethod calls stay non-yieldable through luaD_call. Register operands
+    // are frame roots and constant operands stay rooted by the active Proto.
+    if (ttisnumber(keyValue) &&
+        publishPlainNumericSet(L, tableValue, nvalue(keyValue), sourceRegister))
+        return;
+
     luaV_settable(L, tableValue, keyValue, sourceValue);
 }
 
@@ -810,6 +986,8 @@ extern "C" void luauc_runtime_v1_table_set_number(lua_State *L, uint32_t tableRe
     TValue *sourceValue = activeAotRegister(L, proto, sourceRegister, "numeric-key table set");
     if (tableValue >= L->top || sourceValue >= L->top)
         luaG_runerror(L, "strict AOT numeric-key table set requires published live registers");
+    if (publishPlainNumericSet(L, tableValue, key, sourceRegister))
+        return;
     TValue keyValue;
     setnvalue(&keyValue, key);
     luaV_settable(L, tableValue, &keyValue, sourceValue);
@@ -993,7 +1171,13 @@ extern "C" int32_t luauc_runtime_v1_fastcall(lua_State *L, uint32_t builtinId,
         luaG_runerror(L, "strict AOT fastcall rejected multret argument layout");
     if (argumentThree != AOT_FASTCALL_NO_OPERAND && argumentTwo == AOT_FASTCALL_NO_OPERAND)
         luaG_runerror(L, "strict AOT fastcall rejected sparse optional arguments");
-    if (parameterCount != LUAUC_RUNTIME_V1_MULTRET) {
+    // Generic LOP_FASTCALL places every argument in contiguous slots starting at
+    // sourceRegister. argumentTwo is the second slot. argumentThree stays empty.
+    // FASTCALL3 still carries both optional registers and is not this shape.
+    const bool contiguousStackArguments =
+        parameterCount != LUAUC_RUNTIME_V1_MULTRET && argumentThree == AOT_FASTCALL_NO_OPERAND &&
+        argumentTwo != AOT_FASTCALL_NO_OPERAND && actualParameterCount > 2;
+    if (parameterCount != LUAUC_RUNTIME_V1_MULTRET && !contiguousStackArguments) {
         const int encodedParameterCount = argumentThree != AOT_FASTCALL_NO_OPERAND ? 3
                                           : argumentTwo != AOT_FASTCALL_NO_OPERAND ? 2
                                                                                    : 1;
@@ -1014,7 +1198,14 @@ extern "C" int32_t luauc_runtime_v1_fastcall(lua_State *L, uint32_t builtinId,
         luaG_runerror(L, "strict AOT fastcall resolved a missing runtime builtin");
 
     TValue *additionalArguments = nullptr;
-    if (parameterCount == LUAUC_RUNTIME_V1_MULTRET) {
+    if (contiguousStackArguments) {
+        if ((argumentTwo & LUAUC_AOT_OPERAND_V1_CONSTANT_FLAG) != 0 ||
+            argumentTwo != sourceRegister + 1 || sourceRegister >= proto->maxstacksize ||
+            uint32_t(actualParameterCount) > proto->maxstacksize - sourceRegister ||
+            L->base + sourceRegister + actualParameterCount > L->top)
+            luaG_runerror(L, "strict AOT fastcall rejected contiguous argument layout");
+        additionalArguments = L->base + sourceRegister + 1;
+    } else if (parameterCount == LUAUC_RUNTIME_V1_MULTRET) {
         // FASTCALL/FASTCALL1 encode destination+2 as the open argument-range boundary. For a
         // single live argument this is exactly L->top: a valid one-past pointer that the pinned
         // fastfunction receives together with nparams=1 and therefore does not dereference. Larger
@@ -1191,13 +1382,14 @@ extern "C" void luauc_runtime_v1_table_len(lua_State *L, uint32_t destinationReg
                                          uint32_t tableRegister) {
     Proto *proto = activeAotFrameProto(L, "table length");
     TValue *value = activeAotRegister(L, proto, tableRegister, "table length");
-    if (!ttistable(value))
-        luaG_runerror(L, "strict AOT table length requires a table value");
-    LuaTable *table = hvalue(value);
-    if (table->metatable) {
+    // The length IR checks for a plain table and keeps DO_LEN as the fallback. This helper is that
+    // plain-table path. A string, a table with a metatable, and every other value use the same
+    // length operation as the fallback.
+    if (!ttistable(value) || hvalue(value)->metatable) {
         luauc_runtime_v1_do_len(L, destinationRegister, tableRegister);
         return;
     }
+    LuaTable *table = hvalue(value);
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "table length");
     setnvalue(destination, double(luaH_getn(table)));
 }

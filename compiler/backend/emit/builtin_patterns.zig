@@ -243,6 +243,115 @@ pub noinline fn fastcallPatternAt(self: anytype, start: u32, block: snapshot_v1.
         .fast_target = fast_target.value,
     };
 }
+
+// Fixed-count FASTCALL keeps arguments in contiguous registers at destination+1.
+// The invoke and the fallback CALL already name the builtin and the counts.
+// This recognizer reads those IR operands and does not read bytecode.
+pub noinline fn fixedContiguousFastcallPatternAt(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?FastcallPattern {
+    if (!block.kind.isCompilable() or block.isEmpty() or start < block.start or start > block.finish)
+        return null;
+    var saved_id = start;
+    const first = try self.instruction(start);
+    if (first.command == .check_safe_env) {
+        if (first.operand_count != 1 or (try self.operand(first, 0)).kind != .vm_exit)
+            return null;
+        saved_id = std.math.add(u32, start, 1) catch return Error.ResourceLimit;
+    }
+    if (saved_id + 3 > block.finish)
+        return null;
+    const saved_pc = try self.instruction(saved_id);
+    const invoke_id = saved_id + 1;
+    const invoke = try self.instruction(invoke_id);
+    const check = try self.instruction(invoke_id + 1);
+    if (saved_pc.command != .set_savedpc or invoke.command != ir_cmd_invoke_fastcall or
+        check.command != ir_cmd_check_fastcall_res or invoke.operand_count != 7 or check.operand_count != 2)
+        return null;
+    _ = try self.savedPc(saved_pc);
+
+    const builtin_operand = try self.operand(invoke, 0);
+    if (builtin_operand.kind != .constant)
+        return null;
+    const builtin_id = (try self.constant(builtin_operand.value)).uintValue() orelse return null;
+    if (builtin_id >= 256)
+        return null;
+
+    const destination = try self.vmRegisterIndex(try self.operand(invoke, 1));
+    const source = try self.vmRegisterIndex(try self.operand(invoke, 2));
+    const argument_two_operand = try self.operand(invoke, 3);
+    const argument_three_operand = try self.operand(invoke, 4);
+    const argument_two = (try self.fastcallValueOperand(argument_two_operand)) orelse return null;
+    const argument_three = (try self.fastcallValueOperand(argument_three_operand)) orelse return null;
+    const parameter_count = try self.intConstant(try self.operand(invoke, 5));
+    const result_count = try self.intConstant(try self.operand(invoke, 6));
+    if (parameter_count < 3 or result_count < -1)
+        return null;
+    const stack_bound = @as(u32, self.proto.max_stack_size) - source;
+    if (@as(u32, @intCast(parameter_count)) > stack_bound or source != destination + 1 or
+        argument_two_operand.kind != .vm_reg or argument_two_operand.value != destination + 2 or
+        argument_three != lbf_operand_none)
+        return null;
+
+    const checked_result = try self.operand(check, 0);
+    const fallback_operand = try self.operand(check, 1);
+    if (checked_result.kind != .instruction or checked_result.value != invoke_id or
+        fallback_operand.kind != .block or fallback_operand.value >= self.function.block_count)
+        return null;
+    const fallback = try self.snapshot.irBlock(self.function, fallback_operand.value);
+    if (fallback.kind != .fallback or fallback.isEmpty() or fallback.finish <= fallback.start)
+        return null;
+    const fallback_call = try self.instruction(fallback.finish - 1);
+    const fallback_jump = try self.instruction(fallback.finish);
+    if (fallback_call.command != .call or fallback_call.operand_count != 3 or
+        fallback_jump.command != .jump or fallback_jump.operand_count != 1 or
+        try self.vmRegisterIndex(try self.operand(fallback_call, 0)) != destination or
+        try self.intConstant(try self.operand(fallback_call, 1)) != parameter_count or
+        try self.intConstant(try self.operand(fallback_call, 2)) != result_count)
+        return null;
+
+    var finish = invoke_id + 2;
+    if (result_count == -1) {
+        const adjust = try self.instruction(finish);
+        if (adjust.command != ir_cmd_adjust_stack_to_reg or adjust.operand_count != 2 or
+            try self.vmRegisterIndex(try self.operand(adjust, 0)) != destination or
+            (try self.operand(adjust, 1)).kind != .instruction or
+            (try self.operand(adjust, 1)).value != invoke_id)
+            return null;
+        finish += 1;
+    } else if ((try self.instruction(finish)).command == ir_cmd_adjust_stack_to_top) {
+        if ((try self.instruction(finish)).operand_count != 0)
+            return null;
+        finish += 1;
+    }
+    if (finish > block.finish)
+        return null;
+    const terminal = try self.instruction(finish);
+    const fast_target = if (terminal.command == .jump and terminal.operand_count == 1)
+        try self.operand(terminal, 0)
+    else if (block.kind == .linearized) blk: {
+        const canonical_rejoin = try self.operand(fallback_jump, 0);
+        if (canonical_rejoin.kind != .block or
+            canonical_rejoin.value >= self.function.block_count or
+            !(try self.snapshot.irBlock(self.function, canonical_rejoin.value)).kind.isCompilable())
+            return null;
+        break :blk canonical_rejoin;
+    } else return null;
+    if (fast_target.kind != .block or fast_target.value >= self.function.block_count)
+        return null;
+    return .{
+        .start = start,
+        .finish = finish,
+        .builtin_id = builtin_id,
+        .destination = destination,
+        .source = source,
+        .argument_two = argument_two,
+        .argument_three = argument_three,
+        .parameter_count = parameter_count,
+        .result_count = result_count,
+        .fallback = fallback_operand.value,
+        .fast_target = fast_target.value,
+    };
+}
+
 pub noinline fn stringLengthPattern(self: anytype, instruction_id: u32) Error!?StringLengthPattern {
     if (instruction_id + 3 >= self.function.instruction_count)
         return null;
@@ -761,7 +870,7 @@ pub noinline fn stringGetPattern(self: anytype, block: snapshot_v1.IrBlock) Erro
     const pc = (try self.constant(pc_operand.value)).uintValue() orelse return null;
     const key = (try self.stringKey(key_operand)) orelse return null;
     const rejoin = (try self.stringFallbackRejoin(fallback.value, .get, pc, destination.value, table.value, key_operand.value)) orelse return null;
-    return .{ .operation = .get, .start = start, .pc = pc, .table = table.value, .value = destination.value, .key = key, .fallback = fallback.value, .fast_target = fast_target.value, .rejoin = rejoin };
+    return .{ .operation = .get, .start = start, .pc = pc, .table = table.value, .value = destination.value, .key = key, .key_constant = key_operand.value, .fallback = fallback.value, .fast_target = fast_target.value, .rejoin = rejoin };
 }
 pub noinline fn inlineStringGetPatternAt(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?StringTablePattern {
     const commands = [_]snapshot_v1.IrCommand{
@@ -816,7 +925,7 @@ pub noinline fn inlineStringGetPatternAt(self: anytype, start: u32, block: snaps
         return null;
     const key = (try self.stringKey(key_operand)) orelse return null;
     const rejoin = (try self.stringFallbackRejoin(fallback.value, .get, pc, destination.value, table.value, key_operand.value)) orelse return null;
-    return .{ .operation = .get, .start = start, .pc = pc, .table = table.value, .value = destination.value, .key = key, .fallback = fallback.value, .fast_target = rejoin, .rejoin = rejoin };
+    return .{ .operation = .get, .start = start, .pc = pc, .table = table.value, .value = destination.value, .key = key, .key_constant = key_operand.value, .fallback = fallback.value, .fast_target = rejoin, .rejoin = rejoin };
 }
 pub noinline fn inlineGeneralStringSetPatternAt(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?InlineStringTablePattern {
     const commands = [_]snapshot_v1.IrCommand{

@@ -495,9 +495,7 @@ pub noinline fn emitPowBlock(self: anytype, block_id: u32, block: snapshot_v1.Ir
     }
     try self.emitSavedPcLocation(pattern.marker);
     try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
-    try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
-    try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    try self.emitDispatchRejoin(pattern.rejoin);
 }
 pub noinline fn emitConstantArithmeticBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: ConstantArithmeticPattern) Error!void {
     _ = block_id;
@@ -507,9 +505,7 @@ pub noinline fn emitConstantArithmeticBlock(self: anytype, block_id: u32, block:
     }
     try self.emitSavedPcLocation(pattern.marker);
     try self.emitDoArith(pattern.arithmetic_id, try self.instruction(pattern.arithmetic_id));
-    try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
-    try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    try self.emitDispatchRejoin(pattern.rejoin);
 }
 pub noinline fn emitDynamicLengthBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: DynamicLengthPattern) Error!void {
     _ = block_id;
@@ -518,7 +514,8 @@ pub noinline fn emitDynamicLengthBlock(self: anytype, block_id: u32, block: snap
             return;
     }
     try self.emitDynamicLength(pattern);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    if (!self.rejoin_fallthrough)
+        try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitDynamicLength(self: anytype, pattern: DynamicLengthPattern) Error!void {
     try self.emitSavedPcLocation(pattern.marker);

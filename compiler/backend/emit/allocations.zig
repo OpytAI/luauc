@@ -604,6 +604,97 @@ pub noinline fn emitLiteralFieldSet(self: anytype, pattern: LiteralFieldSetPatte
     try self.body.call(self.allocator, self.table_set_string orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
 }
+/// The fast path stores the constant into the new array slot. The fallback
+/// block stores that same constant into the call's argument register.
+fn fallbackConstantRegister(self: anytype, constant_number: f64) Error!?u32 {
+    var found: ?u32 = null;
+    var block_id: u32 = 0;
+    while (block_id < self.function.block_count) : (block_id += 1) {
+        const block = try self.snapshot.irBlock(self.function, block_id);
+        if (block.kind != .fallback or block.isEmpty() or block.finish <= block.start)
+            continue;
+        const call = try self.instruction(block.finish - 1);
+        if (call.command != .call or call.operand_count < 3)
+            continue;
+        const function_register = self.vmRegisterIndex(try self.operand(call, 0)) catch continue;
+        if ((self.intConstant(try self.operand(call, 1)) catch continue) != 2 or
+            (self.intConstant(try self.operand(call, 2)) catch continue) != 0)
+            continue;
+        const source = std.math.add(u32, function_register, 2) catch continue;
+        if (source >= self.proto.max_stack_size)
+            continue;
+        var cursor = block.start;
+        var saw = false;
+        while (cursor + 1 <= block.finish) : (cursor += 1) {
+            const store = try self.instruction(cursor);
+            if (store.command != .store_double or store.operand_count != 2)
+                continue;
+            const destination = try self.operand(store, 0);
+            const stored = try self.operand(store, 1);
+            if (destination.kind != .vm_reg or destination.value != source or stored.kind != .constant)
+                continue;
+            const value = (try self.constant(stored.value)).doubleValue() orelse continue;
+            if (@as(u64, @bitCast(value)) != @as(u64, @bitCast(constant_number)))
+                continue;
+            const tag_store = try self.instruction(cursor + 1);
+            if (tag_store.command != .store_tag or tag_store.operand_count != 2)
+                continue;
+            const tag_destination = try self.operand(tag_store, 0);
+            const tag = try self.operand(tag_store, 1);
+            if (tag_destination.kind != .vm_reg or tag_destination.value != source or
+                tag.kind != .constant or
+                (try self.constant(tag.value)).tagValue() != lua_tag_number)
+                continue;
+            saw = true;
+            break;
+        }
+        if (!saw)
+            continue;
+        if (found != null)
+            return null;
+        found = source;
+    }
+    return found;
+}
+
+fn allocatedTableRegister(self: anytype, pointer_id: u32) Error!?u32 {
+    const pointer = try self.instruction(pointer_id);
+    if (pointer.command != ir_cmd_new_table)
+        return null;
+    const allocation = (try self.tableAllocationPatternAt(pointer_id)) orelse return null;
+    if (allocation.start != pointer_id)
+        return null;
+    return allocation.destination;
+}
+
+/// A linearized `table.insert` of a number uses `STORE_SPLIT_TVALUE` and may put `NOP`s
+/// between `TABLE_SETNUM` and that store. Cluster search looks back seven instructions
+/// for `TABLE_LEN`, so at most three `NOP`s stay inside that window.
+fn splitNumberInsertFinish(self: anytype, cluster_start: u32) Error!?u32 {
+    if (cluster_start + 3 >= self.function.instruction_count)
+        return null;
+    const length = try self.instruction(cluster_start);
+    const increment = try self.instruction(cluster_start + 1);
+    const setnum = try self.instruction(cluster_start + 2);
+    if (length.command != ir_cmd_table_len or increment.command != .add_int or
+        setnum.command != ir_cmd_table_setnum)
+        return null;
+    var cursor = cluster_start + 3;
+    var skipped: u32 = 0;
+    while (cursor < self.function.instruction_count and skipped < 3) : (skipped += 1) {
+        const gap = try self.instruction(cursor);
+        if (gap.command != .nop or gap.operand_count != 0)
+            break;
+        cursor += 1;
+    }
+    if (cursor >= self.function.instruction_count or cursor - cluster_start > 6)
+        return null;
+    const store = try self.instruction(cursor);
+    if (store.command != .store_split_tvalue or store.operand_count != 3)
+        return null;
+    return cursor;
+}
+
 pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Error!?TableInsertAppendPattern {
     const dynamic_commands = [_]snapshot_v1.IrCommand{
         ir_cmd_table_len, .add_int, ir_cmd_table_setnum, .load_tvalue, .store_tvalue, ir_cmd_barrier_table_forward,
@@ -613,10 +704,11 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
     };
     const dynamic = try self.commandRangeMatches(cluster_start, &dynamic_commands);
     const number = !dynamic and try self.commandRangeMatches(cluster_start, &number_commands);
-    if (!dynamic and !number)
+    const split_finish = if (!dynamic and !number) try splitNumberInsertFinish(self, cluster_start) else null;
+    if (!dynamic and !number and split_finish == null)
         return null;
-    const command_count = if (dynamic) dynamic_commands.len else number_commands.len;
-    const finish = cluster_start + @as(u32, @intCast(command_count - 1));
+    const finish = split_finish orelse
+        cluster_start + @as(u32, @intCast((if (dynamic) dynamic_commands.len else number_commands.len) - 1));
     var start = cluster_start;
     if (cluster_start != 0 and (try self.instruction(cluster_start - 1)).command == ir_cmd_check_readonly)
         start = cluster_start - 1;
@@ -631,7 +723,9 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
     const length_pointer = try self.operand(length, 0);
     if (length_pointer.kind != .instruction or length_pointer.value >= cluster_start)
         return null;
-    const table_register = (try self.tableRegisterForPointer(length_pointer.value)) orelse return null;
+    const table_register = (try self.tableRegisterForPointer(length_pointer.value)) orelse
+        (try allocatedTableRegister(self, length_pointer.value)) orelse
+        return null;
     const increment_lhs = try self.operand(increment, 0);
     const setnum_pointer = try self.operand(destination, 0);
     const setnum_key = try self.operand(destination, 1);
@@ -661,6 +755,19 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
             barrier_source.kind != .vm_reg or barrier_source.value != source_operand.value or barrier_tag.kind != .undef)
             return null;
         source = try self.vmRegisterIndex(source_operand);
+    } else if (split_finish != null) {
+        const store = try self.instruction(finish);
+        if (store.operand_count != 3)
+            return null;
+        const store_destination = try self.operand(store, 0);
+        const tag = try self.operand(store, 1);
+        const value = try self.operand(store, 2);
+        if (store_destination.kind != .instruction or store_destination.value != cluster_start + 2 or
+            tag.kind != .constant or value.kind != .instruction or
+            (try self.constant(tag.value)).tagValue() != lua_tag_number)
+            return null;
+        const owner = (try self.compilableOwnerBlock(finish)) orelse return null;
+        source = (try self.publishedNumberPayloadRegister(owner, value, finish)) orelse return null;
     } else {
         const store = try self.instruction(cluster_start + 3);
         const store_tag = try self.instruction(cluster_start + 4);
@@ -683,9 +790,12 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
             (try self.operand(readonly, 0)).value != length_pointer.value)
             return null;
         const failure = try self.operand(readonly, 1);
-        if (!try self.guardFailureIsBuiltin(failure, "table", "insert"))
-            return null;
+        // A register value has a unique insert shape. The constant-number form still
+        // has to resolve the builtin so the stored value's register is known.
+        const identified = try self.guardFailureIsBuiltin(failure, "table", "insert");
         if (number) {
+            if (!identified)
+                return null;
             if (failure.kind == .block) {
                 const fallback_block = (try self.guardFailureBlock(failure)) orelse return null;
                 const call = try self.instruction(fallback_block.finish - 1);
@@ -714,7 +824,8 @@ pub noinline fn tableInsertAppendPatternAt(self: anytype, cluster_start: u32) Er
                 return null;
         }
     } else if (number) {
-        return null;
+        source = (try fallbackConstantRegister(self, constant_number orelse return null)) orelse
+            return null;
     }
     return .{
         .start = start,

@@ -18,7 +18,20 @@ const prepared_call_table_index_offset = abi.prepared_call_table_index_offset;
 const prepared_call_metadata_offset = abi.prepared_call_metadata_offset;
 const lua_tag_boolean = abi.lua_tag_boolean;
 const lua_tag_string = abi.lua_tag_string;
+const lua_tag_function = abi.lua_tag_function;
 const lop_call = abi.lop_call;
+const tvalue_size: i32 = @intCast(abi.tvalue_size);
+const tvalue_tag_offset = abi.tvalue_tag_offset;
+const i32_add: u8 = 0x6a;
+const i32_sub: u8 = 0x6b;
+const i32_mul: u8 = 0x6c;
+const i32_and: u8 = 0x71;
+const i32_lt_u: u8 = 0x49;
+const i32_gt_u: u8 = 0x4b;
+const i32_ge_u: u8 = 0x4f;
+const i32_or: u8 = 0x72;
+const i32_shr_u: u8 = 0x76;
+const i64_eq: u8 = 0x51;
 
 pub fn sourceLine(self: anytype, pc: u32) Error!u32 {
     const line = try self.snapshot.sourceLine(self.proto, pc);
@@ -34,9 +47,9 @@ pub noinline fn emitSavedPcLocation(self: anytype, instruction_value: snapshot_v
 }
 pub noinline fn emitPcLocation(self: anytype, pc: u32) Error!void {
     const line = try self.sourceLine(pc);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(line));
-    try self.body.call(self.allocator, self.set_location orelse return Error.UnsupportedCommand);
+    // sourceLine rejects a line outside the aotstate mask. The store is the success path of
+    // luauc_runtime_v1_set_location on the active native frame.
+    try emitQuietLineUpdate(self, line);
 }
 pub noinline fn emitDoArith(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 4);
@@ -206,7 +219,52 @@ pub noinline fn emitInterrupt(
     const pc = pc_constant.uintValue() orelse return Error.InvalidOperandType;
     const line = try self.sourceLine(pc);
 
-    try self.emitExchangeContinuation(continuation.continuation_id);
+    // A null callback cannot yield. Publish the line and skip the helper calls.
+    // A live callback keeps the exchange, interrupt, and clear sequence.
+    try emitNullInterruptCallback(self);
+    try self.body.ifVoid(self.allocator);
+    try emitQuietInterrupt(self, line);
+    try self.body.else_(self.allocator);
+    try emitSlowInterrupt(self, continuation.continuation_id, line);
+    try self.body.end(self.allocator);
+}
+fn emitNullInterruptCallback(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_global_offset);
+    try self.body.i32Load(self.allocator, 2, abi.global_interrupt_offset);
+    try self.body.i32Eqz(self.allocator);
+}
+fn emitQuietInterrupt(self: anytype, line: u32) Error!void {
+    // Continuation bits already set: abort without rewriting the line or the id.
+    // The slow path exchanges first and then returns the same internal error.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_aotstate_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_continuation_shift));
+    try self.body.opcode(self.allocator, 0x76); // i32.shr_u
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_continuation_mask));
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitQuietLineUpdate(self, line);
+    try self.body.else_(self.allocator);
+    try self.emitUnexpectedContinuationReturn();
+    try self.body.end(self.allocator);
+}
+fn emitQuietLineUpdate(self: anytype, line: u32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_aotstate_offset);
+    try self.body.i32Const(self.allocator, @bitCast(abi.aot_line_preserved_mask));
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.i32Const(self.allocator, @intCast(line));
+    try self.body.opcode(self.allocator, 0x72); // i32.or
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_aotstate_offset);
+}
+fn emitSlowInterrupt(self: anytype, continuation_id: u32, line: u32) Error!void {
+    try self.emitExchangeContinuation(continuation_id);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
     try self.body.else_(self.allocator);
@@ -219,7 +277,7 @@ pub noinline fn emitInterrupt(
     try self.body.localTee(self.allocator, self.status_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try self.emitClearContinuation(continuation.continuation_id);
+    try self.emitClearContinuation(continuation_id);
     try self.emitReloadBase();
     try self.body.else_(self.allocator);
     try self.body.localGet(self.allocator, self.status_local);
@@ -243,6 +301,13 @@ pub noinline fn emitJump(self: anytype, instruction_value: snapshot_v1.IrInstruc
     try self.requireOperandCount(instruction_value, 1);
     const target = try self.requireDispatchTarget(try self.operand(instruction_value, 0));
     try self.body.i32Const(self.allocator, @intCast(target));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
+}
+pub fn emitDispatchRejoin(self: anytype, rejoin: u32) Error!void {
+    if (self.rejoin_fallthrough)
+        return;
+    try self.body.i32Const(self.allocator, @intCast(rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
     try self.body.branch(self.allocator, self.loop_branch_depth);
 }
@@ -416,10 +481,49 @@ pub noinline fn emitReturn(self: anytype, instruction_value: snapshot_v1.IrInstr
         break :blk register;
     };
 
+    // MULTRET reads L->top in the host. close_upvalues(L, 0) rejects a zero-sized frame.
+    if (return_count < 0 or self.close_upvalues == null or self.proto.max_stack_size == 0) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(source_register));
+        try self.body.i32Const(self.allocator, @intCast(return_count));
+        try self.body.call(self.allocator, self.return_);
+        try self.emitStatusReturn(status_ok);
+        return;
+    }
+
+    try emitFixedReturn(self, source_register, @intCast(return_count));
+}
+
+fn emitFixedReturn(self: anytype, source_register: u32, return_count: u32) Error!void {
+    // Match luauc_runtime_v1_return: close while UpVal::v still points into this frame,
+    // then copy. luaF_close can move the stack, so both the compare and the copy read L->base.
+    try self.emitReloadBase();
     try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(source_register));
-    try self.body.i32Const(self.allocator, @intCast(return_count));
-    try self.body.call(self.allocator, self.return_);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_openupval_offset);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_openupval_offset);
+    try self.body.i32Load(self.allocator, 2, abi.upval_v_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.call(self.allocator, self.close_upvalues orelse return Error.UnsupportedCommand);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.emitReloadBase();
+    var index: u32 = 0;
+    while (index < return_count) : (index += 1) {
+        const source = std.math.add(u32, source_register, index) catch return Error.ResourceLimit;
+        try emitCopyStackSlot(self, index, source);
+    }
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, try slotByteOffset(return_count));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
     try self.emitStatusReturn(status_ok);
 }
 
@@ -432,9 +536,30 @@ pub fn callContinuation(self: anytype, instruction_id: u32) ?CallContinuation {
     return self.call_continuations[index];
 }
 pub noinline fn emitExchangeContinuation(self: anytype, next_id: u32) Error!void {
+    // The running frame was validated at entry. Keep the low 20 source-line bits.
+    // Leave the previous continuation id on the stack. Callers compare it.
+    if (next_id > abi.aot_continuation_mask)
+        return Error.ResourceLimit;
+    const next_bits: i32 = @bitCast(next_id << abi.aot_continuation_shift);
+
     try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(next_id));
-    try self.body.call(self.allocator, self.exchange_continuation orelse return Error.UnsupportedCommand);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_aotstate_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_continuation_shift));
+    try self.body.opcode(self.allocator, i32_shr_u);
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_continuation_mask));
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_aotstate_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_line_mask));
+    try self.body.opcode(self.allocator, i32_and);
+    try self.body.i32Const(self.allocator, next_bits);
+    try self.body.opcode(self.allocator, i32_or);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_aotstate_offset);
 }
 pub noinline fn emitUnexpectedContinuationReturn(self: anytype) Error!void {
     try self.body.i32Const(self.allocator, status_internal_error);
@@ -449,43 +574,487 @@ pub noinline fn emitClearContinuation(self: anytype, expected_id: u32) Error!voi
     try self.emitUnexpectedContinuationReturn();
     try self.body.end(self.allocator);
 }
-pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
-    const continuation = self.callContinuation(instruction_id);
-    try self.requireOperandCount(instruction_value, 3);
-    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
-        return Error.UnsupportedControlFlow;
-    _ = try self.savedPc(try self.instruction(instruction_id - 1));
+fn emitFastIdentityPredicate(self: anytype) Error!void {
+    // Running condition. Every load below is from a pointer the guard already proved non-null.
+    // The layout hash and proto shape do not change for a rooted closure.
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_is_c_offset);
+    try self.body.i32Eqz(self.allocator);
 
-    const function_register = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
-    const parameter_operand = try self.operand(instruction_value, 1);
-    const result_operand = try self.operand(instruction_value, 2);
-    if (parameter_operand.kind != .constant or result_operand.kind != .constant)
-        return Error.InvalidOperandType;
-    const parameter_count = (try self.constant(parameter_operand.value)).intValue() orelse return Error.InvalidOperandType;
-    const result_count = (try self.constant(result_operand.value)).intValue() orelse return Error.InvalidOperandType;
-    // The pinned builder encodes dynamic arguments and LUA_MULTRET results as exactly -1.
-    if (parameter_count < -1 or result_count < -1)
-        return Error.UnsupportedControlFlow;
-    if (parameter_count >= 0) {
-        const parameter_count_u32: u32 = @intCast(parameter_count);
-        if (parameter_count_u32 >= @as(u32, self.proto.max_stack_size) - function_register)
-            return Error.UnsupportedControlFlow;
-    }
-    if (result_count >= 0) {
-        const result_count_u32: u32 = @intCast(result_count);
-        if (result_count_u32 > @as(u32, self.proto.max_stack_size) - function_register)
-            return Error.UnsupportedControlFlow;
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_code_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_codeentry_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_sizecode_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_source_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.proto_is_vararg_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    // Same record the runtime accepts before it installs a frame. A mismatch falls back.
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.metadata_abi_version_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_abi_version));
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.metadata_struct_size_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.aot_proto_size));
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.metadata_entry_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    var word: u32 = 0;
+    while (word < 4) : (word += 1) {
+        const start = word * 8;
+        const bits = std.mem.readInt(u64, abi.aot_layout_sha256[start..][0..8], .little);
+        try self.body.localGet(self.allocator, self.call_meta_local);
+        try self.body.i64Load(self.allocator, 2, abi.metadata_layout_offset + start);
+        try self.body.i64Const(self.allocator, @bitCast(bits));
+        try self.body.opcode(self.allocator, i64_eq);
+        try self.body.opcode(self.allocator, i32_and);
     }
 
-    if (continuation) |resumable| {
-        try self.emitExchangeContinuation(resumable.continuation_id);
-        try self.body.i32Eqz(self.allocator);
-        try self.body.ifVoid(self.allocator);
-        try self.body.else_(self.allocator);
-        try self.emitUnexpectedContinuationReturn();
-        try self.body.end(self.allocator);
-    }
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.proto_nups_offset);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.metadata_nups_offset);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
 
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.proto_numparams_offset);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.metadata_num_params_offset);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.metadata_is_vararg_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_nupvalues_offset);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.metadata_nups_offset);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_stacksize_offset);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.metadata_max_stack_offset);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.proto_maxstacksize_offset);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.metadata_max_stack_offset);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+}
+fn emitFastStackPredicate(self: anytype, arg_bytes: i32) Error!void {
+    // CallInfo and stack room change between calls. The value already on the stack is the identity condition.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_end_ci_offset);
+    try self.body.i32Ne(self.allocator);
+    try self.body.opcode(self.allocator, i32_and);
+
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, arg_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_stack_last_offset);
+    try self.body.opcode(self.allocator, i32_lt_u);
+    try self.body.opcode(self.allocator, i32_and);
+
+    // luaD_checkstackfornewci grows when stack_last - arg_top <= stacksize * sizeof(TValue).
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_stack_last_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, arg_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_stacksize_offset);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_mul);
+    try self.body.opcode(self.allocator, i32_gt_u);
+    try self.body.opcode(self.allocator, i32_and);
+}
+fn emitFastLuaGuard(self: anytype, function_register: u32, arg_bytes: i32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(function_register * abi.tvalue_size));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.call_func_local);
+
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_function);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, abi.closure_l_proto_offset);
+    try self.body.localTee(self.allocator, self.call_proto_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_execdata_offset);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_cached_closure_local);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, 1);
+    try emitFastStackPredicate(self, arg_bytes);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.else_(self.allocator);
+    try emitFastIdentityPredicate(self);
+    try emitFastStackPredicate(self, arg_bytes);
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localSet(self.allocator, self.call_cached_closure_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+fn emitFastNilFill(self: anytype, arg_bytes: i32) Error!void {
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, arg_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.table_index_local);
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.proto_numparams_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_mul);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.i32Store(self.allocator, 2, tvalue_tag_offset);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.table_index_local);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+fn emitFastInstallFrame(self: anytype, arg_bytes: i32, result_count: i32, frame_flags: i32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.callinfo_size));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.table_index_local);
+
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_base_offset);
+
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_func_offset);
+
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, arg_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_stacksize_offset);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_mul);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_top_offset);
+
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_aotstate_offset);
+
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, result_count);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_nresults_offset);
+
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, frame_flags);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_flags_offset);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_ci_offset);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_base_offset);
+
+    try emitFastNilFill(self, arg_bytes);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_top_offset);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
+}
+const max_direct_siblings: usize = 64;
+
+fn emitCountedDirectCall(self: anytype, function: wasm.FunctionRef) Error!void {
+    try self.body.call(self.allocator, self.count_direct_call orelse return Error.UnsupportedCommand);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.call(self.allocator, function);
+    try self.body.localSet(self.allocator, self.status_local);
+}
+fn emitCountedIndirectCall(self: anytype) Error!void {
+    try self.body.call(self.allocator, self.count_indirect_call orelse return Error.UnsupportedCommand);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.metadata_entry_offset);
+    try self.body.callIndirect(self.allocator, self.generated_type, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+}
+fn emitSiblingDispatch(self: anytype, index: u32) Error!void {
+    const siblings = self.sibling_functions;
+    if (index >= siblings.len)
+        return emitCountedIndirectCall(self);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, proto_function_id_offset);
+    try self.body.i32Const(self.allocator, @intCast(index));
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitCountedDirectCall(self, siblings[index]);
+    try self.body.else_(self.allocator);
+    try emitSiblingDispatch(self, index + 1);
+    try self.body.end(self.allocator);
+}
+fn emitFastLuaTransfer(self: anytype) Error!void {
+    // Metadata function ids in one package are dense. A direct call avoids the table lookup.
+    // A larger package keeps the self-or-indirect transfer so one call site stays small.
+    if (self.sibling_functions.len > 0 and self.sibling_functions.len <= max_direct_siblings)
+        return emitSiblingDispatch(self, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, proto_function_id_offset);
+    try self.body.i32Const(self.allocator, @intCast(self.planned_function_id));
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitCountedDirectCall(self, self.self_function);
+    try self.body.else_(self.allocator);
+    try emitCountedIndirectCall(self);
+    try self.body.end(self.allocator);
+}
+fn emitFastAdvanceResult(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, 8);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localSet(self.allocator, self.table_index_local);
+}
+fn emitFastPoscall(self: anytype) Error!void {
+    // The callee return helper already placed results at the callee base. This is luau_poscall
+    // for a fixed result count: copy, nil-fill, then restore the caller frame.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_base_offset);
+    try self.body.localSet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_top_offset);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_nresults_offset);
+    try self.body.localSet(self.allocator, self.table_index_local);
+
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try emitFastAdvanceResult(self);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.i32Store(self.allocator, 2, tvalue_tag_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, tvalue_size);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localSet(self.allocator, self.table_index_local);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, @intCast(abi.callinfo_size));
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_base_offset);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_base_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_top_offset);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
+}
+fn emitFastGcAssist(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_global_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, abi.global_totalbytes_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, abi.global_gc_threshold_offset);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
+    try self.body.end(self.allocator);
+}
+fn emitMarkIteratorYield(self: anytype) Error!void {
+    // performcally records OPYIELD on the caller that was current before the iterator frame.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_base_ci_offset);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_flags_offset);
+    try self.body.i32Const(self.allocator, abi.lua_callinfo_opyield);
+    try self.body.opcode(self.allocator, i32_or);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_flags_offset);
+}
+fn emitFastLuaInvoke(
+    self: anytype,
+    arg_bytes: i32,
+    result_count: i32,
+    continuation: ?CallContinuation,
+    frame_flags: i32,
+    mark_opyield: bool,
+) Error!void {
+    try emitFastInstallFrame(self, arg_bytes, result_count, frame_flags);
+    try emitFastLuaTransfer(self);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, status_yielded);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    if (mark_opyield)
+        try emitMarkIteratorYield(self);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitFastPoscall(self);
+    try emitFastGcAssist(self);
+    if (continuation) |resumable|
+        try self.emitClearContinuation(resumable.continuation_id);
+    try self.emitReloadBase();
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.call(self.allocator, self.finish_compiled_call orelse return Error.UnsupportedCommand);
+    if (continuation) |resumable|
+        try self.emitClearContinuation(resumable.continuation_id);
+    try self.emitReloadBase();
+    try self.body.end(self.allocator);
+}
+fn emitPreparedCompiledCall(
+    self: anytype,
+    function_register: u32,
+    parameter_count: i32,
+    result_count: i32,
+    continuation: ?CallContinuation,
+) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(function_register));
     try self.body.i32Const(self.allocator, parameter_count);
@@ -544,5 +1113,236 @@ pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: 
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.return_(self.allocator);
     try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    const continuation = self.callContinuation(instruction_id);
+    try self.requireOperandCount(instruction_value, 3);
+    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+        return Error.UnsupportedControlFlow;
+    _ = try self.savedPc(try self.instruction(instruction_id - 1));
+
+    const function_register = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const parameter_operand = try self.operand(instruction_value, 1);
+    const result_operand = try self.operand(instruction_value, 2);
+    if (parameter_operand.kind != .constant or result_operand.kind != .constant)
+        return Error.InvalidOperandType;
+    const parameter_count = (try self.constant(parameter_operand.value)).intValue() orelse return Error.InvalidOperandType;
+    const result_count = (try self.constant(result_operand.value)).intValue() orelse return Error.InvalidOperandType;
+    // The pinned builder encodes dynamic arguments and LUA_MULTRET results as exactly -1.
+    if (parameter_count < -1 or result_count < -1)
+        return Error.UnsupportedControlFlow;
+    if (parameter_count >= 0) {
+        const parameter_count_u32: u32 = @intCast(parameter_count);
+        if (parameter_count_u32 >= @as(u32, self.proto.max_stack_size) - function_register)
+            return Error.UnsupportedControlFlow;
+    }
+    if (result_count >= 0) {
+        const result_count_u32: u32 = @intCast(result_count);
+        if (result_count_u32 > @as(u32, self.proto.max_stack_size) - function_register)
+            return Error.UnsupportedControlFlow;
+    }
+
+    if (continuation) |resumable| {
+        try self.emitExchangeContinuation(resumable.continuation_id);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try self.emitUnexpectedContinuationReturn();
+        try self.body.end(self.allocator);
+    }
+
+    // Room for a fixed Lua frame is decided by the guard. prepare_compiled_call remains the other arm.
+    if (parameter_count >= 0 and result_count >= 0) {
+        const arg_bytes: i32 = (parameter_count + 1) * tvalue_size;
+        try emitFastLuaGuard(self, function_register, arg_bytes);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.ifVoid(self.allocator);
+        try emitFastLuaInvoke(self, arg_bytes, result_count, continuation, abi.lua_callinfo_native, false);
+        try self.body.else_(self.allocator);
+        try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+        try self.body.end(self.allocator);
+    } else {
+        try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+    }
+}
+
+fn slotByteOffset(register: u32) Error!i32 {
+    const bytes = std.math.mul(u32, register, abi.tvalue_size) catch return Error.ResourceLimit;
+    return std.math.cast(i32, bytes) orelse return Error.ResourceLimit;
+}
+
+fn emitCopyStackSlot(self: anytype, destination: u32, source: u32) Error!void {
+    // setobj2s copies the whole TValue. These slots do not overlap.
+    const destination_bytes = try slotByteOffset(destination);
+    const source_bytes = try slotByteOffset(source);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, destination_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, source_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, destination_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, source_bytes);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, 8);
+}
+
+fn genericForFrameFits(self: anytype, pattern: model.GenericIterationPattern) bool {
+    // forgLoopVariableCount rejects a zero count, stray aux bits, and the ipairs bit unless
+    // the loop publishes exactly two variables. Those shapes stay on the helper, which runerrors.
+    const variable_count = pattern.variable_count;
+    if (variable_count == 0 or variable_count != (pattern.aux & 0xff))
+        return false;
+    if ((pattern.aux & 0x7fff_ff00) != 0)
+        return false;
+    if ((pattern.aux & 0x8000_0000) != 0 and variable_count != 2)
+        return false;
+    const max_stack: u32 = self.proto.max_stack_size;
+    if (pattern.base > max_stack)
+        return false;
+    const required = @max(variable_count +| 3, 5);
+    return required <= max_stack - pattern.base;
+}
+
+fn emitGenericForHelper(self: anytype, pattern: model.GenericIterationPattern, continuation: CallContinuation) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(pattern.base));
+    try self.body.i32Const(self.allocator, @bitCast(pattern.aux));
+    try self.body.call(self.allocator, self.forg_loop_call orelse return Error.UnsupportedCommand);
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.emitClearContinuation(continuation.continuation_id);
+    try self.emitReloadBase();
+    try self.emitGenericIterationFinish(pattern);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+fn emitSaveCallerCi(self: anytype) Error!void {
+    // Byte offset, not a pointer: the CallInfo array can move while the iterator runs.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_base_ci_offset);
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+}
+
+fn emitGenericForPublish(self: anytype, pattern: model.GenericIterationPattern) Error!void {
+    // The caller frame is already restored. Canonical top, then result one becomes the next control.
+    // Nil terminates. false and every other Luau value repeat.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_top_offset);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
+    try emitCopyStackSlot(self, pattern.base + 2, pattern.base + 3);
+    try self.body.i32Const(self.allocator, @intCast(pattern.repeat_target));
+    try self.body.i32Const(self.allocator, @intCast(pattern.exit_target));
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, try slotByteOffset(pattern.base + 3));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.select(self.allocator);
+    try self.body.localSet(self.allocator, self.dispatch_local);
+}
+
+fn emitGenericForStay(self: anytype, pattern: model.GenericIterationPattern) Error!void {
+    // Same publish as the dispatcher. A non-nil control stays in the fused loop.
+    // Nil records the exit block and leaves status at zero so the loop can branch out.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_top_offset);
+    try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
+    try emitCopyStackSlot(self, pattern.base + 2, pattern.base + 3);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, try slotByteOffset(pattern.base + 3));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, @intCast(pattern.exit_target));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.end(self.allocator);
+}
+
+pub noinline fn emitGenericForProtocol(self: anytype, pattern: model.GenericIterationPattern, continuation: CallContinuation, stay: bool) Error!void {
+    if (!genericForFrameFits(self, pattern)) {
+        try emitGenericForHelper(self, pattern, continuation);
+        return;
+    }
+
+    // performcally charges nCcalls because it has a C frame. This transfer is a wasm call, so the
+    // counters stay put and yieldability (nCcalls <= baseCcalls) is unchanged.
+    const required = @max(pattern.variable_count +| 3, 5);
+    const arg_bytes: i32 = 3 * tvalue_size;
+    try self.emitReloadBase();
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load8U(self.allocator, 0, abi.lua_state_marked_offset);
+    try self.body.i32Const(self.allocator, abi.lua_black_bit);
+    try self.body.opcode(self.allocator, i32_and);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_top_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, try slotByteOffset(pattern.base + required));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    // ra+3..ra+5 receive the iterator triple. The last slot can sit one past the proto frame.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_stack_last_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, try slotByteOffset(pattern.base + 6));
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    try emitCopyStackSlot(self, pattern.base + 5, pattern.base + 2);
+    try emitCopyStackSlot(self, pattern.base + 4, pattern.base + 1);
+    try emitCopyStackSlot(self, pattern.base + 3, pattern.base);
+    try emitFastLuaGuard(self, pattern.base + 3, arg_bytes);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.ifVoid(self.allocator);
+    try emitSaveCallerCi(self);
+    const iterator_flags = abi.lua_callinfo_native | abi.lua_callinfo_return;
+    try emitFastLuaInvoke(
+        self,
+        arg_bytes,
+        @intCast(pattern.variable_count),
+        continuation,
+        iterator_flags,
+        true,
+    );
+    if (stay)
+        try emitGenericForStay(self, pattern)
+    else
+        try emitGenericForPublish(self, pattern);
+    try self.body.else_(self.allocator);
+    try emitGenericForHelper(self, pattern, continuation);
     try self.body.end(self.allocator);
 }

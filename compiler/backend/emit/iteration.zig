@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const tables = @import("luauc_backend_emit_tables");
 
 const Error = model.Error;
 const ArrayOperationKind = model.ArrayOperationKind;
@@ -24,6 +25,7 @@ const tvalue_tag_offset = abi.tvalue_tag_offset;
 const lua_tag_nil = abi.lua_tag_nil;
 const lua_tag_lightuserdata = abi.lua_tag_lightuserdata;
 const lua_tag_number = abi.lua_tag_number;
+const lua_tag_string = abi.lua_tag_string;
 const lua_tag_table = abi.lua_tag_table;
 const lu_tag_iterator = abi.lu_tag_iterator;
 
@@ -407,7 +409,7 @@ pub noinline fn emitGeneralForgLoopFallback(
         .variable_count = aux & 0xff,
         .repeat_target = repeat,
         .exit_target = exit,
-    });
+    }, false);
 }
 
 pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIterationPattern) Error!void {
@@ -441,6 +443,7 @@ pub noinline fn emitGenericIterationFallbackCall(
     self: anytype,
     instruction_id: u32,
     pattern: GenericIterationPattern,
+    stay: bool,
 ) Error!void {
     const continuation = self.callContinuation(instruction_id) orelse return Error.UnsupportedControlFlow;
     const admitted = switch (continuation.action) {
@@ -462,20 +465,9 @@ pub noinline fn emitGenericIterationFallbackCall(
     try self.emitUnexpectedContinuationReturn();
     try self.body.end(self.allocator);
 
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.base));
-    try self.body.i32Const(self.allocator, @bitCast(pattern.aux));
-    try self.body.call(self.allocator, self.forg_loop_call orelse return Error.UnsupportedCommand);
-    try self.body.localTee(self.allocator, self.status_local);
-    try self.body.i32Eqz(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try self.emitClearContinuation(continuation.continuation_id);
-    try self.emitReloadBase();
-    try self.emitGenericIterationFinish(pattern);
-    try self.body.else_(self.allocator);
-    try self.body.localGet(self.allocator, self.status_local);
-    try self.body.return_(self.allocator);
-    try self.body.end(self.allocator);
+    // Same callable protocol for every non-nil iterator. The wasm frame install is the taken path
+    // when the iterator is a fixed AOT Lua closure; every other shape keeps the helper.
+    try self.emitGenericForProtocol(pattern, continuation, stay);
 }
 pub noinline fn emitGenericIterationBlock(
     self: anytype,
@@ -503,7 +495,7 @@ pub noinline fn emitGenericIterationBlock(
         // A non-nil iterator reaches this fallback. It must use the real callable protocol and
         // therefore must own a validated resumable continuation; builtin table traversal is
         // exclusively the guarded nil-iterator fast arm above.
-        try self.emitGenericIterationFallbackCall(block.finish, pattern);
+        try self.emitGenericIterationFallbackCall(block.finish, pattern, false);
     }
     try self.body.branch(self.allocator, self.loop_branch_depth);
 }
@@ -551,7 +543,8 @@ pub noinline fn emitArrayOperationBlock(
             return;
     }
     try self.emitArrayOperation(pattern, operation);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    if (!self.rejoin_fallthrough)
+        try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitArrayOperation(
     self: anytype,
@@ -603,34 +596,26 @@ pub noinline fn emitStringTableOperationBlock(self: anytype, block_id: u32, bloc
 }
 pub noinline fn emitStringTableOperation(self: anytype, pattern: StringTablePattern) Error!void {
     try self.emitStringTableHelper(pattern);
-    try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
-    try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    try self.emitDispatchRejoin(pattern.rejoin);
 }
 pub noinline fn emitStringTableHelper(self: anytype, pattern: StringTablePattern) Error!void {
-    const key = try self.string_keys.intern(self.allocator, pattern.key);
     // The fused helper replaces both the optimized literal slot probe and its semantic
     // fallback. Publish the fallback bytecode location before entering luaV_gettable/settable
     // so receiver, key, readonly, and metamethod errors retain Luau's exact source boundary.
     try self.emitPcLocation(pattern.pc);
-    try self.body.localGet(self.allocator, 0);
     switch (pattern.operation) {
         .set => {
+            const key = try self.string_keys.intern(self.allocator, pattern.key);
+            try self.body.localGet(self.allocator, 0);
             try self.body.i32Const(self.allocator, @intCast(pattern.table));
             try self.body.i32Const(self.allocator, @intCast(pattern.value));
             try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
             try self.body.i32Const(self.allocator, @intCast(key.length));
             try self.body.call(self.allocator, self.table_set_string orelse return Error.UnsupportedCommand);
+            try self.emitReloadBase();
         },
-        .get => {
-            try self.body.i32Const(self.allocator, @intCast(pattern.value));
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
-            try self.body.i32Const(self.allocator, @intCast(key.length));
-            try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
-        },
+        .get => try tables.emitStringKeyGet(self, pattern.value, pattern.table, pattern.key, pattern.key_constant),
     }
-    try self.emitReloadBase();
 }
 pub noinline fn emitGlobalOperationBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, pattern: GlobalPattern) Error!void {
     _ = block_id;
@@ -639,7 +624,8 @@ pub noinline fn emitGlobalOperationBlock(self: anytype, block_id: u32, block: sn
             return;
     }
     try self.emitGlobalOperation(pattern);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    if (!self.rejoin_fallthrough)
+        try self.body.branch(self.allocator, self.loop_branch_depth);
 }
 pub noinline fn emitGlobalOperation(self: anytype, pattern: GlobalPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
@@ -700,7 +686,7 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
 
     // TRY_NUM_TO_INDEX is an exact signed-i32 conversion: truncate without trapping, convert
     // back to f64, and admit only values whose round trip is numerically equal. NaN and values
-    // outside the signed-i32 range therefore continue through the generic helper.
+    // outside the signed-i32 range keep status 0 and use table_set/table_get.
     const key_offset = try self.vmRegisterOffset(key, 0);
     try self.body.localGet(self.allocator, self.base_local);
     try self.body.f64Load(self.allocator, 3, key_offset);
@@ -714,23 +700,129 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
     try self.body.f64Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
 
+    // The index local is still the converted key. A hit overwrites it with the slot address.
+    try emitInlineArrayHit(self, pattern);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+fn emitAddressBelowTop(self: anytype, register_offset: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(register_offset));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
     try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_top_offset);
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+}
+fn emitLoadedTableField(self: anytype, table_offset: u32, field: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table_offset);
+    try self.body.i32Load(self.allocator, 2, field);
+}
+fn emitLoadedTableByte(self: anytype, table_offset: u32, field: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table_offset);
+    try self.body.i32Load8U(self.allocator, 0, field);
+}
+fn emitPositiveArrayIndex(self: anytype, table_offset: u32) Error!void {
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try emitLoadedTableField(self, table_offset, abi.table_sizearray_offset);
+    try self.body.opcode(self.allocator, 0x4d); // i32.le_u
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+}
+fn emitArraySlot(self: anytype, table_offset: u32) Error!void {
+    try emitLoadedTableField(self, table_offset, abi.table_array_offset);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.table_index_local);
+}
+fn emitCopyRegisterToSlot(self: anytype, register_offset: u32) Error!void {
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Load(self.allocator, 3, register_offset);
+    try self.body.i64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Load(self.allocator, 3, register_offset + 8);
+    try self.body.i64Store(self.allocator, 3, 8);
+}
+fn emitCopySlotToRegister(self: anytype, register_offset: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, register_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, register_offset + 8);
+}
+fn emitInlineArrayHit(self: anytype, pattern: GenericTablePattern) Error!void {
+    // Misses leave status 0. The caller then uses table_set/table_get for growth,
+    // metamethods, and errors. A hit copies one 16-byte TValue, the same bytes setobj copies.
+    const barrier = if (pattern.operation == .set)
+        self.barrier_table_forward orelse return Error.UnsupportedCommand
+    else
+        null;
+    const table = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.table };
+    const slot = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.value };
+    const table_offset = try self.vmRegisterOffset(table, 0);
+    const slot_offset = try self.vmRegisterOffset(slot, 0);
+
+    try emitAddressBelowTop(self, table_offset);
+    try emitAddressBelowTop(self, slot_offset);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try self.emitTValueTag(table);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitLoadedTableField(self, table_offset, abi.table_metatable_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
     switch (pattern.operation) {
         .set => {
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.localGet(self.allocator, self.table_index_local);
+            try emitLoadedTableByte(self, table_offset, abi.table_readonly_offset);
+            try self.body.i32Eqz(self.allocator);
+            try self.body.ifVoid(self.allocator);
+            try emitPositiveArrayIndex(self, table_offset);
+            try self.body.ifVoid(self.allocator);
+            try emitArraySlot(self, table_offset);
+            try emitCopyRegisterToSlot(self, slot_offset);
+            // luaC_barriert is a no-op below LUA_TSTRING. Numbers skip the helper.
+            // The barrier can move the stack, so reload base before the next register use.
+            try self.emitTValueTag(slot);
+            try self.body.i32Const(self.allocator, @intCast(lua_tag_string));
+            try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+            try self.body.ifVoid(self.allocator);
+            try self.body.localGet(self.allocator, 0);
+            try self.body.localGet(self.allocator, self.base_local);
+            try self.body.i32Load(self.allocator, 2, table_offset);
             try self.body.i32Const(self.allocator, @intCast(pattern.value));
-            try self.body.call(self.allocator, self.table_array_set orelse return Error.UnsupportedCommand);
+            try self.body.call(self.allocator, barrier orelse return Error.UnsupportedCommand);
+            try self.emitReloadBase();
+            try self.body.end(self.allocator);
+            try self.body.i32Const(self.allocator, 1);
+            try self.body.localSet(self.allocator, self.status_local);
+            try self.body.end(self.allocator);
+            try self.body.end(self.allocator);
         },
         .get => {
-            try self.body.i32Const(self.allocator, @intCast(pattern.value));
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.localGet(self.allocator, self.table_index_local);
-            try self.body.call(self.allocator, self.table_array_get orelse return Error.UnsupportedCommand);
+            try emitPositiveArrayIndex(self, table_offset);
+            try self.body.ifVoid(self.allocator);
+            try emitArraySlot(self, table_offset);
+            try emitCopySlotToRegister(self, slot_offset);
+            try self.body.i32Const(self.allocator, 1);
+            try self.body.localSet(self.allocator, self.status_local);
+            try self.body.end(self.allocator);
         },
     }
-    try self.body.localSet(self.allocator, self.status_local);
-    try self.emitReloadBase();
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
@@ -746,9 +838,7 @@ pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, blo
     try self.body.ifVoid(self.allocator);
     try self.emitGenericTableFallbackCall(pattern);
     try self.body.end(self.allocator);
-    try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
-    try self.body.localSet(self.allocator, self.dispatch_local);
-    try self.body.branch(self.allocator, self.loop_branch_depth);
+    try self.emitDispatchRejoin(pattern.rejoin);
 }
 pub noinline fn emitInlineGenericTableSet(self: anytype, pattern: GenericTablePattern) Error!void {
     try self.emitGenericTableDirectAttempt(pattern);

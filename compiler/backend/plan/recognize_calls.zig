@@ -73,7 +73,11 @@ pub fn collectCallFacts(allocator: std.mem.Allocator, ctx: anytype) Error!CallFa
                 .exit_target = pattern.exit_target,
                 .fallback_target = pattern.fallback_target orelse snapshot_v1.no_id,
             });
-        if (try ctx.fastcallPatternAt(block.start, block)) |pattern|
+        const fastcall_pattern = if (try ctx.fastcallPatternAt(block.start, block)) |found|
+            found
+        else
+            try ctx.fixedContiguousFastcallPatternAt(block.start, block);
+        if (fastcall_pattern) |pattern|
             try fastcalls.append(allocator, .{
                 .block_id = block_id,
                 .start = pattern.start,

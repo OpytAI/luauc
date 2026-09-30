@@ -822,6 +822,11 @@ fn attachDeferredGc(
         if ((try snapshot.irInstruction(function, cursor)).command == .check_gc)
             return;
     }
+    // A linearized clone drops the NOP that tableAllocationAt folds into the
+    // allocation. That NOP form is already accepted and also has no later
+    // CHECK_GC. A bare NEW_TABLE still needs a collector assist after its stores.
+    if (alloc.dest_reg != snapshot_v1.no_id)
+        return;
     return Error.UnsupportedControlFlow;
 }
 

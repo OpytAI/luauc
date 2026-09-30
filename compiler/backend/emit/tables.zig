@@ -32,8 +32,22 @@ const ir_cmd_barrier_table_forward = abi.ir_cmd_barrier_table_forward;
 const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
 const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
 const tvalue_size = abi.tvalue_size;
+const tvalue_tag_offset = abi.tvalue_tag_offset;
+const tstring_len_offset = abi.tstring_len_offset;
+const table_metatable_offset = abi.table_metatable_offset;
+const lua_state_top_offset = abi.lua_state_top_offset;
 const lua_tag_number = abi.lua_tag_number;
+const lua_tag_string = abi.lua_tag_string;
 const lua_tag_table = abi.lua_tag_table;
+const lua_tag_vector = abi.lua_tag_vector;
+
+pub const LengthSequence = struct {
+    start: u32,
+    finish: u32,
+    destination: u32,
+    source: u32,
+    marker: snapshot_v1.IrInstruction,
+};
 
 pub noinline fn emitGeneralGetGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try emitGeneralGlobal(self, instruction_value, .get);
@@ -62,6 +76,214 @@ fn emitGeneralGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction
     try self.emitReloadBase();
 }
 
+// Luau's GETTABLEKS fast path: a one-byte name x/y/z, ignoring case, reads that lane.
+// name[1] == 0 is the terminator test, so a longer key matches only when its second byte is NUL.
+fn vectorFieldLane(key: []const u8) ?u32 {
+    if (key.len == 0 or (key.len > 1 and key[1] != 0))
+        return null;
+    const folded = @as(i32, key[0] | ' ') - 'x';
+    if (folded < 0 or folded >= @as(i32, @intCast(abi.vector_lane_count)))
+        return null;
+    return @intCast(folded);
+}
+
+fn emitRegisterBelowTop(self: anytype, register: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(register * tvalue_size));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, lua_state_top_offset);
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+}
+
+fn emitStringGetHelper(self: anytype, destination: u32, table: u32, key: []const u8) Error!void {
+    const interned = try self.string_keys.intern(self.allocator, key);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(table));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+    try self.body.i32Const(self.allocator, @intCast(interned.length));
+    try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}
+
+// The constant is already interned in Proto.k. A miss, including a collision chain, stays on the helper.
+fn emitProtoConstantString(self: anytype, index: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    const index_i32 = std.math.cast(i32, index) orelse return;
+    const slot_addend = std.math.cast(i32, std.math.mul(u32, index, tvalue_size) catch return) orelse return;
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_is_c_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.closure_l_proto_offset);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_sizek_offset);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
+    try self.body.i32Const(self.allocator, index_i32);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_sizek_offset);
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_constants_offset);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, slot_addend);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_string);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+fn emitMainPositionNode(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, abi.tstring_hash_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_lsizenode_offset);
+    try self.body.opcode(self.allocator, 0x74); // i32.shl
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.i32Const(self.allocator, 5); // sizeof(LuaNode) == 32
+    try self.body.opcode(self.allocator, 0x74); // i32.shl
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_node_offset);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_closure_local);
+}
+
+fn emitNodeKeyMatch(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, abi.lua_node_key_tag_offset);
+    try self.body.i32Const(self.allocator, abi.lua_node_key_tag_mask);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.i32Const(self.allocator, lua_tag_string);
+    try self.body.i32Eq(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, abi.lua_node_key_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+}
+
+fn emitCopyNodeToRegister(self: anytype, destination: u32) Error!void {
+    const offset = destination * tvalue_size;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, offset + 8);
+}
+
+// Main-position hit copies the TValue. Every other outcome uses the string-key helper once.
+fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []const u8, key_constant: ?u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    if (key_constant) |index| {
+        try emitRegisterBelowTop(self, table);
+        try emitRegisterBelowTop(self, destination);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+        try self.body.ifVoid(self.allocator);
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, table * tvalue_size + tvalue_tag_offset);
+        try self.body.i32Const(self.allocator, lua_tag_table);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, table * tvalue_size);
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try self.body.ifVoid(self.allocator);
+        try emitProtoConstantString(self, index);
+        try self.body.localGet(self.allocator, self.call_func_local);
+        try self.body.ifVoid(self.allocator);
+        try emitMainPositionNode(self);
+        try self.body.localGet(self.allocator, self.call_closure_local);
+        try self.body.ifVoid(self.allocator);
+        try emitNodeKeyMatch(self);
+        try self.body.ifVoid(self.allocator);
+        try emitCopyNodeToRegister(self, destination);
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.localSet(self.allocator, self.call_proto_local);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+    }
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitStringGetHelper(self, destination, table, key);
+    try self.body.end(self.allocator);
+}
+
+// A vector lane publishes a number. A table hit copies the main-position slot. Everything else uses the helper.
+pub fn emitStringKeyGet(self: anytype, destination: u32, table: u32, key: []const u8, key_constant: ?u32) Error!void {
+    const lane = vectorFieldLane(key) orelse return emitStringSlotOrHelper(self, destination, table, key, key_constant);
+    try self.emitReloadBase();
+    try emitRegisterBelowTop(self, table);
+    try emitRegisterBelowTop(self, destination);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_vector));
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(destination * tvalue_size));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f32Load(self.allocator, 2, table * tvalue_size + lane * 4);
+    try self.body.opcode(self.allocator, 0xbb); // f64.promote_f32
+    try self.body.f64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, destination * tvalue_size + tvalue_tag_offset);
+    try self.body.else_(self.allocator);
+    try emitStringSlotOrHelper(self, destination, table, key, key_constant);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitStringSlotOrHelper(self, destination, table, key, key_constant);
+    try self.body.end(self.allocator);
+}
+
 pub noinline fn emitGeneralGetTableKs(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try emitGeneralTableKs(self, instruction_value, .get);
 }
@@ -79,28 +301,23 @@ fn emitGeneralTableKs(
     const pc = try self.uintConstant(try self.operand(instruction_value, 0));
     const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
     const table = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
-    const key = (try self.stringKey(try self.operand(instruction_value, 3))) orelse
+    const key_operand = try self.operand(instruction_value, 3);
+    const key = (try self.stringKey(key_operand)) orelse
         return Error.UnsupportedControlFlow;
-    const interned = try self.string_keys.intern(self.allocator, key);
     try self.emitPcLocation(pc);
-    try self.body.localGet(self.allocator, 0);
     switch (operation) {
         .set => {
+            const interned = try self.string_keys.intern(self.allocator, key);
+            try self.body.localGet(self.allocator, 0);
             try self.body.i32Const(self.allocator, @intCast(table));
             try self.body.i32Const(self.allocator, @intCast(value));
             try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
             try self.body.i32Const(self.allocator, @intCast(interned.length));
             try self.body.call(self.allocator, self.table_set_string orelse return Error.UnsupportedCommand);
+            try self.emitReloadBase();
         },
-        .get => {
-            try self.body.i32Const(self.allocator, @intCast(value));
-            try self.body.i32Const(self.allocator, @intCast(table));
-            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
-            try self.body.i32Const(self.allocator, @intCast(interned.length));
-            try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
-        },
+        .get => try emitStringKeyGet(self, value, table, key, key_operand.value),
     }
-    try self.emitReloadBase();
 }
 
 pub noinline fn emitDirectGenericTableOperation(
@@ -458,6 +675,202 @@ pub noinline fn inlineGenericTableSetPatternAt(self: anytype, start: u32) Error!
         };
     }
 }
+
+fn registerStableTo(self: anytype, register: u32, from_id: u32, to_id: u32) Error!bool {
+    if (from_id >= to_id)
+        return false;
+    const origin = self.plan.instructionBlock(from_id) orelse return false;
+    const consumer = self.plan.instructionBlock(to_id) orelse return false;
+    var block_id = consumer;
+    var guard: u32 = 0;
+    while (guard < 8) : (guard += 1) {
+        const block = try self.snapshot.irBlock(self.function, block_id);
+        if (!block.kind.isCompilable() or block.isEmpty())
+            return false;
+        const begin: u32 = if (block_id == origin) from_id + 1 else block.start;
+        const end: u32 = if (block_id == consumer) to_id else block.finish + 1;
+        var cursor = begin;
+        while (cursor < end) : (cursor += 1) {
+            if (try self.instructionWritesRegister(cursor, register))
+                return false;
+        }
+        if (block_id == origin)
+            return true;
+        const predecessors = self.plan.predecessorSlice(block_id) orelse return false;
+        if (predecessors.len != 1)
+            return false;
+        block_id = predecessors[0];
+    }
+    return false;
+}
+
+fn numericValuePublished(
+    self: anytype,
+    register: u32,
+    source_id: u32,
+    tag_constant: u32,
+    consumer_id: u32,
+) Error!bool {
+    var payload: ?u32 = null;
+    var instruction_id: u32 = 0;
+    while (instruction_id < consumer_id) : (instruction_id += 1) {
+        if (!try self.instructionWritesRegister(instruction_id, register))
+            continue;
+        const instruction_value = try self.instruction(instruction_id);
+        if ((instruction_value.command == .store_double or instruction_value.command == .store_tvalue) and
+            instruction_value.operand_count == 2)
+        {
+            const source = try self.operand(instruction_value, 1);
+            if (source.kind == .instruction and source.value == source_id)
+                payload = instruction_id
+            else
+                payload = null;
+        } else if (instruction_value.command != .store_tag)
+            payload = null;
+    }
+    const published = payload orelse return false;
+    const publication = try self.instruction(published);
+    var cursor = published + 1;
+    if (publication.command == .store_tvalue) {
+        while (cursor < consumer_id) : (cursor += 1)
+            if (try self.instructionWritesRegister(cursor, register))
+                return false;
+        return true;
+    }
+    const expected = (try self.constant(tag_constant)).tagValue() orelse return false;
+    var saw_tag = false;
+    while (cursor < consumer_id) : (cursor += 1) {
+        if (!try self.instructionWritesRegister(cursor, register))
+            continue;
+        const instruction_value = try self.instruction(cursor);
+        if (instruction_value.command != .store_tag or instruction_value.operand_count != 2)
+            return false;
+        const tag = try self.operand(instruction_value, 1);
+        if (tag.kind != .constant or (try self.constant(tag.value)).tagValue() != expected)
+            return false;
+        saw_tag = true;
+    }
+    return saw_tag;
+}
+
+/// The bytecode numeric write owns the `SET_TABLE` fallback and removes it from dispatch.
+/// This linearized copy still branches there. A missing target returns status 2.
+/// Emit the owner's direct array write and generic set instead of that branch.
+pub noinline fn linearizedNumericTableSetAt(self: anytype, start: u32) Error!?InlineGenericTablePattern {
+    const commands = [_]snapshot_v1.IrCommand{
+        .load_tag,               .check_tag,                .nop,                         .nop,
+        .load_pointer,           .nop,                      ir_cmd_try_num_to_index,      .sub_int,
+        ir_cmd_check_array_size, ir_cmd_check_no_metatable, ir_cmd_check_readonly,        ir_cmd_get_arr_addr,
+        .nop,                    .store_split_tvalue,
+    };
+    if (!try self.commandRangeMatches(start, &commands))
+        return null;
+    const finish = start + @as(u32, @intCast(commands.len - 1));
+    self.requireSingleCompilableBlockRange(start, finish) catch return null;
+
+    const table_load = try self.instruction(start);
+    const table_check = try self.instruction(start + 1);
+    const pointer = try self.instruction(start + 4);
+    const index = try self.instruction(start + 6);
+    const zero_index = try self.instruction(start + 7);
+    const size_check = try self.instruction(start + 8);
+    const metatable = try self.instruction(start + 9);
+    const readonly = try self.instruction(start + 10);
+    const address = try self.instruction(start + 11);
+    const store = try self.instruction(start + 13);
+    if (table_load.operand_count != 1 or table_check.operand_count != 3 or pointer.operand_count != 1 or
+        index.operand_count != 2 or zero_index.operand_count != 2 or size_check.operand_count != 3 or
+        metatable.operand_count != 2 or readonly.operand_count != 2 or address.operand_count != 2 or
+        store.operand_count != 3)
+        return null;
+
+    const table = self.vmRegisterIndex(try self.operand(table_load, 0)) catch return null;
+    const checked = try self.operand(table_check, 0);
+    const table_tag = try self.operand(table_check, 1);
+    const fallback_operand = try self.operand(table_check, 2);
+    if (checked.kind != .instruction or checked.value != start or table_tag.kind != .constant or
+        (try self.constant(table_tag.value)).tagValue() != lua_tag_table or fallback_operand.kind != .block)
+        return null;
+    const fallback_id = fallback_operand.value;
+    if ((try self.operand(pointer, 0)).kind != .vm_reg or (try self.operand(pointer, 0)).value != table)
+        return null;
+
+    const indexed = try self.operand(index, 0);
+    const index_failure = try self.operand(index, 1);
+    if (indexed.kind != .instruction or index_failure.kind != .block or index_failure.value != fallback_id)
+        return null;
+    const key_load = try self.instruction(indexed.value);
+    if (key_load.command != .load_double or key_load.operand_count != 1)
+        return null;
+    const key = self.vmRegisterIndex(try self.operand(key_load, 0)) catch return null;
+    if (!try registerStableTo(self, key, indexed.value, start))
+        return null;
+    if ((try self.operand(zero_index, 0)).kind != .instruction or
+        (try self.operand(zero_index, 0)).value != start + 6 or
+        !try self.intOperandEquals(try self.operand(zero_index, 1), 1))
+        return null;
+    if ((try self.operand(size_check, 0)).kind != .instruction or
+        (try self.operand(size_check, 0)).value != start + 4 or
+        (try self.operand(size_check, 1)).kind != .instruction or
+        (try self.operand(size_check, 1)).value != start + 7 or
+        (try self.operand(size_check, 2)).kind != .block or
+        (try self.operand(size_check, 2)).value != fallback_id or
+        (try self.operand(metatable, 0)).kind != .instruction or
+        (try self.operand(metatable, 0)).value != start + 4 or
+        (try self.operand(metatable, 1)).kind != .block or
+        (try self.operand(metatable, 1)).value != fallback_id or
+        (try self.operand(readonly, 0)).kind != .instruction or
+        (try self.operand(readonly, 0)).value != start + 4 or
+        (try self.operand(readonly, 1)).kind != .block or
+        (try self.operand(readonly, 1)).value != fallback_id or
+        (try self.operand(address, 0)).kind != .instruction or
+        (try self.operand(address, 0)).value != start + 4 or
+        (try self.operand(address, 1)).kind != .instruction or
+        (try self.operand(address, 1)).value != start + 7)
+        return null;
+
+    const stored_address = try self.operand(store, 0);
+    const stored_tag = try self.operand(store, 1);
+    const stored_value = try self.operand(store, 2);
+    if (stored_address.kind != .instruction or stored_address.value != start + 11 or
+        stored_tag.kind != .constant or stored_value.kind != .instruction or
+        fallback_id >= self.function.block_count)
+        return null;
+    const fallback_block = try self.snapshot.irBlock(self.function, fallback_id);
+    if (fallback_block.kind != .fallback or fallback_block.isEmpty() or
+        fallback_block.finish != fallback_block.start + 2)
+        return null;
+    const semantic = try self.instruction(fallback_block.start + 1);
+    if (semantic.command != ir_cmd_set_table or semantic.operand_count != 3)
+        return null;
+    const value = self.vmRegisterIndex(try self.operand(semantic, 0)) catch return null;
+    const semantic_table = self.vmRegisterIndex(try self.operand(semantic, 1)) catch return null;
+    const semantic_key = try self.operand(semantic, 2);
+    if (semantic_table != table or semantic_key.kind != .vm_reg or semantic_key.value != key)
+        return null;
+    if (!try numericValuePublished(self, value, stored_value.value, stored_tag.value, start))
+        return null;
+    const resolved = (try self.genericTableFallback(fallback_id, .set, value, table, semantic_key)) orelse
+        return null;
+    return .{
+        .pattern = .{
+            .operation = .set,
+            .start = start,
+            .table = table,
+            .key = try self.valueOperandEncoding(semantic_key),
+            .register_key = key,
+            .immediate_number_key = null,
+            .value = value,
+            .marker = resolved.marker,
+            .fallback = fallback_id,
+            .fast_target = 0,
+            .rejoin = resolved.rejoin,
+        },
+        .finish = finish,
+        .address = start + 11,
+    };
+}
+
 pub noinline fn semanticTableReloadPatternAt(self: anytype, start: u32) Error!?SemanticTableReloadPattern {
     if (start + 1 >= self.function.instruction_count)
         return null;
@@ -507,17 +920,12 @@ pub noinline fn emitSemanticTableReload(self: anytype, pattern: SemanticTableRel
             try self.body.call(self.allocator, self.table_get orelse return Error.UnsupportedCommand);
         },
         .string => |key| {
-            const interned = try self.string_keys.intern(self.allocator, key.value);
             try self.emitPcLocation(key.pc);
-            try self.body.localGet(self.allocator, 0);
-            try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
-            try self.body.i32Const(self.allocator, @intCast(interned.length));
-            try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
+            try emitStringKeyGet(self, pattern.destination, pattern.table, key.value, null);
         },
     }
-    try self.emitReloadBase();
+    if (pattern.key != .string)
+        try self.emitReloadBase();
 }
 pub noinline fn genericTableSetPattern(self: anytype, block: snapshot_v1.IrBlock) Error!?GenericTablePattern {
     if (!block.kind.isCompilable() or block.isEmpty())
@@ -1316,6 +1724,315 @@ pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) 
     try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
 }
+
+fn plainLenResultEscapes(self: anytype, convert_id: u32, finish: u32) Error!bool {
+    if (convert_id == 0)
+        return false;
+    const table_len_id = convert_id - 1;
+    var cursor: u32 = 0;
+    while (cursor < self.function.instruction_count) : (cursor += 1) {
+        if (cursor >= table_len_id and cursor <= finish)
+            continue;
+        const instruction_value = try self.instruction(cursor);
+        var operand_index: u32 = 0;
+        while (operand_index < instruction_value.operand_count) : (operand_index += 1) {
+            const operand = try self.operand(instruction_value, operand_index);
+            if (operand.kind == .instruction and operand.value == convert_id)
+                return true;
+        }
+    }
+    return false;
+}
+
+/// The plain-length helper writes the VM register. A later instruction that names the convert
+/// result reads the wasm local, so publish that local only when such a use exists. A length whose
+/// only consumer is the store inside this cluster keeps the helper call alone. An escaping length
+/// reads the value tag in wasm: a string length is a load, and every other value still uses the
+/// same helpers as the register-length sequence.
+pub noinline fn emitPlainLenCluster(self: anytype, fact: anytype) Error!void {
+    const convert_id = fact.table_len_id + 1;
+    if (!try plainLenResultEscapes(self, convert_id, fact.finish)) {
+        try self.emitPlainTableLen(fact.dest_reg, fact.table_reg);
+        return;
+    }
+    try self.emitRegisterLength(fact.dest_reg, fact.table_reg);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, fact.dest_reg * tvalue_size);
+    try self.emitInstructionResultSet(convert_id);
+}
+
+fn blockFailureIsBypassed(self: anytype, instruction_value: snapshot_v1.IrInstruction, operand_index: u32) Error!bool {
+    if (operand_index >= instruction_value.operand_count)
+        return false;
+    const failure = try self.operand(instruction_value, operand_index);
+    if (failure.kind != .block or failure.value >= self.function.block_count)
+        return false;
+    const block = try self.snapshot.irBlock(self.function, failure.value);
+    return self.isBypassedEmissionBlock(failure.value, block);
+}
+
+/// A bytecode length block owns the `DO_LEN` fallback and removes it from the dispatch table.
+/// The linearized copy still has the tag and metatable checks. Branching to that missing block
+/// returns status 2. The plain-length helper already performs those checks, so skip the prefix.
+pub fn bypassedPlainLenGuard(self: anytype, instruction_id: u32) Error!?u32 {
+    const commands = [_]snapshot_v1.IrCommand{
+        .load_tag, .check_tag, .load_pointer, ir_cmd_check_no_metatable, ir_cmd_table_len,
+    };
+    if (!try self.commandRangeMatches(instruction_id, &commands))
+        return null;
+    const table_len_id = instruction_id + @as(u32, @intCast(commands.len - 1));
+    if (self.plan.plainLenAt(table_len_id) == null)
+        return null;
+    const block_id = self.plan.instructionBlock(instruction_id) orelse return null;
+    if ((self.plan.instructionBlock(table_len_id) orelse return null) != block_id)
+        return null;
+    const tag_check = try self.instruction(instruction_id + 1);
+    const metatable = try self.instruction(instruction_id + 3);
+    if (!try blockFailureIsBypassed(self, tag_check, 2) or !try blockFailureIsBypassed(self, metatable, 1))
+        return null;
+    return table_len_id;
+}
+
+fn emitDoLenRegisters(self: anytype, destination: u32, source: u32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.call(self.allocator, self.do_len orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}
+
+fn emitInlineStringLength(self: anytype, destination: u32, source: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source * tvalue_size);
+    try self.body.i32Load(self.allocator, 2, tstring_len_offset);
+    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+    try self.body.f64Store(self.allocator, 3, destination * tvalue_size);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, destination * tvalue_size + tvalue_tag_offset);
+}
+
+/// `#` reads the value tag in wasm. A string length is a load. A table with no
+/// metatable uses the table-length helper. Every other value uses `do_len`.
+pub noinline fn emitRegisterLength(self: anytype, destination: u32, source: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_string);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitInlineStringLength(self, destination, source);
+    try self.body.else_(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source * tvalue_size);
+    try self.body.i32Load(self.allocator, 2, table_metatable_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.emitPlainTableLen(destination, source);
+    try self.body.else_(self.allocator);
+    try emitDoLenRegisters(self, destination, source);
+    try self.body.end(self.allocator);
+
+    try self.body.else_(self.allocator);
+    try emitDoLenRegisters(self, destination, source);
+    try self.body.end(self.allocator);
+
+    try self.body.end(self.allocator);
+}
+
+pub noinline fn lengthSequenceAt(self: anytype, start: u32) Error!?LengthSequence {
+    const commands = [_]snapshot_v1.IrCommand{
+        .load_tag,   .check_tag,    .load_pointer, ir_cmd_check_no_metatable, ir_cmd_table_len,
+        .int_to_num, .store_double, .store_tag,
+    };
+    if (!try self.commandRangeMatches(start, &commands))
+        return null;
+    const finish = start + @as(u32, @intCast(commands.len - 1));
+    self.requireSingleCompilableBlockRange(start, finish) catch return null;
+
+    const load_tag = try self.instruction(start);
+    const tag_check = try self.instruction(start + 1);
+    const pointer = try self.instruction(start + 2);
+    const metatable = try self.instruction(start + 3);
+    const length = try self.instruction(start + 4);
+    const convert = try self.instruction(start + 5);
+    const store = try self.instruction(start + 6);
+    const store_tag = try self.instruction(start + 7);
+    if (load_tag.operand_count != 1 or tag_check.operand_count != 3 or
+        pointer.operand_count != 1 or metatable.operand_count != 2 or
+        length.operand_count != 1 or convert.operand_count != 1 or store.operand_count != 2 or
+        store_tag.operand_count != 2)
+        return null;
+
+    const source_operand = try self.operand(load_tag, 0);
+    if (source_operand.kind != .vm_reg)
+        return null;
+    const source = self.vmRegisterIndex(source_operand) catch return null;
+    const tag_input = try self.operand(tag_check, 0);
+    const table_tag = try self.operand(tag_check, 1);
+    const fallback_target = try self.operand(tag_check, 2);
+    const pointer_input = try self.operand(pointer, 0);
+    const metatable_pointer = try self.operand(metatable, 0);
+    const metatable_fallback = try self.operand(metatable, 1);
+    const length_pointer = try self.operand(length, 0);
+    const converted = try self.operand(convert, 0);
+    const destination_operand = try self.operand(store, 0);
+    if (destination_operand.kind != .vm_reg)
+        return null;
+    const destination = self.vmRegisterIndex(destination_operand) catch return null;
+    const stored = try self.operand(store, 1);
+    const tag_destination = try self.operand(store_tag, 0);
+    const result_tag = try self.operand(store_tag, 1);
+    if (tag_input.kind != .instruction or tag_input.value != start or table_tag.kind != .constant or
+        (try self.constant(table_tag.value)).tagValue() != lua_tag_table or fallback_target.kind != .block or
+        pointer_input.kind != .vm_reg or pointer_input.value != source or
+        metatable_pointer.kind != .instruction or metatable_pointer.value != start + 2 or
+        metatable_fallback.kind != .block or metatable_fallback.value != fallback_target.value or
+        length_pointer.kind != .instruction or length_pointer.value != start + 2 or
+        converted.kind != .instruction or converted.value != start + 4 or
+        stored.kind != .instruction or stored.value != start + 5 or
+        tag_destination.kind != .vm_reg or tag_destination.value != destination or result_tag.kind != .constant or
+        (try self.constant(result_tag.value)).tagValue() != lua_tag_number)
+        return null;
+
+    const fallback = try self.snapshot.irBlock(self.function, fallback_target.value);
+    if (fallback.kind != .fallback or fallback.isEmpty() or fallback.finish - fallback.start != 2)
+        return null;
+    const marker = try self.instruction(fallback.start);
+    const do_len = try self.instruction(fallback.start + 1);
+    const fallback_jump = try self.instruction(fallback.start + 2);
+    if (marker.command != .set_savedpc or do_len.command != ir_cmd_do_len or fallback_jump.command != .jump or
+        marker.operand_count != 1 or do_len.operand_count != 2 or fallback_jump.operand_count != 1)
+        return null;
+    _ = self.savedPc(marker) catch return null;
+    const fallback_destination = self.vmRegisterIndex(try self.operand(do_len, 0)) catch return null;
+    const fallback_source = self.vmRegisterIndex(try self.operand(do_len, 1)) catch return null;
+    if (fallback_destination != destination or fallback_source != source)
+        return null;
+    return .{
+        .start = start,
+        .finish = finish,
+        .destination = destination,
+        .source = source,
+        .marker = marker,
+    };
+}
+pub const FreshTableLen = struct {
+    finish: u32,
+    destination: u32,
+    table: u32,
+    converted: u32,
+};
+
+fn freshAllocationReaches(self: anytype, register: u32, published_id: u32, consumer_id: u32) Error!bool {
+    if (published_id >= consumer_id)
+        return false;
+    if (try self.preservesRegisterToConsumer(register, published_id, consumer_id))
+        return true;
+    const origin = self.plan.instructionBlock(published_id) orelse return false;
+    var block_id = self.plan.instructionBlock(consumer_id) orelse return false;
+    var seen: u32 = 0;
+    while (block_id != origin) {
+        seen += 1;
+        if (seen > 8)
+            return false;
+        const block = try self.snapshot.irBlock(self.function, block_id);
+        if (!block.kind.isCompilable() or block.isEmpty())
+            return false;
+        var cursor = block.start;
+        while (cursor <= block.finish and cursor < consumer_id) : (cursor += 1) {
+            if (cursor > published_id and try self.instructionWritesRegister(cursor, register))
+                return false;
+        }
+        const predecessors = self.plan.predecessorSlice(block_id) orelse return false;
+        if (predecessors.len != 1)
+            return false;
+        block_id = predecessors[0];
+    }
+    const origin_block = try self.snapshot.irBlock(self.function, origin);
+    var tail = published_id + 1;
+    while (tail <= origin_block.finish and tail < consumer_id) : (tail += 1)
+        if (try self.instructionWritesRegister(tail, register))
+            return false;
+    return true;
+}
+
+fn freshLengthTable(self: anytype, pointer: snapshot_v1.IrOperand, table_len_id: u32) Error!?u32 {
+    if (try self.loadedPointerRegister(pointer)) |register| {
+        if (self.plan.isProvenTablePointer(pointer.value))
+            return null;
+        if (!try self.preservedFreshTablePointer(pointer, table_len_id))
+            return null;
+        return register;
+    }
+    const allocation = (try self.tableAllocationPatternAt(pointer.value)) orelse return null;
+    if (allocation.start != pointer.value)
+        return null;
+    if (!try freshAllocationReaches(self, allocation.destination, allocation.finish, table_len_id))
+        return null;
+    return allocation.destination;
+}
+
+/// `#` on a fresh table inside a linearized block has no proved-pointer cluster.
+/// The following convert and store are the length result, so one table-length helper covers them.
+pub fn freshTableLenPattern(self: anytype, table_len_id: u32) Error!?FreshTableLen {
+    const length = try self.instruction(table_len_id);
+    if (length.command != ir_cmd_table_len or length.operand_count != 1)
+        return null;
+    const pointer = try self.operand(length, 0);
+    if (pointer.kind != .instruction or pointer.value >= table_len_id)
+        return null;
+    const table = (try freshLengthTable(self, pointer, table_len_id)) orelse return null;
+    if (table_len_id + 2 >= self.function.instruction_count)
+        return null;
+    const convert = try self.instruction(table_len_id + 1);
+    const store = try self.instruction(table_len_id + 2);
+    if (convert.command != .int_to_num or convert.operand_count != 1 or
+        store.command != .store_double or store.operand_count != 2)
+        return null;
+    const converted = try self.operand(convert, 0);
+    const destination = try self.operand(store, 0);
+    const stored = try self.operand(store, 1);
+    if (converted.kind != .instruction or converted.value != table_len_id or
+        stored.kind != .instruction or stored.value != table_len_id + 1 or
+        destination.kind != .vm_reg)
+        return null;
+    const dest_reg = self.vmRegisterIndex(destination) catch return null;
+    var finish = table_len_id + 2;
+    if (table_len_id + 3 < self.function.instruction_count) {
+        const store_tag = try self.instruction(table_len_id + 3);
+        if (store_tag.command == .store_tag and store_tag.operand_count == 2) {
+            const tag_destination = try self.operand(store_tag, 0);
+            const tag = try self.operand(store_tag, 1);
+            if (tag_destination.kind == .vm_reg and tag_destination.value == dest_reg and
+                tag.kind == .constant and
+                (try self.constant(tag.value)).tagValue() == lua_tag_number)
+                finish = table_len_id + 3;
+        }
+    }
+    self.requireSingleCompilableBlockRange(table_len_id, finish) catch return null;
+    return .{
+        .finish = finish,
+        .destination = dest_reg,
+        .table = table,
+        .converted = table_len_id + 1,
+    };
+}
+
+pub fn emitFreshTableLen(self: anytype, pattern: FreshTableLen) Error!void {
+    try self.emitPlainTableLen(pattern.destination, pattern.table);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, pattern.destination * tvalue_size);
+    try self.emitInstructionResultSet(pattern.converted);
+}
+
 pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 1);
     const pointer = try self.operand(instruction_value, 0);

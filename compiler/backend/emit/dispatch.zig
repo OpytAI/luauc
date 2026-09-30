@@ -48,6 +48,7 @@ const ir_cmd_fallback_settableks = abi.ir_cmd_fallback_settableks;
 const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
 const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
 const ir_cmd_invoke_fastcall = abi.ir_cmd_invoke_fastcall;
+const ir_cmd_check_fastcall_res = abi.ir_cmd_check_fastcall_res;
 const ir_cmd_buffer_readi8 = abi.ir_cmd_buffer_readi8;
 const ir_cmd_buffer_readu8 = abi.ir_cmd_buffer_readu8;
 const ir_cmd_buffer_writei8 = abi.ir_cmd_buffer_writei8;
@@ -109,7 +110,7 @@ fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
         ),
         .plain_len => {
             const fact = self.plan.plainLenAt(cluster.at) orelse return Error.UnsupportedControlFlow;
-            try self.emitPlainTableLen(fact.dest_reg, fact.table_reg);
+            try self.emitPlainLenCluster(fact);
         },
         .concat => try self.emitConcat(
             (try self.concatPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
@@ -328,7 +329,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         ir_cmd_check_node_no_next => try self.emitCheckNodeNoNext(instruction_id, instruction_value),
         ir_cmd_check_node_value => try self.emitCheckNodeValue(instruction_id, instruction_value),
         ir_cmd_check_readonly => try self.emitCheckReadonly(instruction_value),
-        ir_cmd_check_no_metatable, ir_cmd_check_array_size => try self.emitTableLayoutGuard(instruction_value),
+        ir_cmd_check_no_metatable, ir_cmd_check_array_size => try self.emitTableLayoutGuard(instruction_id, instruction_value),
         ir_cmd_try_num_to_index => try self.emitTryNumberToIndex(instruction_id, instruction_value),
         ir_cmd_get_table, ir_cmd_set_table => {
             if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
@@ -403,6 +404,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         ir_cmd_invoke_libm => try self.emitLibm(instruction_id, instruction_value),
         ir_cmd_fastcall => try self.emitDirectFastcall(instruction_value),
         ir_cmd_invoke_fastcall => try self.emitGeneralInvokeFastcall(instruction_id, instruction_value),
+        ir_cmd_check_fastcall_res => return Error.UnsupportedControlFlow,
         ir_cmd_forgloop => {
             try self.emitGeneralForgLoop(instruction_value);
             return true;
@@ -520,6 +522,42 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
+        if (self.plan.clusterAt(instruction_id) == null) {
+            if (try self.bypassedPlainLenGuard(instruction_id)) |table_len_id| {
+                instruction_id = table_len_id - 1;
+                continue;
+            }
+            if (try self.lengthSequenceAt(instruction_id)) |sequence| {
+                // A planned cluster already owns this length. Keep that lowering.
+                var occupied = false;
+                var cursor = sequence.start;
+                while (cursor <= sequence.finish) : (cursor += 1) {
+                    if (self.plan.clusterAt(cursor) != null) {
+                        occupied = true;
+                        break;
+                    }
+                }
+                if (!occupied) {
+                    try self.emitSavedPcLocation(sequence.marker);
+                    try self.emitRegisterLength(sequence.destination, sequence.source);
+                    self.plan.noteLoweredRange(self.snapshot, self.function, sequence.start, sequence.finish);
+                    instruction_id = sequence.finish;
+                    continue;
+                }
+            }
+            if (try self.freshTableLenPattern(instruction_id)) |pattern| {
+                try self.emitFreshTableLen(pattern);
+                self.plan.noteLoweredRange(self.snapshot, self.function, instruction_id, pattern.finish);
+                instruction_id = pattern.finish;
+                continue;
+            }
+            if (try self.linearizedNumericTableSetAt(instruction_id)) |pattern| {
+                try self.emitInlineGenericTableSet(pattern.pattern);
+                self.plan.noteLoweredRange(self.snapshot, self.function, pattern.pattern.start, pattern.finish);
+                instruction_id = pattern.finish;
+                continue;
+            }
+        }
         if (self.plan.clusterAt(instruction_id)) |_| {
             terminated = try self.emitInstruction(instruction_id, block.kind);
             continue;
@@ -531,8 +569,16 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             terminated = true;
             continue;
         }
-        if (try self.fastcallPatternAt(instruction_id, block)) |pattern| {
+        const fastcall_pattern = if (try self.fastcallPatternAt(instruction_id, block)) |found|
+            found
+        else
+            try self.fixedContiguousFastcallPatternAt(instruction_id, block);
+        if (fastcall_pattern) |pattern| {
             try self.emitFastcallCluster(pattern);
+            if (self.rejoin_fallthrough and pattern.isStringByteRegister() and pattern.finish == block.finish) {
+                instruction_id = pattern.finish - 1;
+                continue;
+            }
             instruction_id = block.finish;
             terminated = true;
             continue;
@@ -552,7 +598,11 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         }
         if (try self.stringTablePattern(block)) |pattern| {
             if (instruction_id == pattern.start) {
-                try self.emitStringTableOperation(pattern);
+                // Always rejoin. The fused loop suppresses only the block emitter's rejoin.
+                try self.emitStringTableHelper(pattern);
+                try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
+                try self.body.localSet(self.allocator, self.dispatch_local);
+                try self.body.branch(self.allocator, self.loop_branch_depth);
                 instruction_id = block.finish;
                 terminated = true;
                 continue;
@@ -596,6 +646,10 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
     return terminated;
 }
 pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
+    if (try emitGenericForLoopBlock(self, block_id))
+        return;
+    if (try emitDirectLoopBlock(self, block_id))
+        return;
     switch (self.plan.blockKind(block_id)) {
         .string_equality => {
             const pattern = (try self.stringEqualityPattern(block)) orelse return Error.UnsupportedControlFlow;
@@ -710,4 +764,512 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
                 return Error.InvalidBlockTermination;
         },
     }
+}
+
+const max_direct_loop_blocks: u8 = 8;
+
+const DirectLoop = struct {
+    blocks: [max_direct_loop_blocks]u32 = undefined,
+    count: u8 = 0,
+    exit_block: u32 = 0,
+    continue_on_true: bool = false,
+    unconditional: bool = false,
+
+    fn contains(self: DirectLoop, block_id: u32) bool {
+        var index: u8 = 0;
+        while (index < self.count) : (index += 1) {
+            if (self.blocks[index] == block_id)
+                return true;
+        }
+        return false;
+    }
+};
+
+const LoopStep = struct {
+    next: u32,
+    open_end: u32,
+    specialized: bool,
+};
+
+const BackEdge = struct {
+    exit_block: u32,
+    continue_on_true: bool,
+    unconditional: bool,
+};
+
+fn loopKindAdmitted(kind: anytype) bool {
+    return switch (kind) {
+        .dispatch, .generic_table, .string_table, .dynamic_length, .semantic_array, .pow, .constant_pow, .constant_arith, .global, .namecall => true,
+        else => false,
+    };
+}
+
+fn commandLeavesBlock(command: snapshot_v1.IrCommand) bool {
+    return switch (command) {
+        .jump, .jump_if_truthy, .jump_if_falsy, .jump_eq_tag, .jump_cmp_int, .jump_eq_pointer, .jump_cmp_num, .jump_cmp_float, .jump_forn_loop_cond, .return_ => true,
+        else => command == abi.ir_cmd_forgloop or command == abi.ir_cmd_forgloop_fallback or
+            command == abi.ir_cmd_fallback_forgprep or command == abi.ir_cmd_jump_slot_match or
+            command == abi.ir_cmd_jump_cmp_protoid or command == abi.ir_cmd_invoke_fastcall or
+            command == abi.ir_cmd_check_fastcall_res or command == abi.ir_cmd_fastcall,
+    };
+}
+
+fn loopBlockAdmitted(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!bool {
+    if (block.isEmpty() or !block.kind.isCompilable() or block.kind == .fallback)
+        return false;
+    return !self.plan.isPlannedBypass(block_id);
+}
+
+fn blockTarget(self: anytype, instruction_value: snapshot_v1.IrInstruction, index: u32, compiled_only: bool) Error!?u32 {
+    if (index >= instruction_value.operand_count)
+        return null;
+    const operand_value = try self.operand(instruction_value, index);
+    if (compiled_only)
+        return self.requireCompiledTarget(operand_value) catch return null;
+    return self.requireDispatchTarget(operand_value) catch return null;
+}
+
+fn backEdgeTo(self: anytype, block_id: u32, block: snapshot_v1.IrBlock, header_id: u32) Error!?BackEdge {
+    if (self.plan.blockKind(block_id) != .dispatch)
+        return null;
+    const term = try self.instruction(block.finish);
+    if (term.command == .jump) {
+        if (term.operand_count != 1)
+            return null;
+        const target = (try blockTarget(self, term, 0, false)) orelse return null;
+        if (target != header_id)
+            return null;
+        return .{ .exit_block = target, .continue_on_true = false, .unconditional = true };
+    }
+    const numeric = switch (term.command) {
+        .jump_cmp_num, .jump_cmp_int, .jump_cmp_float, .jump_forn_loop_cond => true,
+        else => false,
+    };
+    if (!numeric or term.operand_count < 5)
+        return null;
+    const compiled_only = term.command == .jump_forn_loop_cond;
+    const true_target = (try blockTarget(self, term, 3, compiled_only)) orelse return null;
+    const false_target = (try blockTarget(self, term, 4, compiled_only)) orelse return null;
+    if (true_target == header_id and false_target != header_id)
+        return .{ .exit_block = false_target, .continue_on_true = true, .unconditional = false };
+    if (false_target == header_id and true_target != header_id)
+        return .{ .exit_block = true_target, .continue_on_true = false, .unconditional = false };
+    return null;
+}
+
+fn fallthroughStep(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!?LoopStep {
+    switch (self.plan.blockKind(block_id)) {
+        .dispatch => {
+            const term = try self.instruction(block.finish);
+            if (term.command != .jump or term.operand_count != 1)
+                return null;
+            const next = (try blockTarget(self, term, 0, false)) orelse return null;
+            return .{ .next = next, .open_end = block.finish, .specialized = false };
+        },
+        .generic_table => {
+            const pattern = (try self.genericTablePattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .string_table => {
+            const pattern = (try self.stringTablePattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .dynamic_length => {
+            const pattern = (try self.dynamicLengthPattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .semantic_array => {
+            const operation = (try self.semanticArrayOperation(block)) orelse return null;
+            if (operation.pattern.start < block.start or operation.pattern.start > block.finish)
+                return null;
+            return .{ .next = operation.pattern.rejoin, .open_end = operation.pattern.start, .specialized = true };
+        },
+        .pow => {
+            const pattern = (try self.powPattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .constant_pow => {
+            const pattern = (try self.constantPowPattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .constant_arith => {
+            const pattern = (try self.constantArithmeticPattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .global => {
+            const pattern = (try self.globalPattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        .namecall => {
+            const pattern = (try self.plainTableNamecallPattern(block)) orelse return null;
+            if (pattern.start < block.start or pattern.start > block.finish)
+                return null;
+            return .{ .next = pattern.rejoin, .open_end = pattern.start, .specialized = true };
+        },
+        else => return null,
+    }
+}
+
+fn stringByteRegisterInvoke(self: anytype, instruction_id: u32) Error!bool {
+    if (instruction_id >= self.function.instruction_count)
+        return false;
+    const invoke = try self.instruction(instruction_id);
+    if (invoke.command != ir_cmd_invoke_fastcall or invoke.operand_count != 7)
+        return false;
+    const builtin = try self.operand(invoke, 0);
+    if (builtin.kind != .constant or (try self.constant(builtin.value)).uintValue() != abi.lbf_string_byte)
+        return false;
+    const second = try self.operand(invoke, 3);
+    const third = try self.operand(invoke, 4);
+    if (second.kind != .vm_reg or third.kind != .undef)
+        return false;
+    return try self.intConstant(try self.operand(invoke, 5)) == 2 and
+        try self.intConstant(try self.operand(invoke, 6)) == 1;
+}
+
+fn rangeStaysInside(self: anytype, block: snapshot_v1.IrBlock, open_end: u32) Error!bool {
+    if (block.isEmpty() or open_end < block.start)
+        return false;
+    var instruction_id = block.start;
+    while (instruction_id < open_end) : (instruction_id += 1) {
+        if (instruction_id > block.finish)
+            return false;
+        const command = (try self.instruction(instruction_id)).command;
+        if (command == ir_cmd_invoke_fastcall and try stringByteRegisterInvoke(self, instruction_id)) {
+            // The inlined byte falls through on a hit. Its check and stack adjust stay in this block.
+            while (instruction_id + 1 < open_end) {
+                const next = (try self.instruction(instruction_id + 1)).command;
+                if (next != ir_cmd_check_fastcall_res and next != abi.ir_cmd_adjust_stack_to_top)
+                    break;
+                instruction_id += 1;
+            }
+            continue;
+        }
+        if (commandLeavesBlock(command))
+            return false;
+        if (try self.globalHeadPatternAt(instruction_id, block)) |_|
+            return false;
+    }
+    return true;
+}
+
+// A straight IR cycle becomes one wasm loop. The back edge is `br`. Other entries keep dispatch.
+fn findDirectLoop(self: anytype, header_id: u32) Error!?DirectLoop {
+    if (header_id >= self.function.block_count or !loopKindAdmitted(self.plan.blockKind(header_id)))
+        return null;
+    const header = try self.snapshot.irBlock(self.function, header_id);
+    if (!try loopBlockAdmitted(self, header_id, header))
+        return null;
+
+    var loop = DirectLoop{};
+    if (try backEdgeTo(self, header_id, header, header_id)) |edge| {
+        if (!try rangeStaysInside(self, header, header.finish))
+            return null;
+        loop.blocks[0] = header_id;
+        loop.count = 1;
+        loop.exit_block = edge.exit_block;
+        loop.continue_on_true = edge.continue_on_true;
+        loop.unconditional = edge.unconditional;
+        return loop;
+    }
+
+    const first = (try fallthroughStep(self, header_id, header)) orelse return null;
+    if (!try rangeStaysInside(self, header, first.open_end))
+        return null;
+    loop.blocks[0] = header_id;
+    loop.count = 1;
+    if (first.next == header_id) {
+        loop.unconditional = true;
+        return loop;
+    }
+
+    var cursor = first.next;
+    while (loop.count < max_direct_loop_blocks) {
+        if (cursor >= self.function.block_count or loop.contains(cursor))
+            return null;
+        const block = try self.snapshot.irBlock(self.function, cursor);
+        if (!try loopBlockAdmitted(self, cursor, block) or !loopKindAdmitted(self.plan.blockKind(cursor)))
+            return null;
+        if (try backEdgeTo(self, cursor, block, header_id)) |edge| {
+            if (self.plan.blockKind(cursor) != .dispatch or !try rangeStaysInside(self, block, block.finish))
+                return null;
+            loop.blocks[loop.count] = cursor;
+            loop.count += 1;
+            if (!edge.unconditional and loop.contains(edge.exit_block))
+                return null;
+            loop.exit_block = edge.exit_block;
+            loop.continue_on_true = edge.continue_on_true;
+            loop.unconditional = edge.unconditional;
+            return loop;
+        }
+        const step = (try fallthroughStep(self, cursor, block)) orelse return null;
+        if (!try rangeStaysInside(self, block, step.open_end))
+            return null;
+        loop.blocks[loop.count] = cursor;
+        loop.count += 1;
+        if (step.next == header_id) {
+            loop.unconditional = true;
+            return loop;
+        }
+        cursor = step.next;
+    }
+    return null;
+}
+
+fn findReturnCycle(self: anytype, header_id: u32, start_id: u32) Error!?DirectLoop {
+    if (start_id == header_id or start_id >= self.function.block_count)
+        return null;
+    var loop = DirectLoop{};
+    var cursor = start_id;
+    while (loop.count < max_direct_loop_blocks) {
+        if (loop.contains(cursor))
+            return null;
+        const block = try self.snapshot.irBlock(self.function, cursor);
+        if (!try loopBlockAdmitted(self, cursor, block) or !loopKindAdmitted(self.plan.blockKind(cursor)))
+            return null;
+        if (try backEdgeTo(self, cursor, block, header_id)) |edge| {
+            if (!edge.unconditional or self.plan.blockKind(cursor) != .dispatch)
+                return null;
+            if (!try rangeStaysInside(self, block, block.finish))
+                return null;
+            loop.blocks[loop.count] = cursor;
+            loop.count += 1;
+            loop.unconditional = true;
+            return loop;
+        }
+        const step = (try fallthroughStep(self, cursor, block)) orelse return null;
+        if (!try rangeStaysInside(self, block, step.open_end))
+            return null;
+        loop.blocks[loop.count] = cursor;
+        loop.count += 1;
+        if (step.next == header_id) {
+            loop.unconditional = true;
+            return loop;
+        }
+        cursor = step.next;
+    }
+    return null;
+}
+
+fn emitGenericForLoopBlock(self: anytype, block_id: u32) Error!bool {
+    if (self.plan.blockKind(block_id) != .generic_iteration)
+        return false;
+    const header = try self.snapshot.irBlock(self.function, block_id);
+    const pattern = (try self.genericIterationPattern(header)) orelse return false;
+    const fallback = pattern.fallback_target orelse return false;
+    if (pattern.repeat_target == block_id or pattern.exit_target == block_id or pattern.repeat_target == pattern.exit_target)
+        return false;
+    const body = (try findReturnCycle(self, block_id, pattern.repeat_target)) orelse return false;
+    if (body.contains(block_id) or body.contains(fallback) or body.contains(pattern.exit_target))
+        return false;
+    try lowerGenericForLoop(self, block_id, pattern, body);
+    return true;
+}
+
+fn emitFusedGenericHeader(self: anytype, block_id: u32, pattern: model.GenericIterationPattern) Error!void {
+    const fallback_id = pattern.fallback_target orelse return Error.UnsupportedControlFlow;
+    const fallback = try self.snapshot.irBlock(self.function, fallback_id);
+    const block = try self.snapshot.irBlock(self.function, block_id);
+    try self.emitInterrupt(block.start, pattern.marker);
+    try self.emitTValueTag(.{ .kind = .vm_reg, .value = pattern.base });
+    try self.body.i32Const(self.allocator, abi.lua_tag_nil);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.emitGenericIterationCall(pattern);
+    try self.body.else_(self.allocator);
+    // The fallback block stays available for a resumed entry. This arm is the taken path.
+    try self.emitGenericIterationFallbackCall(fallback.finish, pattern, true);
+    try self.body.end(self.allocator);
+}
+
+fn lowerGenericForLoop(self: anytype, block_id: u32, pattern: model.GenericIterationPattern, body: DirectLoop) Error!void {
+    // One wasm loop for a straight generic-for body. Repeat falls through.
+    // Stop, and every resumable exit, still leave through the outer dispatcher.
+    try self.body.loop(self.allocator);
+    const saved_depth = self.loop_branch_depth;
+    self.loop_branch_depth = saved_depth + 1;
+    defer self.loop_branch_depth = saved_depth;
+
+    try emitFusedGenericHeader(self, block_id, pattern);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    // 0 is this if. saved_depth + 1 is the inner loop. The next label is the outer dispatcher.
+    try self.body.branch(self.allocator, self.loop_branch_depth + 1);
+    try self.body.end(self.allocator);
+
+    var index: u8 = 0;
+    while (index + 1 < body.count) : (index += 1)
+        try emitLoopPredecessor(self, body.blocks[index]);
+    const last_id = body.blocks[body.count - 1];
+    const last = try self.snapshot.irBlock(self.function, last_id);
+    if (self.plan.blockKind(last_id) == .dispatch)
+        try emitDispatchOpen(self, last)
+    else
+        try emitSpecializedFallthrough(self, last_id, last);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+}
+
+fn emitDirectLoopBlock(self: anytype, block_id: u32) Error!bool {
+    const loop = (try findDirectLoop(self, block_id)) orelse return false;
+    try lowerDirectLoop(self, loop);
+    return true;
+}
+
+fn emitDispatchOpen(self: anytype, block: snapshot_v1.IrBlock) Error!void {
+    if (block.finish == block.start)
+        return;
+    if (block.finish < block.start)
+        return Error.UnsupportedControlFlow;
+    // Successors of this block are inlined after it. A miss still leaves through the dispatcher.
+    self.rejoin_fallthrough = true;
+    defer self.rejoin_fallthrough = false;
+    const terminated = try self.emitInstructionRange(block.start, block.finish - 1, block);
+    if (terminated)
+        return Error.UnsupportedControlFlow;
+}
+
+fn emitSpecializedFallthrough(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
+    self.rejoin_fallthrough = true;
+    defer self.rejoin_fallthrough = false;
+    switch (self.plan.blockKind(block_id)) {
+        .generic_table => {
+            const pattern = (try self.genericTablePattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitGenericTableOperationBlock(block_id, block, pattern);
+        },
+        .string_table => {
+            const pattern = (try self.stringTablePattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitStringTableOperationBlock(block_id, block, pattern);
+        },
+        .dynamic_length => {
+            const pattern = (try self.dynamicLengthPattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitDynamicLengthBlock(block_id, block, pattern);
+        },
+        .semantic_array => {
+            const operation = (try self.semanticArrayOperation(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitArrayOperationBlock(block_id, block, operation.pattern, operation.kind);
+        },
+        .pow => {
+            const pattern = (try self.powPattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitPowBlock(block_id, block, pattern);
+        },
+        .constant_pow => {
+            const pattern = (try self.constantPowPattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitConstantArithmeticBlock(block_id, block, pattern);
+        },
+        .constant_arith => {
+            const pattern = (try self.constantArithmeticPattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitConstantArithmeticBlock(block_id, block, pattern);
+        },
+        .global => {
+            const pattern = (try self.globalPattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitGlobalOperationBlock(block_id, block, pattern);
+        },
+        .namecall => {
+            const pattern = (try self.plainTableNamecallPattern(block)) orelse return Error.UnsupportedControlFlow;
+            try self.emitPlainTableNamecallBlock(block_id, block, pattern);
+        },
+        else => return Error.UnsupportedControlFlow,
+    }
+}
+
+fn emitDirectLoopCondition(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    switch (instruction_value.command) {
+        .jump_cmp_num => {
+            try self.requireOperandCount(instruction_value, 5);
+            try self.emitF64Value(try self.operand(instruction_value, 0));
+            try self.emitF64Value(try self.operand(instruction_value, 1));
+            try self.emitNumericCondition(try self.conditionOperand(instruction_value, 2));
+        },
+        .jump_cmp_int => {
+            try self.requireOperandCount(instruction_value, 5);
+            try self.emitI32Value(try self.operand(instruction_value, 0));
+            try self.emitI32Value(try self.operand(instruction_value, 1));
+            try self.emitIntegerCondition(try self.conditionOperand(instruction_value, 2));
+        },
+        .jump_cmp_float => {
+            try self.requireOperandCount(instruction_value, 5);
+            try self.emitF32Value(try self.operand(instruction_value, 0));
+            try self.emitF32Value(try self.operand(instruction_value, 1));
+            try self.emitFloatCondition(try self.conditionOperand(instruction_value, 2));
+        },
+        .jump_forn_loop_cond => {
+            // step > 0 selects index <= limit. Otherwise limit <= index. NaN exits on the false arm.
+            try self.requireOperandCount(instruction_value, 5);
+            try self.emitF64Value(try self.operand(instruction_value, 0));
+            try self.emitF64Value(try self.operand(instruction_value, 1));
+            try self.body.f64Le(self.allocator);
+            try self.emitF64Value(try self.operand(instruction_value, 1));
+            try self.emitF64Value(try self.operand(instruction_value, 0));
+            try self.body.f64Le(self.allocator);
+            try self.emitF64Value(try self.operand(instruction_value, 2));
+            try self.body.f64Const(self.allocator, 0.0);
+            try self.body.f64Gt(self.allocator);
+            try self.body.select(self.allocator);
+        },
+        else => return Error.UnsupportedControlFlow,
+    }
+}
+
+fn emitDirectBackEdge(self: anytype, block: snapshot_v1.IrBlock, exit_block: u32, continue_on_true: bool) Error!void {
+    try self.body.i32Const(self.allocator, @intCast(exit_block));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try emitDirectLoopCondition(self, try self.instruction(block.finish));
+    if (!continue_on_true)
+        try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    // 0 is this if. 1 is the fused wasm loop.
+    try self.body.branch(self.allocator, 1);
+    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, self.loop_branch_depth);
+}
+
+fn emitLoopPredecessor(self: anytype, block_id: u32) Error!void {
+    const block = try self.snapshot.irBlock(self.function, block_id);
+    if (self.plan.blockKind(block_id) == .dispatch)
+        try emitDispatchOpen(self, block)
+    else
+        try emitSpecializedFallthrough(self, block_id, block);
+}
+
+fn lowerDirectLoop(self: anytype, loop: DirectLoop) Error!void {
+    try self.body.loop(self.allocator);
+    const saved_depth = self.loop_branch_depth;
+    self.loop_branch_depth = saved_depth + 1;
+    defer self.loop_branch_depth = saved_depth;
+
+    var index: u8 = 0;
+    while (index + 1 < loop.count) : (index += 1)
+        try emitLoopPredecessor(self, loop.blocks[index]);
+
+    const last_id = loop.blocks[loop.count - 1];
+    const last = try self.snapshot.irBlock(self.function, last_id);
+    if (self.plan.blockKind(last_id) == .dispatch) {
+        try emitDispatchOpen(self, last);
+        if (loop.unconditional)
+            try self.body.branch(self.allocator, 0)
+        else
+            try emitDirectBackEdge(self, last, loop.exit_block, loop.continue_on_true);
+    } else {
+        if (!loop.unconditional)
+            return Error.UnsupportedControlFlow;
+        try emitSpecializedFallthrough(self, last_id, last);
+        try self.body.branch(self.allocator, 0);
+    }
+    try self.body.end(self.allocator);
 }

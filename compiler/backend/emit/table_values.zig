@@ -109,14 +109,78 @@ pub noinline fn emitGetArrayAddress(
     try self.emitInstructionResultSet(instruction_id);
 }
 
+/// A linearized block can reload a fresh table without repeating `CHECK_TAG`.
+/// The register stays a table when this function allocated it and no later store replaced it.
+pub fn preservedFreshTablePointer(self: anytype, pointer: snapshot_v1.IrOperand, consumer_id: u32) Error!bool {
+    const register = (try self.loadedPointerRegister(pointer)) orelse return false;
+    var producer: ?u32 = null;
+    var cursor: u32 = 0;
+    while (cursor < consumer_id) : (cursor += 1) {
+        const instruction_value = try self.instruction(cursor);
+        if (instruction_value.command != .store_tag or instruction_value.operand_count != 2 or cursor == 0)
+            continue;
+        const destination = try self.operand(instruction_value, 0);
+        const tag = try self.operand(instruction_value, 1);
+        if (destination.kind != .vm_reg or destination.value != register or tag.kind != .constant or
+            (try self.constant(tag.value)).tagValue() != abi.lua_tag_table)
+            continue;
+        const publication = try self.instruction(cursor - 1);
+        if (publication.command != .store_pointer or publication.operand_count != 2)
+            continue;
+        const published_destination = try self.operand(publication, 0);
+        const published_source = try self.operand(publication, 1);
+        if (published_destination.kind != .vm_reg or published_destination.value != register or
+            published_source.kind != .instruction)
+            continue;
+        const allocation = (try self.tableAllocationPatternAt(published_source.value)) orelse continue;
+        if (allocation.start != published_source.value or allocation.destination != register)
+            continue;
+        producer = cursor;
+    }
+    const published = producer orelse return false;
+    if (try self.preservesRegisterToConsumer(register, published, consumer_id))
+        return true;
+    // The publication can sit several unique-predecessor hops before a
+    // linearized reload. One hop is the direct case above.
+    const origin = self.plan.instructionBlock(published) orelse return false;
+    var block_id = self.plan.instructionBlock(consumer_id) orelse return false;
+    var seen: u32 = 0;
+    while (block_id != origin) {
+        seen += 1;
+        if (seen > 8)
+            return false;
+        const block = try self.snapshot.irBlock(self.function, block_id);
+        if (!block.kind.isCompilable() or block.isEmpty())
+            return false;
+        var instruction_id = block.start;
+        while (instruction_id <= block.finish and instruction_id < consumer_id) : (instruction_id += 1) {
+            if (instruction_id > published and try self.instructionWritesRegister(instruction_id, register))
+                return false;
+        }
+        const predecessors = self.plan.predecessorSlice(block_id) orelse return false;
+        if (predecessors.len != 1)
+            return false;
+        block_id = predecessors[0];
+    }
+    const origin_block = try self.snapshot.irBlock(self.function, origin);
+    var tail = published + 1;
+    while (tail <= origin_block.finish and tail < consumer_id) : (tail += 1)
+        if (try self.instructionWritesRegister(tail, register))
+            return false;
+    return true;
+}
+
 pub noinline fn emitTableLayoutGuard(
     self: anytype,
+    instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
     if (instruction_value.command == abi.ir_cmd_check_no_metatable) {
         try self.requireOperandCount(instruction_value, 2);
         const table = try self.operand(instruction_value, 0);
-        if (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value))
+        if (table.kind != .instruction or
+            (!self.plan.isProvenTablePointer(table.value) and
+                !try preservedFreshTablePointer(self, table, instruction_id)))
             return Error.UnsupportedControlFlow;
         try self.emitPointerValue(table);
         try self.body.i32Load(self.allocator, 2, abi.table_metatable_offset);
@@ -130,7 +194,9 @@ pub noinline fn emitTableLayoutGuard(
         return Error.UnsupportedCommand;
     try self.requireOperandCount(instruction_value, 3);
     const table = try self.operand(instruction_value, 0);
-    if (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value))
+    if (table.kind != .instruction or
+        (!self.plan.isProvenTablePointer(table.value) and
+            !try preservedFreshTablePointer(self, table, instruction_id)))
         return Error.UnsupportedControlFlow;
     try self.emitPointerValue(table);
     try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);

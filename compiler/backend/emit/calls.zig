@@ -18,9 +18,21 @@ const callinfo_top_offset = abi.callinfo_top_offset;
 const tvalue_size = abi.tvalue_size;
 const tvalue_tag_offset = abi.tvalue_tag_offset;
 const tstring_len_offset = abi.tstring_len_offset;
+const tstring_data_offset = abi.tstring_data_offset;
 const lua_tag_number = abi.lua_tag_number;
 const lua_tag_string = abi.lua_tag_string;
+const lua_tag_vector = abi.lua_tag_vector;
+const callinfo_func_offset = abi.callinfo_func_offset;
+const closure_env_offset = abi.closure_env_offset;
+const closure_is_c_offset = abi.closure_is_c_offset;
+const closure_l_proto_offset = abi.closure_l_proto_offset;
+const proto_constants_offset = abi.proto_constants_offset;
+const proto_sizek_offset = abi.proto_sizek_offset;
+const table_safeenv_offset = abi.table_safeenv_offset;
+const lua_tag_nil = abi.lua_tag_nil;
+const status_ok = abi.status_ok;
 const status_unsupported_type = abi.status_unsupported_type;
+const status_internal_error = abi.status_internal_error;
 const lbf_operand_none = abi.lbf_operand_none;
 const lop_getimport = abi.lop_getimport;
 const lop_call = abi.lop_call;
@@ -404,11 +416,13 @@ pub noinline fn emitDecodedGlobalImport(
     }
     if (encoded != expected)
         return Error.UnsupportedControlFlow;
-    // Decode the complete one-to-three-key import into ordinary semantic lookups. This does
-    // not consume or trust the optimizer's environment cache: unsafe environments and
-    // metatable-backed intermediate objects observe the same luaV boundaries as the bytecode
-    // fallback, without carrying bytecode or an import interpreter into the guest.
+    // A safe environment already resolved this import into Proto.k at load.
+    // Nil and unsafe environments keep the semantic lookup.
     try self.emitPcLocation(pc);
+    try emitCachedImportHit(self, destination, import_id);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(destination));
     try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(keys[0].offset));
@@ -425,6 +439,76 @@ pub noinline fn emitDecodedGlobalImport(
         try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
         try self.emitReloadBase();
     }
+    try self.body.end(self.allocator);
+}
+
+// Copy Proto.k[import] when the active frame is a safe Lua closure and the slot is not nil.
+// call_proto_local is 1 on that hit and 0 for every other outcome.
+fn emitCachedImportHit(self: anytype, destination: u32, import_id: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    const index_i32 = std.math.cast(i32, import_id) orelse return;
+    const slot_addend = std.math.cast(i32, std.math.mul(u32, import_id, tvalue_size) catch return) orelse return;
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, closure_is_c_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, closure_env_offset);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, closure_l_proto_offset);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, index_i32);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, proto_sizek_offset);
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, proto_constants_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, slot_addend);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_nil);
+    try self.body.i32Eq(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.emitReloadBase();
+    const offset = destination * tvalue_size;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, offset + 8);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.end(self.allocator); // resolved value
+    try self.body.end(self.allocator); // constant array
+    try self.body.end(self.allocator); // constant index
+    try self.body.end(self.allocator); // proto
+    try self.body.end(self.allocator); // safeenv
+    try self.body.end(self.allocator); // environment
+    try self.body.end(self.allocator); // Lua closure
+    try self.body.end(self.allocator); // closure pointer
 }
 pub fn staticRequireTarget(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?StaticRequirePattern {
     const package = self.static_package orelse return null;
@@ -556,9 +640,31 @@ pub noinline fn emitSafeEnvCheck(self: anytype, instruction_id: u32) Error!void 
     const failure = try self.operand(instruction_value, 0);
     if (failure.kind != .block)
         return Error.InvalidOperandType;
+    // Same three results as luauc_runtime_v1_check_safe_env: internal error when the closure has
+    // no environment, unsupported when safeenv is clear, OK otherwise. The active frame is this
+    // function, so the check is the environment pointer and its safeenv byte.
     try self.body.localGet(self.allocator, 0);
-    try self.body.call(self.allocator, self.check_safe_env orelse return Error.UnsupportedCommand);
+    try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Load(self.allocator, 2, closure_env_offset);
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, status_internal_error);
     try self.body.localSet(self.allocator, self.status_local);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, status_unsupported_type);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.else_(self.allocator);
+    try self.body.i32Const(self.allocator, status_ok);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
     try self.emitReloadBase();
 
     // The runtime returns only OK, UNSUPPORTED_TYPE (take the compiled slow arm), or a fatal
@@ -685,7 +791,256 @@ pub noinline fn emitDirectFastcall(self: anytype, instruction_value: snapshot_v1
     try self.body.opcode(self.allocator, 0x47); // i32.ne
     try self.emitInternalErrorIf();
 }
+fn emitSlotBelowTop(self: anytype, register: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(register * tvalue_size));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, lua_state_top_offset);
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+}
+
+fn emitSlotTagEquals(self: anytype, register: u32, tag: u8) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, register * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, @intCast(tag));
+    try self.body.i32Eq(self.allocator);
+}
+
+// Match luauF_byte for one register index. A miss leaves status negative so the CALL fallback runs.
+// A fused numeric loop falls through on the hit and leaves only on the miss.
+fn emitInlineStringByte(self: anytype, pattern: FastcallPattern) Error!void {
+    const starts_at_guard = (try self.instruction(pattern.start)).command == .check_safe_env;
+    const saved_id = pattern.start + @intFromBool(starts_at_guard);
+    // The preceding check already returned on a null environment and left on an unsafe one.
+    const guarded_before = !starts_at_guard and pattern.start > 0 and
+        (try self.instruction(pattern.start - 1)).command == .check_safe_env;
+    try self.emitSavedPcLocation(try self.instruction(saved_id));
+    try self.body.i32Const(self.allocator, -1);
+    try self.body.localSet(self.allocator, self.status_local);
+
+    const index: u32 = pattern.argument_two;
+    if (!guarded_before) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
+        try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
+        try self.body.i32Load(self.allocator, 2, 0);
+        try self.body.i32Load(self.allocator, 2, closure_env_offset);
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+    }
+
+    try self.emitReloadBase();
+    try emitSlotBelowTop(self, pattern.source);
+    try emitSlotBelowTop(self, index);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try emitSlotBelowTop(self, pattern.destination);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try emitSlotTagEquals(self, pattern.source, lua_tag_string);
+    try emitSlotTagEquals(self, index, lua_tag_number);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, pattern.source * tvalue_size);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, index * tvalue_size);
+    try self.body.opcode(self.allocator, 0xfc);
+    try self.body.opcode(self.allocator, 0x02); // i32.trunc_sat_f64_s
+    try self.body.localSet(self.allocator, self.call_func_local);
+
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.i32Eqz(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, tstring_len_offset);
+    try self.body.opcode(self.allocator, 0x4b); // i32.gt_u
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+
+    // Byte i is data[i - 1]. data begins at byte 20, so the address is string + 19 + i.
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(pattern.destination * tvalue_size));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tstring_data_offset - 1));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load8U(self.allocator, 0, 0);
+    try self.body.opcode(self.allocator, 0xb8); // f64.convert_i32_u
+    try self.body.f64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.end(self.allocator); // index in range
+    try self.body.end(self.allocator); // string and number tags
+    try self.body.end(self.allocator); // live slots
+    if (!guarded_before) {
+        try self.body.end(self.allocator); // safeenv
+        try self.body.end(self.allocator); // environment pointer
+    }
+
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, @intCast(pattern.fallback));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.else_(self.allocator);
+    if (pattern.finish > pattern.start and
+        (try self.instruction(pattern.finish - 1)).command == ir_cmd_adjust_stack_to_top)
+        try self.emitAdjustStackToTop();
+    try self.body.i32Const(self.allocator, @intCast(pattern.fast_target));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.end(self.allocator);
+
+    if (!self.rejoin_fallthrough) {
+        try self.body.branch(self.allocator, self.loop_branch_depth);
+    } else {
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+        try self.body.ifVoid(self.allocator);
+        // 0 is this if. loop_branch_depth is the fused loop. The next label is the dispatcher.
+        try self.body.branch(self.allocator, self.loop_branch_depth + 1);
+        try self.body.end(self.allocator);
+    }
+}
+
+fn emitDemotedLaneBits(self: anytype, register: u32, scratch: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, register * tvalue_size);
+    try self.body.opcode(self.allocator, 0xb6); // f32.demote_f64
+    try self.body.opcode(self.allocator, 0xbc); // i32.reinterpret_f32
+    try self.body.localSet(self.allocator, scratch);
+}
+
+fn emitStoredLane(self: anytype, destination: u32, lane: u32, scratch: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, scratch);
+    try self.body.opcode(self.allocator, 0xbe); // f32.reinterpret_i32
+    try self.body.f32Store(self.allocator, 2, destination * tvalue_size + lane * 4);
+}
+
+// Match luauF_vector for two or three register numbers and one result.
+// Lane 2 is TValue::extra. Read every lane before storing: the destination may alias a source.
+// A miss leaves status negative so the CALL fallback runs.
+fn emitInlineVectorCreate(self: anytype, pattern: FastcallPattern) Error!void {
+    const three = pattern.parameter_count == 3;
+    const starts_at_guard = (try self.instruction(pattern.start)).command == .check_safe_env;
+    const saved_id = pattern.start + @intFromBool(starts_at_guard);
+    const guarded_before = !starts_at_guard and pattern.start > 0 and
+        (try self.instruction(pattern.start - 1)).command == .check_safe_env;
+    try self.emitSavedPcLocation(try self.instruction(saved_id));
+    try self.body.i32Const(self.allocator, -1);
+    try self.body.localSet(self.allocator, self.status_local);
+
+    if (!guarded_before) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
+        try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
+        try self.body.i32Load(self.allocator, 2, 0);
+        try self.body.i32Load(self.allocator, 2, closure_env_offset);
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+    }
+
+    try self.emitReloadBase();
+    try emitSlotBelowTop(self, pattern.source);
+    try emitSlotBelowTop(self, pattern.argument_two);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    if (three) {
+        try emitSlotBelowTop(self, pattern.argument_three);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+    }
+    try emitSlotBelowTop(self, pattern.destination);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try emitSlotTagEquals(self, pattern.source, lua_tag_number);
+    try emitSlotTagEquals(self, pattern.argument_two, lua_tag_number);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    if (three) {
+        try emitSlotTagEquals(self, pattern.argument_three, lua_tag_number);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+    }
+    try self.body.ifVoid(self.allocator);
+
+    try emitDemotedLaneBits(self, pattern.source, self.call_func_local);
+    try emitDemotedLaneBits(self, pattern.argument_two, self.call_closure_local);
+    if (three)
+        try emitDemotedLaneBits(self, pattern.argument_three, self.call_proto_local)
+    else {
+        try self.body.i32Const(self.allocator, 0); // +0.0f for the missing lane
+        try self.body.localSet(self.allocator, self.call_proto_local);
+    }
+    try emitStoredLane(self, pattern.destination, 0, self.call_func_local);
+    try emitStoredLane(self, pattern.destination, 1, self.call_closure_local);
+    try emitStoredLane(self, pattern.destination, 2, self.call_proto_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_vector));
+    try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.end(self.allocator); // number tags
+    try self.body.end(self.allocator); // live slots
+    if (!guarded_before) {
+        try self.body.end(self.allocator); // safeenv
+        try self.body.end(self.allocator); // environment pointer
+    }
+
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, @intCast(pattern.fallback));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.else_(self.allocator);
+    if (pattern.finish > pattern.start and
+        (try self.instruction(pattern.finish - 1)).command == ir_cmd_adjust_stack_to_top)
+        try self.emitAdjustStackToTop();
+    try self.body.i32Const(self.allocator, @intCast(pattern.fast_target));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.end(self.allocator);
+
+    if (!self.rejoin_fallthrough) {
+        try self.body.branch(self.allocator, self.loop_branch_depth);
+    } else {
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+        try self.body.ifVoid(self.allocator);
+        try self.body.branch(self.allocator, self.loop_branch_depth + 1);
+        try self.body.end(self.allocator);
+    }
+}
+
 pub noinline fn emitFastcallCluster(self: anytype, pattern: FastcallPattern) Error!void {
+    if (pattern.isStringByteRegister())
+        return emitInlineStringByte(self, pattern);
+    if (pattern.isVectorCreateRegister())
+        return emitInlineVectorCreate(self, pattern);
     const saved_id = pattern.start + @intFromBool((try self.instruction(pattern.start)).command == .check_safe_env);
     try self.emitSavedPcLocation(try self.instruction(saved_id));
     try self.body.localGet(self.allocator, 0);
@@ -727,10 +1082,15 @@ pub fn isFastcallFallback(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         if (!source.kind.isCompilable() or source.isEmpty())
             continue;
         var instruction_id = source.start;
-        while (instruction_id <= source.finish) : (instruction_id += 1)
-            if (try self.fastcallPatternAt(instruction_id, source)) |pattern|
+        while (instruction_id <= source.finish) : (instruction_id += 1) {
+            const fastcall_pattern = if (try self.fastcallPatternAt(instruction_id, source)) |found|
+                found
+            else
+                try self.fixedContiguousFastcallPatternAt(instruction_id, source);
+            if (fastcall_pattern) |pattern|
                 if (pattern.fallback == block_id)
                     return true;
+        }
     }
     return false;
 }

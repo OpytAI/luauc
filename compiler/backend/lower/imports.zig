@@ -316,16 +316,18 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &prepare_compiled_call_params, .results = &status_result });
         break :blk try object.importFunction("env", prepare_compiled_call_symbol, helper_type);
     } else null;
-    const finish_compiled_call = if (needs.call) blk: {
+    // A non-nil generic for installs the iterator frame in wasm, same as a fixed CALL.
+    const fast_lua_frame = needs.call or needs.forg_loop_call;
+    const finish_compiled_call = if (fast_lua_frame) blk: {
         const helper_type = try object.addType(.{ .params = &finish_compiled_call_params, .results = &no_results });
         break :blk try object.importFunction("env", finish_compiled_call_symbol, helper_type);
     } else null;
-    // P2 measurement imports only. Generated CALL does not require them as product ABI.
-    const count_direct_call = if (needs.call) blk: {
+    // Measurement counters. Every wasm Lua transfer, including an iterator call, reports one.
+    const count_direct_call = if (fast_lua_frame) blk: {
         const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
         break :blk try object.importFunction("env", count_direct_call_symbol, helper_type);
     } else null;
-    const count_indirect_call = if (needs.call) blk: {
+    const count_indirect_call = if (fast_lua_frame) blk: {
         const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
         break :blk try object.importFunction("env", count_indirect_call_symbol, helper_type);
     } else null;
