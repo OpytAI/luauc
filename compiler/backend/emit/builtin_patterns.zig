@@ -814,7 +814,7 @@ pub noinline fn stringSetPattern(self: anytype, block: snapshot_v1.IrBlock) Erro
         table = allocation.destination;
     }
     const rejoin = (try self.stringFallbackRejoin(fallback.value, .set, pc, source.value, table, key_operand.value)) orelse return null;
-    return .{ .operation = .set, .start = semantic_start, .pc = pc, .table = table, .value = source.value, .key = key, .fallback = fallback.value, .fast_target = fast_target.value, .rejoin = rejoin };
+    return .{ .operation = .set, .start = semantic_start, .pc = pc, .table = table, .value = source.value, .key = key, .key_constant = key_operand.value, .fallback = fallback.value, .fast_target = fast_target.value, .rejoin = rejoin };
 }
 pub noinline fn stringGetPattern(self: anytype, block: snapshot_v1.IrBlock) Error!?StringTablePattern {
     const commands = [_]snapshot_v1.IrCommand{
@@ -1014,6 +1014,7 @@ pub noinline fn inlineGeneralStringSetPatternAt(self: anytype, start: u32, block
             .table = table.value,
             .value = source.value,
             .key = key,
+            .key_constant = key_operand.value,
             .fallback = fallback.value,
             .fast_target = rejoin,
             .rejoin = rejoin,
@@ -1088,6 +1089,7 @@ pub noinline fn inlinePreloadedStringSetPatternAt(self: anytype, start: u32, blo
             .table = table.value,
             .value = publication.destination,
             .key = key,
+            .key_constant = key_operand.value,
             .fallback = fallback.value,
             .fast_target = rejoin,
             .rejoin = rejoin,
@@ -1187,6 +1189,7 @@ pub noinline fn inlineOwnedStringSetPatternAt(self: anytype, start: u32, block: 
             .table = table,
             .value = source.value,
             .key = key,
+            .key_constant = key_operand.value,
             .fallback = fallback.value,
             .fast_target = rejoin,
             .rejoin = rejoin,

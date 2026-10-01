@@ -130,6 +130,8 @@ pub const Context = struct {
     call_meta_local: u32,
     call_aux_local: u32,
     call_cached_closure_local: u32,
+    // Proto.k for this activation. Zero until the first constant-string slot use.
+    constant_array_local: u32,
     call_continuations: []const CallContinuation,
     continuation_indices: []const u32,
     string_keys: *StringKeyPool,
@@ -318,6 +320,7 @@ pub const Context = struct {
     pub const emitForwardTableBarrier = table_values.emitForwardTableBarrier;
     pub const emitGeneralTableOperation = table_values.emitGeneralTableOperation;
     pub const supportsGeneralTableFallback = admission.supportsGeneralTableFallback;
+    pub const supportsStringKeyFallback = admission.supportsStringKeyFallback;
 
     // allocations
     pub const tableAllocationPatternAt = allocations.tableAllocationPatternAt;
@@ -330,6 +333,7 @@ pub const Context = struct {
     pub const constantTruthyFallbackPatternAt = allocations.constantTruthyFallbackPatternAt;
     pub const emitConstantTruthyFallback = allocations.emitConstantTruthyFallback;
     pub const dupTablePatternAt = allocations.dupTablePatternAt;
+    pub const freshTableRegister = allocations.freshTableRegister;
     pub const emitDupTable = allocations.emitDupTable;
     pub const tableRegisterForPointer = allocations.tableRegisterForPointer;
     pub const dupTableRegisterForPointer = allocations.dupTableRegisterForPointer;
@@ -402,11 +406,15 @@ pub const Context = struct {
     pub const trustedArrayGetPattern = tables.trustedArrayGetPattern;
     pub const trustedArrayAddress = tables.trustedArrayAddress;
     pub const inlineArrayGetPatternAt = tables.inlineArrayGetPatternAt;
-    pub const emitInlineArrayGet = tables.emitInlineArrayGet;
+    pub const emitInlineArrayGet = iteration.emitInlineArrayGet;
     pub const emitGeneralGetGlobal = tables.emitGeneralGetGlobal;
     pub const emitGeneralSetGlobal = tables.emitGeneralSetGlobal;
     pub const emitGeneralGetTableKs = tables.emitGeneralGetTableKs;
     pub const emitGeneralSetTableKs = tables.emitGeneralSetTableKs;
+    pub const emitStringSlotSetOrHelper = tables.emitStringSlotSetOrHelper;
+    pub const emitInlineNamecallProbe = tables.emitInlineNamecallProbe;
+    pub const emitSlotNodeFromTable = tables.emitSlotNodeFromTable;
+    pub const emitSlotMatchFromNode = tables.emitSlotMatchFromNode;
     pub const tableLenPattern = tables.tableLenPattern;
     pub const dynamicLengthPattern = tables.dynamicLengthPattern;
     pub const lengthSequenceAt = tables.lengthSequenceAt;
@@ -459,6 +467,7 @@ pub const Context = struct {
     pub const emitGlobalOperationBlock = iteration.emitGlobalOperationBlock;
     pub const emitGlobalOperation = iteration.emitGlobalOperation;
     pub const emitGenericTableFallbackCall = iteration.emitGenericTableFallbackCall;
+    pub const emitGuardedConstantTableGet = iteration.emitGuardedConstantTableGet;
     pub const emitGenericTableDirectAttempt = iteration.emitGenericTableDirectAttempt;
     pub const emitGenericTableOperationBlock = iteration.emitGenericTableOperationBlock;
     pub const emitInlineGenericTableSet = iteration.emitInlineGenericTableSet;

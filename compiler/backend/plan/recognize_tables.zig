@@ -112,6 +112,9 @@ pub fn indexBlocks(allocator: std.mem.Allocator, ctx: anytype) Error!BlockIndex 
         if (try stringEqualityOwned(ctx, facts, block_id))
             bypassed[block_id] = true;
     }
+    // A pattern may own one copy of a string-key miss while another live block
+    // still branches to that fallback. Keep the fallback when a raw guard remains.
+    try retainLiveStringKeyFallbacks(ctx, bypassed);
 
     const owns_fallback = try allocator.alloc(bool, block_count);
     errdefer allocator.free(owns_fallback);
@@ -157,7 +160,8 @@ fn classifyFallbackSupport(ctx: anytype, fact: BlockFact, block: snapshot_v1.IrB
             (try ctx.supportsMaterializedComparisonFallback(block)) or
             (try ctx.supportsLengthFallback(block)) or
             (try ctx.supportsNamecallFallback(block)) or
-            (try ctx.supportsGeneralTableFallback(block)),
+            (try ctx.supportsGeneralTableFallback(block)) or
+            (try ctx.supportsStringKeyFallback(block)),
     };
 }
 
@@ -272,6 +276,34 @@ fn markOwnedAndInlineFallbacks(
 fn markId(bypassed: []bool, id: u32) void {
     if (id != snapshot_v1.no_id and id < bypassed.len)
         bypassed[id] = true;
+}
+
+fn retainLiveStringKeyFallbacks(ctx: anytype, bypassed: []bool) Error!void {
+    var block_id: u32 = 0;
+    while (block_id < ctx.function.block_count) : (block_id += 1) {
+        if (bypassed[block_id])
+            continue;
+        const block = try ctx.snapshot.irBlock(ctx.function, block_id);
+        if (block.isEmpty() or !block.kind.isCompilable())
+            continue;
+        var instruction_id = block.start;
+        while (instruction_id <= block.finish) : (instruction_id += 1) {
+            // Cluster emission replaces the instruction. It does not branch to the miss block.
+            if (ctx.plan.clusterAt(instruction_id) != null)
+                continue;
+            const instruction_value = try ctx.instruction(instruction_id);
+            var operand_id: u32 = 0;
+            while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
+                const operand_value = try ctx.operand(instruction_value, operand_id);
+                if (operand_value.kind != .block or operand_value.value >= bypassed.len or
+                    !bypassed[operand_value.value])
+                    continue;
+                const target = try ctx.snapshot.irBlock(ctx.function, operand_value.value);
+                if (try ctx.supportsStringKeyFallback(target))
+                    bypassed[operand_value.value] = false;
+            }
+        }
+    }
 }
 
 fn linearizedOnlyRewritten(ctx: anytype, facts: []const BlockFact, block_id: u32) Error!bool {

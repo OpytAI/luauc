@@ -4,6 +4,7 @@ const std = @import("std");
 const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const tvalue_size = abi.tvalue_size;
@@ -94,13 +95,28 @@ pub noinline fn emitGetArrayAddress(
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
     try self.requireOperandCount(instruction_value, 2);
-    if (!self.plan.isGuardedArrayAddress(instruction_id))
+    if (!self.plan.isGuardedArrayAddress(instruction_id)) {
+        diagnostics.trace("arr unguarded");
         return Error.UnsupportedControlFlow;
+    }
     const table = try self.operand(instruction_value, 0);
-    if (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value))
+    const fresh = if (table.kind == .instruction)
+        try self.freshTableRegister(table.value)
+    else
+        null;
+    if (fresh == null and
+        (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value)))
+    {
+        diagnostics.trace("arr unproven");
         return Error.UnsupportedControlFlow;
+    }
 
-    try self.emitPointerValue(table);
+    if (fresh) |register| {
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+    } else {
+        try self.emitPointerValue(table);
+    }
     try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
     try self.emitI32Value(try self.operand(instruction_value, 1));
     try self.body.i32Const(self.allocator, @intCast(abi.tvalue_size));
@@ -213,7 +229,12 @@ pub noinline fn emitForwardTableBarrier(
     const table = try self.operand(instruction_value, 0);
     const source = try self.operand(instruction_value, 1);
     const known_tag = try self.operand(instruction_value, 2);
-    if (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value) or
+    const fresh = if (table.kind == .instruction)
+        try self.freshTableRegister(table.value)
+    else
+        null;
+    if ((fresh == null and
+        (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value))) or
         source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
         (known_tag.kind != .undef and known_tag.kind != .constant))
         return Error.UnsupportedControlFlow;
@@ -221,7 +242,12 @@ pub noinline fn emitForwardTableBarrier(
         return Error.InvalidOperandType;
 
     try self.body.localGet(self.allocator, 0);
-    try self.emitPointerValue(table);
+    if (fresh) |register| {
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+    } else {
+        try self.emitPointerValue(table);
+    }
     try self.body.i32Const(self.allocator, @intCast(source.value));
     try self.body.call(self.allocator, self.barrier_table_forward orelse return Error.UnsupportedCommand);
 }

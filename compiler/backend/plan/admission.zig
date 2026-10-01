@@ -15,6 +15,10 @@ const ir_cmd_do_len = abi.ir_cmd_do_len;
 const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const ir_cmd_get_table = abi.ir_cmd_get_table;
 const ir_cmd_set_table = abi.ir_cmd_set_table;
+const ir_cmd_fallback_gettableks = abi.ir_cmd_fallback_gettableks;
+const ir_cmd_fallback_settableks = abi.ir_cmd_fallback_settableks;
+const ir_cmd_fallback_getglobal = abi.ir_cmd_fallback_getglobal;
+const ir_cmd_fallback_setglobal = abi.ir_cmd_fallback_setglobal;
 
 fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
     if (operand.kind != .constant)
@@ -483,6 +487,67 @@ pub noinline fn supportsGeneralTableFallback(
         return false;
     const target_block = try self.snapshot.irBlock(self.function, target.value);
     return target_block.kind.isCompilable() and !target_block.isEmpty();
+}
+
+/// A constant-string table or global fallback is the miss arm of a slot check.
+/// The fast arm stays in the caller. This block runs the existing helper and rejoins.
+pub noinline fn supportsStringKeyFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
+    if (block.kind != .fallback or block.isEmpty())
+        return false;
+    const semantic_id = if (block.finish == block.start + 1)
+        block.start
+    else if (block.finish == block.start + 2)
+        block.start + 1
+    else
+        return false;
+    if (semantic_id != block.start) {
+        const marker = try self.instruction(block.start);
+        if (marker.command != .set_savedpc or marker.operand_count != 1)
+            return false;
+    }
+    const semantic = try self.instruction(semantic_id);
+    const jump = try self.instruction(block.finish);
+    if (jump.command != .jump or jump.operand_count != 1)
+        return false;
+    const target = try self.operand(jump, 0);
+    if (target.kind != .block or target.value >= self.function.block_count)
+        return false;
+    const target_block = try self.snapshot.irBlock(self.function, target.value);
+    if (!target_block.kind.isCompilable() or target_block.isEmpty())
+        return false;
+
+    const string_table = semantic.command == ir_cmd_fallback_gettableks or
+        semantic.command == ir_cmd_fallback_settableks;
+    const global = semantic.command == ir_cmd_fallback_getglobal or
+        semantic.command == ir_cmd_fallback_setglobal;
+    if (string_table) {
+        if (semantic.operand_count != 4)
+            return false;
+        const pc = try self.operand(semantic, 0);
+        const value = try self.operand(semantic, 1);
+        const table = try self.operand(semantic, 2);
+        const key = try self.operand(semantic, 3);
+        if (pc.kind != .constant or (try self.constant(pc.value)).uintValue() == null)
+            return false;
+        if (value.kind != .vm_reg or value.value >= self.proto.max_stack_size)
+            return false;
+        if (table.kind != .vm_reg or table.value >= self.proto.max_stack_size)
+            return false;
+        return key.kind == .vm_const and key.value < self.proto.vm_constant_count;
+    }
+    if (global) {
+        if (semantic.operand_count != 3)
+            return false;
+        const pc = try self.operand(semantic, 0);
+        const value = try self.operand(semantic, 1);
+        const key = try self.operand(semantic, 2);
+        if (pc.kind != .constant or (try self.constant(pc.value)).uintValue() == null)
+            return false;
+        if (value.kind != .vm_reg or value.value >= self.proto.max_stack_size)
+            return false;
+        return key.kind == .vm_const and key.value < self.proto.vm_constant_count;
+    }
+    return false;
 }
 
 pub const isRequireImportInstruction = model.isRequireImportInstruction;

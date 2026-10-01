@@ -309,16 +309,21 @@ pub const FunctionPlan = struct {
                             const index = try snapshot.irOperand(instruction, 1);
                             if (hasTablePointerProvenance(table_pointer_provenance, table)) {
                                 const address = arrayGuard(table, index);
-                                if (array_guards.contains(address)) {
-                                    guarded_array_addresses[instruction_id] = true;
-                                    array_address_guards[instruction_id] = address;
-                                } else if (last_array_guard) |guard| {
+                                const covered: ?ArrayGuard = if (array_guards.contains(address))
+                                    address
+                                else if (last_array_guard) |guard|
                                     if (sameOperandKey(guard.table_kind, guard.table_value, table) and
                                         try constantIndexAtMost(snapshot, function, index, guard))
-                                    {
-                                        guarded_array_addresses[instruction_id] = true;
-                                        array_address_guards[instruction_id] = guard;
-                                    }
+                                        guard
+                                    else
+                                        null
+                                else
+                                    null;
+                                const fresh = covered == null and
+                                    try freshAllocatedArrayAddress(snapshot, function, table, index, instruction_id);
+                                if (covered orelse (if (fresh) address else null)) |guard| {
+                                    guarded_array_addresses[instruction_id] = true;
+                                    array_address_guards[instruction_id] = guard;
                                 }
                             }
                         },
@@ -849,9 +854,23 @@ pub const FunctionPlan = struct {
             return false;
         const producer_block = self.instructionBlock(producer_id) orelse return false;
         const consumer_block = self.instructionBlock(consumer_id) orelse return false;
-        if (producer_block != consumer_block or producer_id >= consumer_id or
-            self.hasTransientAddressInvalidator(producer_id + 1, consumer_id))
-            return false;
+        if (producer_block == consumer_block) {
+            if (producer_id >= consumer_id or
+                self.hasTransientAddressInvalidator(producer_id + 1, consumer_id))
+                return false;
+        } else {
+            // A constant array address stays live across one fallthrough when nothing
+            // between the blocks can reallocate the table.
+            if (producer_id >= consumer_id or
+                !self.hasDirectEdge(producer_block, consumer_block) or
+                !self.hasOnlyPredecessor(consumer_block, producer_block))
+                return false;
+            const source_block = try snapshot.irBlock(function, producer_block);
+            const target_block = try snapshot.irBlock(function, consumer_block);
+            if (self.hasTransientAddressInvalidator(producer_id + 1, source_block.finish + 1) or
+                self.hasTransientAddressInvalidator(target_block.start, consumer_id))
+                return false;
+        }
 
         const guard = self.array_address_guards[producer_id] orelse return false;
         const address_index = try snapshot.irOperand(producer, 1);
@@ -874,8 +893,12 @@ pub const FunctionPlan = struct {
         };
         if (byte_offset % abi.tvalue_size != 0)
             return false;
-        if (sameOperandKey(guard.index_kind, guard.index_value, address_index))
-            return byte_offset == 0;
+        if (sameOperandKey(guard.index_kind, guard.index_value, address_index)) {
+            if (byte_offset == 0)
+                return true;
+            // One fresh array address is reused at later constant slots.
+            return freshArrayElement(snapshot, function, producer, byte_offset / abi.tvalue_size);
+        }
         const base = try constantIndex(snapshot, function, address_index) orelse return false;
         const limit = try constantIndexFromGuard(snapshot, function, guard) orelse return false;
         const effective = std.math.add(u32, base, byte_offset / abi.tvalue_size) catch return false;
@@ -985,6 +1008,105 @@ fn constantIndexFromGuard(
     return constantIndex(snapshot, function, .{ .kind = guard.index_kind, .value = guard.index_value });
 }
 
+fn preservesFreshArray(command: snapshot_v1.IrCommand) bool {
+    return switch (command) {
+        .nop,
+        .substitute,
+        .mark_used,
+        .mark_dead,
+        .load_tag,
+        .load_pointer,
+        .load_double,
+        .load_int,
+        .load_int64,
+        .load_float,
+        .load_tvalue,
+        .store_tag,
+        .store_extra,
+        .store_pointer,
+        .store_double,
+        .store_int,
+        .store_int64,
+        .store_vector,
+        .store_tvalue,
+        .store_split_tvalue,
+        .check_tag,
+        .check_truthy,
+        .check_gc,
+        => true,
+        else => false,
+    };
+}
+fn allocatedArrayCount(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    allocation: snapshot_v1.IrInstruction,
+) Error!?u32 {
+    if (allocation.operand_count != 2)
+        return null;
+    const count_operand = try snapshot.irOperand(allocation, 0);
+    if (count_operand.kind != .constant)
+        return null;
+    const count_constant = try snapshot.irConstant(function, count_operand.value);
+    if (count_constant.uintValue()) |count|
+        return count;
+    const integer = count_constant.intValue() orelse return null;
+    if (integer < 0)
+        return null;
+    return std.math.cast(u32, integer);
+}
+fn freshArrayElement(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    address: snapshot_v1.IrInstruction,
+    extra: u32,
+) Error!bool {
+    if (address.operand_count != 2)
+        return false;
+    const table = try snapshot.irOperand(address, 0);
+    if (table.kind != .instruction)
+        return false;
+    const allocation = try snapshot.irInstruction(function, table.value);
+    if (allocation.command != abi.ir_cmd_new_table)
+        return false;
+    const index_value = try constantIndex(snapshot, function, try snapshot.irOperand(address, 1)) orelse
+        return false;
+    const array_count = (try allocatedArrayCount(snapshot, function, allocation)) orelse return false;
+    const effective = std.math.add(u32, index_value, extra) catch return false;
+    return effective < array_count;
+}
+fn freshAllocatedArrayAddress(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    table: snapshot_v1.IrOperand,
+    index: snapshot_v1.IrOperand,
+    instruction_id: u32,
+) Error!bool {
+    if (table.kind != .instruction or table.value >= instruction_id)
+        return false;
+    const allocation = try snapshot.irInstruction(function, table.value);
+    if (allocation.command != abi.ir_cmd_new_table or allocation.operand_count != 2)
+        return false;
+    const index_value = try constantIndex(snapshot, function, index) orelse return false;
+    const count_operand = try snapshot.irOperand(allocation, 0);
+    if (count_operand.kind != .constant)
+        return false;
+    const count_constant = try snapshot.irConstant(function, count_operand.value);
+    const array_count = count_constant.uintValue() orelse blk: {
+        const integer = count_constant.intValue() orelse return false;
+        if (integer < 0)
+            return false;
+        break :blk std.math.cast(u32, integer) orelse return false;
+    };
+    if (index_value >= array_count)
+        return false;
+    var cursor = table.value + 1;
+    while (cursor < instruction_id) : (cursor += 1) {
+        if (!preservesFreshArray((try snapshot.irInstruction(function, cursor)).command))
+            return false;
+    }
+    return true;
+}
 fn constantIndex(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,

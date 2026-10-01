@@ -4,6 +4,7 @@ const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const admission = @import("luauc_backend_admission");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const IntegerCreatePattern = model.IntegerCreatePattern;
@@ -629,6 +630,17 @@ pub noinline fn emitGetHashNodeAddr(
     try self.body.call(self.allocator, self.hash_node_addr orelse return Error.UnsupportedCommand);
     try self.emitInstructionResultSet(instruction_id);
 }
+fn tablePointerRegister(self: anytype, pointer_id: u32) Error!?u32 {
+    if (try self.freshTableRegister(pointer_id)) |register|
+        return register;
+    const produced = try self.instruction(pointer_id);
+    if (produced.command != .load_pointer or produced.operand_count != 1)
+        return null;
+    const source = try self.operand(produced, 0);
+    if (source.kind != .vm_reg)
+        return null;
+    return try self.vmRegisterIndex(source);
+}
 pub noinline fn emitGetSlotNodeAddr(
     self: anytype,
     instruction_id: u32,
@@ -638,18 +650,62 @@ pub noinline fn emitGetSlotNodeAddr(
     const table = try self.operand(instruction_value, 0);
     const pc = try self.operand(instruction_value, 1);
     const key = try self.operand(instruction_value, 2);
-    if (table.kind != .instruction or table.value >= self.slots.len or
-        self.slots[table.value].shape != .pointer or pc.kind != .constant or
-        (try self.constant(pc.value)).uintValue() == null or key.kind != .vm_const or
-        key.value >= self.proto.vm_constant_count)
+    const pc_is_uint = pc.kind == .constant and (try self.constant(pc.value)).uintValue() != null;
+    if (!pc_is_uint or key.kind != .vm_const or key.value >= self.proto.vm_constant_count)
         return Error.InvalidOperandType;
-    const table_producer = try self.instruction(table.value);
-    if (table_producer.command != .load_env and !self.plan.isProvenTablePointer(table.value))
-        return Error.UnsupportedControlFlow;
-    try self.body.localGet(self.allocator, 0);
-    try self.emitPointerValue(table);
-    try self.body.i32Const(self.allocator, @intCast(key.value));
-    try self.body.call(self.allocator, self.slot_node_addr orelse return Error.UnsupportedCommand);
+    // Allocation and register loads publish the table in a VM register. A skipped
+    // producer leaves the instruction local unset, so the use reloads that register.
+    const register_pointer = if (table.kind == .instruction)
+        try tablePointerRegister(self, table.value)
+    else
+        null;
+    if (register_pointer == null and
+        (table.kind != .instruction or table.value >= self.slots.len or
+            self.slots[table.value].shape != .pointer))
+    {
+        const producer_cmd: u32 = if (table.kind == .instruction) blk: {
+            const produced = self.instruction(table.value) catch break :blk 999;
+            break :blk @intFromEnum(produced.command);
+        } else 0;
+        const shape: u32 = if (table.kind == .instruction and table.value < self.slots.len)
+            @intFromEnum(self.slots[table.value].shape)
+        else
+            9;
+        var detail: [80]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "slot t{d}@{d} s{d} p{d}", .{
+            @intFromEnum(table.kind),
+            table.value,
+            shape,
+            producer_cmd,
+        }) catch "slot";
+        diagnostics.trace(text);
+        return Error.InvalidOperandType;
+    }
+    if (register_pointer == null) {
+        const table_producer = try self.instruction(table.value);
+        const register_load = table_producer.command == .load_pointer and
+            table_producer.operand_count == 1 and
+            (try self.operand(table_producer, 0)).kind == .vm_reg;
+        // A register load already published the pointer. The helper checks the
+        // object tag. Block-local proof does not cover a check in an earlier block.
+        if (table_producer.command != .load_env and !register_load and
+            !self.plan.isProvenTablePointer(table.value))
+        {
+            var detail: [64]u8 = undefined;
+            const text = std.fmt.bufPrint(&detail, "unproven p{d}", .{
+                @intFromEnum(table_producer.command),
+            }) catch "unproven";
+            diagnostics.trace(text);
+            return Error.UnsupportedControlFlow;
+        }
+    }
+    if (register_pointer) |register| {
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+    } else {
+        try self.emitPointerValue(table);
+    }
+    try self.emitSlotNodeFromTable(key.value);
     try self.emitInstructionResultSet(instruction_id);
 }
 pub noinline fn emitJumpSlotMatch(
@@ -681,13 +737,38 @@ pub noinline fn emitCheckSlotMatch(
     const key = try self.operand(instruction_value, 1);
     if (key.kind != .vm_const or key.value >= self.proto.vm_constant_count)
         return Error.InvalidOperandType;
+    const live = if (node.kind == .instruction)
+        self.plan.validateNodeUse(self.snapshot, self.function, node.value, instruction_id) catch false
+    else
+        false;
+    if (!live) {
+        const producer_cmd: u32 = if (node.kind == .instruction) blk: {
+            const produced = self.instruction(node.value) catch break :blk 999;
+            break :blk @intFromEnum(produced.command);
+        } else 0;
+        const failure = try self.operand(instruction_value, 2);
+        var detail: [96]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "chk n{d}@{d} p{d} f{d}@{d}", .{
+            @intFromEnum(node.kind),
+            node.value,
+            producer_cmd,
+            @intFromEnum(failure.kind),
+            failure.value,
+        }) catch "chk";
+        diagnostics.trace(text);
+    }
     try self.requireLiveNode(instruction_id, node);
-    try self.body.localGet(self.allocator, 0);
     try self.emitPointerValue(node);
-    try self.body.i32Const(self.allocator, @intCast(key.value));
-    try self.body.call(self.allocator, self.node_slot_match orelse return Error.UnsupportedCommand);
+    try self.emitSlotMatchFromNode(key.value);
     try self.body.i32Eqz(self.allocator);
-    try self.emitGuardFailure(try self.operand(instruction_value, 2));
+    const failure = try self.operand(instruction_value, 2);
+    var guard_detail: [64]u8 = undefined;
+    const guard_text = std.fmt.bufPrint(&guard_detail, "guard f{d}@{d}", .{
+        @intFromEnum(failure.kind),
+        failure.value,
+    }) catch "guard";
+    diagnostics.trace(guard_text);
+    try self.emitGuardFailure(failure);
 }
 pub noinline fn emitTryCallFastGetTm(
     self: anytype,
@@ -737,22 +818,60 @@ pub noinline fn emitCheckReadonly(self: anytype, instruction_value: snapshot_v1.
     try self.requireOperandCount(instruction_value, 2);
     const table = try self.operand(instruction_value, 0);
     const failure = try self.operand(instruction_value, 1);
-    if (table.kind != .instruction or table.value >= self.slots.len or
-        self.slots[table.value].shape != .pointer or try self.loadedPointerRegister(table) == null)
+    const fresh = if (table.kind == .instruction)
+        try self.freshTableRegister(table.value)
+    else
+        null;
+    if (fresh == null and
+        (table.kind != .instruction or table.value >= self.slots.len or
+            self.slots[table.value].shape != .pointer or
+            try self.loadedPointerRegister(table) == null))
         return Error.InvalidOperandType;
 
     if (failure.kind == .vm_exit)
         try self.emitPcLocation(failure.value)
     else if (failure.kind != .block)
         return Error.InvalidOperandType;
-    try self.body.localGet(self.allocator, 0);
-    try self.emitPointerValue(table);
-    try self.body.i32Const(self.allocator, @intFromBool(failure.kind == .vm_exit));
-    try self.body.call(self.allocator, self.check_readonly orelse return Error.UnsupportedCommand);
+    const raise: i32 = @intFromBool(failure.kind == .vm_exit);
+    if (fresh) |register| {
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+    } else {
+        try self.emitPointerValue(table);
+    }
+    // A writable table is one byte test. A null pointer, a non-table, or a
+    // readonly table keeps the helper, which reports the same error.
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifI32(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, 0);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifI32(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_readonly_offset);
+    try self.body.ifI32(self.allocator);
+    try emitReadonlyHelper(self, raise);
+    try self.body.else_(self.allocator);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitReadonlyHelper(self, raise);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitReadonlyHelper(self, raise);
+    try self.body.end(self.allocator);
     if (failure.kind == .vm_exit)
         try self.body.opcode(self.allocator, 0x1a)
     else
         try self.emitGuardFailure(failure);
+}
+
+fn emitReadonlyHelper(self: anytype, raise: i32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Const(self.allocator, raise);
+    try self.body.call(self.allocator, self.check_readonly orelse return Error.UnsupportedCommand);
 }
 pub noinline fn emitBufferAdjustStack(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     _ = instruction_id;

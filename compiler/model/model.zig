@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const static_package_v1 = @import("luauc_backend_static_package_v1");
 const wasm = @import("luauc_wasm_object");
 const abi = @import("luauc_backend_runtime_abi");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const upstream_tm_add = abi.upstream_tm_add;
 const upstream_tm_unm = abi.upstream_tm_unm;
@@ -365,6 +366,8 @@ pub const LiteralFieldSetPattern = struct {
     value: u32,
     materialized_tag: ?i32 = null,
     key: []const u8,
+    // Index of the key in Proto.k. The slot hit loads that interned string.
+    key_constant: u32,
 };
 
 pub const TableInsertAppendPattern = struct {
@@ -380,6 +383,7 @@ pub const PlainTableNamecallPattern = struct {
     destination: u32,
     source: u32,
     key: []const u8,
+    key_constant: u32,
     pc: u32,
     first_fast: u32,
     second_fast: u32,
@@ -653,8 +657,10 @@ pub fn markerCapture(
     allow_reference: bool,
 ) Error!Capture {
     const marker = try snapshot.irInstruction(function, marker_id);
-    if (marker.command != .capture)
+    if (marker.command != .capture) {
+        diagnostics.trace("dupclosure capture");
         return Error.UnsupportedControlFlow;
+    }
     if (marker.operand_count != 2)
         return Error.InvalidOperandCount;
     const source = try snapshot.irOperand(marker, 0);
@@ -685,12 +691,27 @@ pub fn requireSingleBytecodeBlockRangeFor(
         const block = try snapshot.irBlock(function, block_id);
         if (block.isEmpty() or block.finish < start or block.start > finish)
             continue;
-        if (owner != null or block.kind != .bytecode or block.start > start or block.finish < finish)
+        if (owner != null or !block.kind.isCompilable() or block.start > start or block.finish < finish) {
+            var detail: [80]u8 = undefined;
+            const why: []const u8 = if (owner != null) "overlap" else if (block.kind != .bytecode) "kind" else if (block.start > start) "late" else "short";
+            const text = std.fmt.bufPrint(&detail, "{s} b{d} k{d} {d}-{d} want {d}-{d}", .{
+                why,
+                block_id,
+                @intFromEnum(block.kind),
+                block.start,
+                block.finish,
+                start,
+                finish,
+            }) catch "dupclosure block";
+            diagnostics.trace(text);
             return Error.UnsupportedControlFlow;
+        }
         owner = block_id;
     }
-    if (owner == null)
+    if (owner == null) {
+        diagnostics.trace("dupclosure owner");
         return Error.UnsupportedControlFlow;
+    }
 }
 
 pub fn dupClosurePattern(
@@ -699,11 +720,15 @@ pub fn dupClosurePattern(
     proto: snapshot_v1.Proto,
     instruction_id: u32,
 ) Error!DupClosurePattern {
-    if (instruction_id >= function.instruction_count)
+    if (instruction_id >= function.instruction_count) {
+        diagnostics.trace("dupclosure range");
         return Error.UnsupportedControlFlow;
+    }
     const instruction_value = try snapshot.irInstruction(function, instruction_id);
-    if (instruction_value.command != .fallback_dupclosure)
+    if (instruction_value.command != .fallback_dupclosure) {
+        diagnostics.trace("dupclosure command");
         return Error.UnsupportedControlFlow;
+    }
     if (instruction_value.operand_count != 3)
         return Error.InvalidOperandCount;
 
@@ -719,8 +744,10 @@ pub fn dupClosurePattern(
     const child_proto_id = (try snapshot.vmConstant(proto, constant_operand.value)).closureProtoId() orelse
         return Error.InvalidOperandType;
     const child = try snapshot.proto(child_proto_id);
-    if (child.parent_id != proto.id)
+    if (child.parent_id != proto.id) {
+        diagnostics.trace("dupclosure parent");
         return Error.UnsupportedControlFlow;
+    }
 
     if (child.nups == 0)
         return .{ .closed = .{
@@ -730,8 +757,10 @@ pub fn dupClosurePattern(
     const capture_count: u32 = child.nups;
     const marker_start = std.math.add(u32, instruction_id, 1) catch return Error.ResourceLimit;
     const finish = std.math.add(u32, instruction_id, capture_count) catch return Error.ResourceLimit;
-    if (finish >= function.instruction_count)
+    if (finish >= function.instruction_count) {
+        diagnostics.trace("dupclosure finish");
         return Error.UnsupportedControlFlow;
+    }
     try requireSingleBytecodeBlockRangeFor(snapshot, function, instruction_id, finish);
     var capture_index: u32 = 0;
     while (capture_index < capture_count) : (capture_index += 1)
@@ -853,6 +882,12 @@ pub fn scanImportNeedsFor(
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
         const instruction_value = try snapshot.irInstruction(function, instruction_id);
+        var detail: [64]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "scan insn {d} cmd {d}", .{
+            instruction_id,
+            @intFromEnum(instruction_value.command),
+        }) catch "scan";
+        diagnostics.trace(text);
         switch (instruction_value.command) {
             .coverage => needs.coverage_hit = true,
             .load_pointer => {
@@ -1041,8 +1076,20 @@ pub fn scanImportNeedsFor(
                 if (instruction_value.operand_count != 1)
                     return Error.InvalidOperandCount;
                 const failure = try snapshot.irOperand(instruction_value, 0);
-                if (failure.kind != .block)
-                    return Error.UnsupportedControlFlow;
+                // A block is a compiled slow arm. vm_exit has no compiled arm; the
+                // lowerer returns that status instead of resuming bytecode.
+                switch (failure.kind) {
+                    .block, .vm_exit => {},
+                    else => {
+                        var safe_detail: [72]u8 = undefined;
+                        const safe_text = std.fmt.bufPrint(&safe_detail, "scan insn {d} safeenv kind {d}", .{
+                            instruction_id,
+                            @intFromEnum(failure.kind),
+                        }) catch "safeenv";
+                        diagnostics.trace(safe_text);
+                        return Error.UnsupportedControlFlow;
+                    },
+                }
             },
             .check_tag => if (instruction_value.operand_count == 3) {
                 const failure = try snapshot.irOperand(instruction_value, 2);

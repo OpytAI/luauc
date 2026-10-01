@@ -231,6 +231,11 @@ pub const Body = struct {
         try self.blockOp(allocator, 0x04);
     }
 
+    pub fn ifI32(self: *Body, allocator: std.mem.Allocator) !void {
+        try self.bytes.append(allocator, 0x04);
+        try self.bytes.append(allocator, 0x7f);
+    }
+
     pub fn else_(self: *Body, allocator: std.mem.Allocator) !void {
         try self.bytes.append(allocator, 0x05);
     }

@@ -3,7 +3,7 @@
   "generator_version": "luauc-runtime-symbols-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
+  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
   "input_sha256": {
     "runtime_symbols_bzl": "f8d2613ff0103a96082ffbe712b98eddc6beb9c61af3a5d208a24e36d809c3ea",
     "aot_runtime_v1_h": "c5b5ff38a99741788af401b76cee3004322a8a454036b49aa0139465a269163e",

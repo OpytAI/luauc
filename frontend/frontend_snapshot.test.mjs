@@ -44,6 +44,7 @@ const contractInputs = [
   "third_party/luau/patches/0017-aot-cache-independent-imports.patch",
   "third_party/luau/patches/0018-aot-semantic-type-fallbacks.patch",
   "third_party/luau/patches/0019-aot-literal-and-namecall-fallbacks.patch",
+  "third_party/luau/patches/0020-aot-goto-labels.patch",
 ].sort();
 
 function frontendContractDigest() {

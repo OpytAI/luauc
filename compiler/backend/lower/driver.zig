@@ -90,14 +90,23 @@ fn lowerFunction(
     siblings: []const wasm.FunctionRef,
 ) Error!wasm.FunctionRef {
     diagnostics.enterFunction(function_id);
+    diagnostics.trace("lower");
     const function = try snapshot.irFunction(function_id);
     const proto = try snapshot.proto(function.proto_id);
     if (function.variadic != proto.is_vararg)
         return Error.UnsupportedVariadicFunction;
 
     const entry_block = try snapshot.irBlock(function, function.entry_block);
-    if (!entry_block.kind.isCompilable() or entry_block.isEmpty())
+    if (!entry_block.kind.isCompilable() or entry_block.isEmpty()) {
+        var detail: [64]u8 = undefined;
+        const phase = std.fmt.bufPrint(&detail, "{s} entry {d}{s}", .{
+            @tagName(entry_block.kind),
+            function.entry_block,
+            if (entry_block.isEmpty()) " empty" else "",
+        }) catch "entry";
+        diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), phase);
         return Error.UnsupportedControlFlow;
+    }
 
     var plan = FunctionPlan.init(allocator, snapshot, function, static_package != null) catch |err| {
         diagnostics.recordPhase(@errorName(err), "function planning");
@@ -181,11 +190,11 @@ fn lowerFunction(
             },
         }
     }
-    if (next_local > max_lowered_locals - 6)
+    if (next_local > max_lowered_locals - 7)
         return Error.ResourceLimit;
     const call_func_local = next_local;
-    next_local += 6;
-    try locals.append(allocator, .{ .count = 6, .value_type = .i32 });
+    next_local += 7;
+    try locals.append(allocator, .{ .count = 7, .value_type = .i32 });
 
     var body = try wasm.Body.init(allocator, locals.items);
     defer body.deinit(allocator);
@@ -291,6 +300,7 @@ fn lowerFunction(
         .call_meta_local = call_func_local + 3,
         .call_aux_local = call_func_local + 4,
         .call_cached_closure_local = call_func_local + 5,
+        .constant_array_local = call_func_local + 6,
         .call_continuations = &.{},
         .continuation_indices = &.{},
         .string_keys = string_keys,
@@ -303,7 +313,10 @@ fn lowerFunction(
         diagnostics.recordPhase(@errorName(err), "block index");
         return err;
     };
-    try continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan);
+    continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "continuation plan");
+        return err;
+    };
     context.classifyBuiltinNumberLoads() catch |err| {
         diagnostics.recordPhase(@errorName(err), "value classification");
         return err;
@@ -320,7 +333,10 @@ fn lowerFunction(
     for (call_continuations, 0..) |continuation, index| {
         if (continuation.instruction_id >= continuation_indices.len or
             continuation_indices[continuation.instruction_id] != snapshot_v1.no_id)
+        {
+            diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), "continuation index");
             return Error.UnsupportedControlFlow;
+        }
         continuation_indices[continuation.instruction_id] = std.math.cast(u32, index) orelse
             return Error.ResourceLimit;
     }
@@ -333,13 +349,29 @@ fn lowerFunction(
     var block_id: u32 = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        if (block.kind == .fallback and try admission.supportsArithmeticFallback(context, block)) {
+        const arithmetic_fallback = if (block.kind == .fallback)
+            admission.supportsArithmeticFallback(context, block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            }
+        else
+            false;
+        if (arithmetic_fallback) {
             if (context.do_arith == null)
                 return Error.UnsupportedCommand;
-        } else if (block.kind == .fallback and
-            ((try context.supportsComparisonFallback(block)) or (try context.supportsMaterializedComparisonFallback(block))))
-        {
-            if (context.compare_any == null)
+        } else if (block.kind == .fallback) {
+            const comparison_fallback = context.supportsComparisonFallback(block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            };
+            const materialized_fallback = if (!comparison_fallback)
+                context.supportsMaterializedComparisonFallback(block) catch |err| {
+                    diagnostics.recordBlock(@errorName(err), block_id);
+                    return err;
+                }
+            else
+                false;
+            if ((comparison_fallback or materialized_fallback) and context.compare_any == null)
                 return Error.UnsupportedCommand;
         }
     }
@@ -371,15 +403,29 @@ fn lowerFunction(
     block_id = 0;
     while (block_id < function.block_count) : (block_id += 1) {
         const block = try snapshot.irBlock(function, block_id);
-        const bypassed = if (block.kind == .fallback and try context.supportsOrdinaryCallFallback(block))
+        const ordinary_fallback = if (block.kind == .fallback)
+            context.supportsOrdinaryCallFallback(block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            }
+        else
+            false;
+        const bypassed = if (ordinary_fallback)
             false
         else
             admission.isBypassedEmissionBlock(context, block_id, block) catch |err| {
                 diagnostics.recordBlock(@errorName(err), block_id);
                 return err;
             };
+        const fallback_supported = if (block.kind == .fallback and !bypassed)
+            admission.supportsFallback(context, block) catch |err| {
+                diagnostics.recordBlock(@errorName(err), block_id);
+                return err;
+            }
+        else
+            false;
         const emit_block = (block.kind.isCompilable() and !block.isEmpty() and !bypassed) or
-            (block.kind == .fallback and !bypassed and try admission.supportsFallback(context, block));
+            (block.kind == .fallback and !bypassed and fallback_supported);
         if (emit_block) {
             try cases.append(allocator, .{ .block = block_id });
             max_dispatch = @max(max_dispatch, block_id);
@@ -430,7 +476,10 @@ fn lowerFunction(
                     return err;
                 };
             },
-            .continuation => |id| try context.emitCallContinuation(call_continuations[id]),
+            .continuation => |id| context.emitCallContinuation(call_continuations[id]) catch |err| {
+                diagnostics.recordPhase(@errorName(err), "call continuation");
+                return err;
+            },
         }
     }
 
@@ -566,8 +615,10 @@ fn emitStringKeyData(object: *wasm.Object, string_keys: StringKeyPool) Error!voi
         0,
         string_keys.bytes.items,
     );
-    if (data.segment_index != 0)
+    if (data.segment_index != 0) {
+        diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), "string key segment");
         return Error.UnsupportedControlFlow;
+    }
 }
 
 fn writeU32(bytes: []u8, offset: usize, value: u32) void {
@@ -679,8 +730,11 @@ fn appendProtoCoverageMetadata(
         return Error.ResourceLimit;
     const byte_offset: u32 = @intCast(bytes.items.len);
     const function = try snapshot.irFunction(proto.id);
-    if (function.proto_id != proto.id)
+    if (function.proto_id != proto.id) {
+        diagnostics.enterFunction(proto.id);
+        diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), "proto coverage identity");
         return Error.UnsupportedControlFlow;
+    }
     var site_count: u32 = 0;
     var line_count: u32 = 0;
     var instruction_id: u32 = 0;
@@ -695,8 +749,11 @@ fn appendProtoCoverageMetadata(
             return Error.InvalidOperandType;
         const pc = (try snapshot.irConstant(function, pc_operand.value)).uintValue() orelse
             return Error.InvalidOperandType;
-        if (pc >= proto.code_count)
+        if (pc >= proto.code_count) {
+            diagnostics.enterFunction(proto.id);
+            diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), "coverage pc");
             return Error.UnsupportedControlFlow;
+        }
         const line = try snapshot.sourceLine(proto, pc);
         const offset = bytes.items.len;
         try bytes.appendNTimes(allocator, 0, aot_coverage_site_size);
@@ -924,7 +981,10 @@ fn emitStaticPackageMetadata(
             try object.relocateDataMemoryAddress(
                 data,
                 relocation.descriptor_offset,
-                constant_strings_data orelse return Error.UnsupportedControlFlow,
+                constant_strings_data orelse {
+                    diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), "constant string relocation");
+                    return Error.UnsupportedControlFlow;
+                },
                 std.math.cast(i32, relocation.string_offset) orelse return Error.ResourceLimit,
             );
     module_id = 0;
@@ -960,11 +1020,17 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
         var function_id: u32 = 0;
         while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
             const function = try snapshot.irFunction(function_id);
-            try model.scanImportNeedsFor(snapshot, function, true, &needs);
+            diagnostics.enterFunction(function_id);
+            model.scanImportNeedsFor(snapshot, function, true, &needs) catch |err| {
+                diagnostics.recordPhase(@errorName(err), "runtime import planning");
+                return err;
+            };
         }
     }
-    if (total_functions == 0)
+    if (total_functions == 0) {
+        diagnostics.recordPhase(@errorName(Error.UnsupportedControlFlow), "empty package");
         return Error.UnsupportedControlFlow;
+    }
 
     var object = wasm.Object.init(allocator);
     defer object.deinit();

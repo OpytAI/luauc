@@ -39,7 +39,7 @@ const compilerModule = new WebAssembly.Module(compilerBytes);
 if (WebAssembly.Module.imports(compilerModule).length !== 0) throw new Error("luauc.wasm is not zero-import");
 const api = new WebAssembly.Instance(compilerModule, {}).exports;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest();
-const frontendContract = Buffer.from("ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157", "hex");
+const frontendContract = Buffer.from("639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f", "hex");
 
 function allocation(bytesOrSize) {
   const size = typeof bytesOrSize === "number" ? bytesOrSize : bytesOrSize.length;

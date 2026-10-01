@@ -1,0 +1,713 @@
+diff --git a/Ast/include/Luau/Ast.h b/Ast/include/Luau/Ast.h
+--- a/Ast/include/Luau/Ast.h
++++ b/Ast/include/Luau/Ast.h
+@@ -805,6 +805,30 @@
+     void visit(AstVisitor* visitor) override;
+ };
+ 
++class AstStatLabel : public AstStat
++{
++public:
++    LUAU_RTTI(AstStatLabel)
++
++    AstStatLabel(const Location& location, AstName name);
++
++    void visit(AstVisitor* visitor) override;
++
++    AstName name;
++};
++
++class AstStatGoto : public AstStat
++{
++public:
++    LUAU_RTTI(AstStatGoto)
++
++    AstStatGoto(const Location& location, AstName name);
++
++    void visit(AstVisitor* visitor) override;
++
++    AstName name;
++};
++
+ class AstStatReturn : public AstStat
+ {
+ public:
+@@ -1572,6 +1596,14 @@
+     {
+         return visit(static_cast<AstStat*>(node));
+     }
++    virtual bool visit(class AstStatLabel* node)
++    {
++        return visit(static_cast<AstStat*>(node));
++    }
++    virtual bool visit(class AstStatGoto* node)
++    {
++        return visit(static_cast<AstStat*>(node));
++    }
+     virtual bool visit(class AstStatReturn* node)
+     {
+         return visit(static_cast<AstStat*>(node));
+diff --git a/Ast/src/Ast.cpp b/Ast/src/Ast.cpp
+--- a/Ast/src/Ast.cpp
++++ b/Ast/src/Ast.cpp
+@@ -679,6 +679,28 @@
+     visitor->visit(this);
+ }
+ 
++AstStatLabel::AstStatLabel(const Location& location, AstName name)
++    : AstStat(ClassIndex(), location)
++    , name(name)
++{
++}
++
++void AstStatLabel::visit(AstVisitor* visitor)
++{
++    visitor->visit(this);
++}
++
++AstStatGoto::AstStatGoto(const Location& location, AstName name)
++    : AstStat(ClassIndex(), location)
++    , name(name)
++{
++}
++
++void AstStatGoto::visit(AstVisitor* visitor)
++{
++    visitor->visit(this);
++}
++
+ AstStatReturn::AstStatReturn(const Location& location, const AstArray<AstExpr*>& list)
+     : AstStat(ClassIndex(), location)
+     , list(list)
+diff --git a/Ast/include/Luau/Lexer.h b/Ast/include/Luau/Lexer.h
+--- a/Ast/include/Luau/Lexer.h
++++ b/Ast/include/Luau/Lexer.h
+@@ -179,6 +179,10 @@
+ 
+     Lexeme lookahead();
+ 
++    // Current lexeme is '::'. True when the next tokens are Name '::' on that same line.
++    // That shape is a label. A type name with a label on a later line is not.
++    bool doubleColonStartsLabel();
++
+     const Lexeme& current() const
+     {
+         return lexeme;
+diff --git a/Ast/src/Lexer.cpp b/Ast/src/Lexer.cpp
+--- a/Ast/src/Lexer.cpp
++++ b/Ast/src/Lexer.cpp
+@@ -424,6 +424,30 @@
+     return result;
+ }
+ 
++bool Lexer::doubleColonStartsLabel()
++{
++    unsigned int currentOffset = offset;
++    unsigned int currentLine = line;
++    unsigned int currentLineOffset = lineOffset;
++    Lexeme currentLexeme = lexeme;
++    Location currentPrevLocation = prevLocation;
++    std::vector<BraceType> currentBraceStack = braceStack;
++
++    Lexeme name = next();
++    Lexeme closer = next();
++    bool label = name.type == Lexeme::Name && closer.type == Lexeme::DoubleColon &&
++                 name.location.end.line == closer.location.begin.line;
++
++    offset = currentOffset;
++    line = currentLine;
++    lineOffset = currentLineOffset;
++    lexeme = currentLexeme;
++    prevLocation = currentPrevLocation;
++    braceStack = currentBraceStack;
++
++    return label;
++}
++
+ bool Lexer::isReserved(const std::string& word)
+ {
+     for (int i = Lexeme::Reserved_BEGIN; i < Lexeme::Reserved_END; ++i)
+diff --git a/Ast/include/Luau/Parser.h b/Ast/include/Luau/Parser.h
+--- a/Ast/include/Luau/Parser.h
++++ b/Ast/include/Luau/Parser.h
+@@ -137,6 +137,12 @@
+     // continue
+     AstStat* parseContinue(const Location& start);
+ 
++    // :: Name ::
++    AstStat* parseLabel();
++
++    // goto Name
++    AstStat* parseGoto(const Location& start);
++
+     // for Name `=' exp `,' exp [`,' exp] do block end |
+     // for namelist in explist do block end |
+     AstStat* parseFor();
+diff --git a/Ast/src/Parser.cpp b/Ast/src/Parser.cpp
+--- a/Ast/src/Parser.cpp
++++ b/Ast/src/Parser.cpp
+@@ -488,6 +488,8 @@
+         return parseReturn();
+     case Lexeme::ReservedBreak:
+         return parseBreak();
++    case Lexeme::DoubleColon:
++        return parseLabel();
+     case Lexeme::Attribute:
+     case Lexeme::AttributeOpen:
+         return parseAttributeStat();
+@@ -559,6 +561,9 @@
+     if (ident == "continue")
+         return parseContinue(expr->location);
+ 
++    if (ident == "goto")
++        return parseGoto(expr->location);
++
+     if (FFlag::LuauConst2 && ident == "const")
+         return parseLocal(expr->location, expr->location.begin, AstArray<AstAttr*>({nullptr, 0}), true);
+ 
+@@ -741,6 +746,30 @@
+     return allocator.alloc<AstStatContinue>(start);
+ }
+ 
++// :: Name ::
++// A leading '::' is a label. 'expr :: type' stays in parseAssertionExpr.
++AstStat* Parser::parseLabel()
++{
++    Location start = lexer.current().location;
++
++    nextLexeme(); // ::
++
++    Name name = parseName("label name");
++
++    expectAndConsume(Lexeme::DoubleColon, "label");
++
++    return allocator.alloc<AstStatLabel>(Location(start, lexer.previousLocation()), name.name);
++}
++
++// goto Name
++// The 'goto' word was already parsed as a contextual identifier, same as 'continue'.
++AstStat* Parser::parseGoto(const Location& start)
++{
++    Name name = parseName("label name");
++
++    return allocator.alloc<AstStatGoto>(Location(start, name.location), name.name);
++}
++
+ // for binding `=' exp `,' exp [`,' exp] do block end |
+ // for bindinglist in explist do block end |
+ AstStat* Parser::parseFor()
+@@ -3812,7 +3841,9 @@
+     Location start = lexer.current().location;
+     AstExpr* expr = parseSimpleExpr();
+ 
+-    if (lexer.current().type == Lexeme::DoubleColon)
++    // '::name::' on one line is a label. Leave it for the next statement.
++    // 'expr :: Type' stays an ascription, including when a label follows on the next line.
++    if (lexer.current().type == Lexeme::DoubleColon && !lexer.doubleColonStartsLabel())
+     {
+         Position opPosition = lexer.current().location.begin;
+         nextLexeme();
+diff --git a/Ast/src/PrettyPrinter.cpp b/Ast/src/PrettyPrinter.cpp
+--- a/Ast/src/PrettyPrinter.cpp
++++ b/Ast/src/PrettyPrinter.cpp
+@@ -965,6 +965,17 @@
+             writer.keyword("break");
+         else if (program.is<AstStatContinue>())
+             writer.keyword("continue");
++        else if (const auto& label = program.as<AstStatLabel>())
++        {
++            writer.symbol("::");
++            writer.identifier(label->name.value ? label->name.value : "");
++            writer.symbol("::");
++        }
++        else if (const auto& jump = program.as<AstStatGoto>())
++        {
++            writer.keyword("goto");
++            writer.identifier(jump->name.value ? jump->name.value : "");
++        }
+         else if (const auto& a = program.as<AstStatReturn>())
+         {
+             const auto cstNode = lookupCstNode<CstStatReturn>(a);
+diff --git a/Compiler/src/Compiler.cpp b/Compiler/src/Compiler.cpp
+--- a/Compiler/src/Compiler.cpp
++++ b/Compiler/src/Compiler.cpp
+@@ -133,6 +133,50 @@
+     return {data.data, data.size};
+ }
+ 
++// True when this statement, or a statement nested inside it, defines a goto label.
++// The parser still treats return, break, and continue as last statements, so a label
++// after one of those never appears here. A label after a constant-folded return does.
++static bool opensGotoLabel(AstStat* node)
++{
++    if (node->is<AstStatLabel>())
++        return true;
++
++    if (AstStatBlock* stat = node->as<AstStatBlock>())
++    {
++        for (size_t i = 0; i < stat->body.size; ++i)
++            if (opensGotoLabel(stat->body.data[i]))
++                return true;
++
++        return false;
++    }
++
++    if (AstStatIf* stat = node->as<AstStatIf>())
++        return opensGotoLabel(stat->thenbody) || (stat->elsebody && opensGotoLabel(stat->elsebody));
++
++    if (AstStatWhile* stat = node->as<AstStatWhile>())
++        return opensGotoLabel(stat->body);
++
++    if (AstStatRepeat* stat = node->as<AstStatRepeat>())
++        return opensGotoLabel(stat->body);
++
++    if (AstStatFor* stat = node->as<AstStatFor>())
++        return opensGotoLabel(stat->body);
++
++    if (AstStatForIn* stat = node->as<AstStatForIn>())
++        return opensGotoLabel(stat->body);
++
++    return false;
++}
++
++static bool suffixOpensGotoLabel(AstStat** data, size_t begin, size_t size)
++{
++    for (size_t i = begin; i < size; ++i)
++        if (opensGotoLabel(data[i]))
++            return true;
++
++    return false;
++}
++
+ struct Compiler
+ {
+     struct RegScope;
+@@ -438,18 +482,22 @@
+         Location terminationLocation;
+         currentFunction = func;
+ 
++        enterGotoScope(/* functionBarrier= */ true);
++
+         for (size_t i = 0; i < stat->body.size; ++i)
+         {
+             AstStat* bodyStat = stat->body.data[i];
+             compileStat(bodyStat);
+ 
+-            if (alwaysTerminates(bodyStat))
++            if (alwaysTerminates(bodyStat) && !suffixOpensGotoLabel(stat->body.data, i + 1, stat->body.size))
+             {
+                 terminatesEarly = true;
+                 break;
+             }
+         }
+ 
++        leaveGotoScope();
++
+         // valid function bytecode must always end with RETURN
+         // we elide this if we're guaranteed to hit a RETURN statement regardless of the control flow
+         if (FFlag::LuauExportValueSyntax)
+@@ -1128,12 +1176,14 @@
+ 
+         bool terminatesEarly = false;
+ 
++        enterGotoScope(/* functionBarrier= */ true);
++
+         for (size_t i = 0; i < func->body->body.size; ++i)
+         {
+             AstStat* stat = func->body->body.data[i];
+             compileStat(stat);
+ 
+-            if (alwaysTerminates(stat))
++            if (alwaysTerminates(stat) && !suffixOpensGotoLabel(func->body->body.data, i + 1, func->body->body.size))
+             {
+                 terminatesEarly = true;
+ 
+@@ -1148,6 +1198,8 @@
+             }
+         }
+ 
++        leaveGotoScope();
++
+         // for the fallthrough path we need to ensure we clear out target registers
+         if (!terminatesEarly)
+         {
+@@ -4347,6 +4399,244 @@
+         compileAssign(var, reg, stat->name);
+     }
+ 
++
++    static constexpr size_t kNoGotoPc = ~size_t(0);
++
++    struct GotoLabel
++    {
++        AstName name;
++        AstStatLabel* stat;
++        size_t pc;
++        size_t localOffset;
++        unsigned scope;
++        unsigned barrier;
++    };
++
++    struct CapturedLocal
++    {
++        size_t index;
++        uint8_t reg;
++    };
++
++    struct PendingGoto
++    {
++        AstName name;
++        AstStatGoto* stat;
++        size_t jumpPc;
++        size_t closePc;
++        size_t localOffset;
++        unsigned scope;
++        unsigned barrier;
++        size_t capturedBegin;
++        size_t capturedEnd;
++    };
++
++    struct GotoScope
++    {
++        unsigned scope;
++        size_t labelCount;
++        bool functionBarrier;
++        unsigned barrier;
++        unsigned previousBarrier;
++    };
++
++    void enterGotoScope(bool functionBarrier)
++    {
++        unsigned previousBarrier = gotoBarrier;
++
++        if (functionBarrier)
++            gotoBarrier++;
++
++        gotoScope++;
++        gotoScopes.push_back({gotoScope, gotoLabels.size(), functionBarrier, gotoBarrier, previousBarrier});
++    }
++
++    void leaveGotoScope()
++    {
++        LUAU_ASSERT(!gotoScopes.empty());
++
++        GotoScope mark = gotoScopes.back();
++        gotoScopes.pop_back();
++
++        if (mark.functionBarrier)
++        {
++            for (const PendingGoto& pending : pendingGotos)
++            {
++                if (pending.barrier == mark.barrier)
++                    CompileError::raise(
++                        pending.stat->location, "no visible label '%s' for goto", pending.name.value ? pending.name.value : "<name>"
++                    );
++            }
++        }
++
++        LUAU_ASSERT(gotoLabels.size() >= mark.labelCount);
++        gotoLabels.resize(mark.labelCount);
++
++        if (mark.functionBarrier)
++        {
++            size_t write = 0;
++
++            for (size_t read = 0; read < pendingGotos.size(); ++read)
++            {
++                if (pendingGotos[read].barrier == mark.barrier)
++                    continue;
++
++                if (write != read)
++                    pendingGotos[write] = pendingGotos[read];
++
++                write++;
++            }
++
++            pendingGotos.resize(write);
++        }
++
++        gotoBarrier = mark.previousBarrier;
++        gotoScope = mark.scope - 1;
++    }
++
++    bool findActiveLabel(AstName name, GotoLabel& out)
++    {
++        for (size_t i = gotoLabels.size(); i > 0; --i)
++        {
++            const GotoLabel& label = gotoLabels[i - 1];
++
++            if (label.barrier == gotoBarrier && label.name == name)
++            {
++                out = label;
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    void resolvePendingGoto(const PendingGoto& pending, const GotoLabel& label)
++    {
++        if (label.localOffset > pending.localOffset)
++        {
++            const char* localName = "a local";
++
++            if (pending.localOffset < localStack.size() && localStack[pending.localOffset]->name.value)
++                localName = localStack[pending.localOffset]->name.value;
++
++            CompileError::raise(pending.stat->location, "goto jumps into the scope of local '%s'", localName);
++        }
++
++        if (pending.closePc != kNoGotoPc)
++        {
++            uint8_t reg = 255;
++
++            for (size_t i = pending.capturedBegin; i < pending.capturedEnd; ++i)
++            {
++                const CapturedLocal& captured = capturedLocals[i];
++
++                if (captured.index >= label.localOffset && captured.index < pending.localOffset && captured.reg < reg)
++                    reg = captured.reg;
++            }
++
++            if (reg == 255)
++                bytecode.neutralizeCloseUpvals(pending.closePc);
++            else
++                bytecode.patchCloseUpvals(pending.closePc, reg);
++        }
++
++        patchJump(pending.stat, pending.jumpPc, label.pc);
++    }
++
++    void compileStatLabel(AstStatLabel* stat)
++    {
++        for (const GotoLabel& existing : gotoLabels)
++        {
++            if (existing.barrier == gotoBarrier && existing.scope == gotoScope && existing.name == stat->name)
++                CompileError::raise(
++                    stat->location,
++                    "Duplicate label '%s' (previously defined on line %d)",
++                    stat->name.value ? stat->name.value : "<name>",
++                    int(existing.stat->location.begin.line + 1)
++                );
++        }
++
++        GotoLabel label;
++        label.name = stat->name;
++        label.stat = stat;
++        label.pc = bytecode.emitLabel();
++        label.localOffset = localStack.size();
++        label.scope = gotoScope;
++        label.barrier = gotoBarrier;
++        gotoLabels.push_back(label);
++
++        size_t index = 0;
++
++        while (index < pendingGotos.size())
++        {
++            PendingGoto& pending = pendingGotos[index];
++
++            if (pending.barrier == label.barrier && pending.name == label.name && pending.scope >= label.scope)
++            {
++                resolvePendingGoto(pending, label);
++                pendingGotos.erase(pendingGotos.begin() + int(index));
++                continue;
++            }
++
++            index++;
++        }
++    }
++
++    void compileStatGoto(AstStatGoto* stat)
++    {
++        GotoLabel label;
++
++        if (findActiveLabel(stat->name, label))
++        {
++            if (label.localOffset > localStack.size())
++                CompileError::raise(stat->location, "goto jumps into the scope of a local");
++
++            // Leave captured locals before the back edge. Same-depth jumps emit nothing here.
++            closeLocals(label.localOffset);
++            hasLoops = true;
++
++            size_t jumpPc = bytecode.emitLabel();
++            bytecode.emitAD(LOP_JUMPBACK, 0, 0);
++            patchJump(stat, jumpPc, label.pc);
++            return;
++        }
++
++        size_t closePc = kNoGotoPc;
++        size_t capturedBegin = capturedLocals.size();
++
++        // The target depth is not known yet. Reserve a close only when some active local is
++        // captured, and turn it into NOP if the jump does not leave that local.
++        if (areLocalsCaptured(0))
++        {
++            for (size_t i = 0; i < localStack.size(); ++i)
++            {
++                Local* local = locals.find(localStack[i]);
++                LUAU_ASSERT(local);
++
++                if (local->captured)
++                    capturedLocals.push_back({i, local->reg});
++            }
++
++            closePc = bytecode.emitLabel();
++            bytecode.emitABC(LOP_CLOSEUPVALS, 255, 0, 0);
++        }
++
++        size_t jumpPc = bytecode.emitLabel();
++        bytecode.emitAD(LOP_JUMP, 0, 0);
++
++        PendingGoto pending;
++        pending.name = stat->name;
++        pending.stat = stat;
++        pending.jumpPc = jumpPc;
++        pending.closePc = closePc;
++        pending.localOffset = localStack.size();
++        pending.scope = gotoScope;
++        pending.barrier = gotoBarrier;
++        pending.capturedBegin = capturedBegin;
++        pending.capturedEnd = capturedLocals.size();
++        pendingGotos.push_back(pending);
++    }
++
+     void compileStat(AstStat* node)
+     {
+         setDebugLine(node);
+@@ -4364,15 +4654,19 @@
+             if (FFlag::LuauExportValueSyntax)
+                 blockDepth++;
+ 
++            enterGotoScope(/* functionBarrier= */ false);
++
+             for (size_t i = 0; i < stat->body.size; ++i)
+             {
+                 AstStat* bodyStat = stat->body.data[i];
+                 compileStat(bodyStat);
+ 
+-                if (alwaysTerminates(bodyStat))
++                if (alwaysTerminates(bodyStat) && !suffixOpensGotoLabel(stat->body.data, i + 1, stat->body.size))
+                     break;
+             }
+ 
++            leaveGotoScope();
++
+             if (FFlag::LuauExportValueSyntax)
+                 blockDepth--;
+             closeLocals(oldLocals);
+@@ -4423,6 +4717,14 @@
+ 
+             loopJumps.push_back({LoopJump::Continue, label});
+         }
++        else if (AstStatLabel* stat = node->as<AstStatLabel>())
++        {
++            compileStatLabel(stat);
++        }
++        else if (AstStatGoto* stat = node->as<AstStatGoto>())
++        {
++            compileStatGoto(stat);
++        }
+         else if (AstStatReturn* stat = node->as<AstStatReturn>())
+         {
+             if (options.optimizationLevel >= 2 && !inlineFrames.empty())
+@@ -5050,6 +5352,12 @@
+     std::vector<Loop> loops;
+     std::vector<InlineFrame> inlineFrames;
+     std::vector<Capture> captures;
++    std::vector<GotoLabel> gotoLabels;
++    std::vector<PendingGoto> pendingGotos;
++    std::vector<CapturedLocal> capturedLocals;
++    std::vector<GotoScope> gotoScopes;
++    unsigned gotoScope = 0;
++    unsigned gotoBarrier = 0;
+     std::vector<AstLocal*> exportedLocals;
+     DenseHashMap<AstLocal*, uint8_t> exportedClasses{nullptr};
+ };
+diff --git a/Compiler/src/CostModel.cpp b/Compiler/src/CostModel.cpp
+--- a/Compiler/src/CostModel.cpp
++++ b/Compiler/src/CostModel.cpp
+@@ -388,6 +388,18 @@
+         return false;
+     }
+ 
++    bool visit(AstStatGoto* node) override
++    {
++        result += 1;
++
++        return false;
++    }
++
++    bool visit(AstStatLabel*) override
++    {
++        return false;
++    }
++
+     bool getNumber(AstExpr* node, double& result)
+     {
+         if (const Constant* constant = constants.find(node))
+diff --git a/Bytecode/include/Luau/BytecodeBuilder.h b/Bytecode/include/Luau/BytecodeBuilder.h
+--- a/Bytecode/include/Luau/BytecodeBuilder.h
++++ b/Bytecode/include/Luau/BytecodeBuilder.h
+@@ -91,6 +91,11 @@
+ 
+     void patchAux(size_t targetAux, int32_t newValue);
+ 
++    // luauc PATCH: a forward goto reserves CLOSEUPVALS before its jump, then fills the
++    // register once the target scope is known. A jump that exits no captured local becomes NOP.
++    void patchCloseUpvals(size_t pc, uint8_t reg);
++    void neutralizeCloseUpvals(size_t pc);
++
+     void foldJumps();
+     void expandJumps();
+ 
+diff --git a/Bytecode/src/BytecodeBuilder.cpp b/Bytecode/src/BytecodeBuilder.cpp
+--- a/Bytecode/src/BytecodeBuilder.cpp
++++ b/Bytecode/src/BytecodeBuilder.cpp
+@@ -557,6 +557,20 @@
+     insns[targetAux] = newValue;
+ }
+ 
++void BytecodeBuilder::patchCloseUpvals(size_t pc, uint8_t reg)
++{
++    LUAU_ASSERT(pc < insns.size());
++    LUAU_ASSERT(LUAU_INSN_OP(insns[pc]) == LOP_CLOSEUPVALS);
++    insns[pc] = uint32_t(LOP_CLOSEUPVALS) | (uint32_t(reg) << 8);
++}
++
++void BytecodeBuilder::neutralizeCloseUpvals(size_t pc)
++{
++    LUAU_ASSERT(pc < insns.size());
++    LUAU_ASSERT(LUAU_INSN_OP(insns[pc]) == LOP_CLOSEUPVALS);
++    insns[pc] = uint32_t(LOP_NOP);
++}
++
+ void BytecodeBuilder::setFunctionTypeInfo(std::string value)
+ {
+     functions[currentFunction].typeinfo = std::move(value);
+diff --git a/CodeGen/src/IrBuilder.cpp b/CodeGen/src/IrBuilder.cpp
+--- a/CodeGen/src/IrBuilder.cpp
++++ b/CodeGen/src/IrBuilder.cpp
+@@ -180,7 +180,9 @@
+         int nexti = i + getOpLength(op);
+         CODEGEN_ASSERT(nexti <= proto->sizecode);
+ 
+-        function.bcMapping[i] = {uint32_t(function.instructions.size()), ~0u};
++        const int pcIndex = i;
++        const uint32_t irStart = uint32_t(function.instructions.size());
++        function.bcMapping[pcIndex] = {irStart, ~0u};
+ 
+         // Begin new block at this instruction if it was in the bytecode or requested during translation
+         if (instIndexToBlock[i] != kNoAssociatedBlockIndex)
+@@ -228,6 +230,10 @@
+             if (!isBlockTerminator(function.instructions.back().cmd))
+                 inst(IrCmd::JUMP, blockAtInst(i));
+         }
++
++        // Dead bytecode, including the return after a final goto, emits no IR.
++        if (function.instructions.size() == irStart)
++            function.bcMapping[pcIndex].irLocation = ~0u;
+     }
+ 
+     // Now that all has been generated, compute use counts

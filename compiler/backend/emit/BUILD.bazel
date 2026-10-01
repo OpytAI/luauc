@@ -30,7 +30,10 @@ backend_emit_library(name = "closures")
 backend_emit_library(name = "control")
 backend_emit_library(
     name = "core",
-    deps = ["//compiler/backend/plan:admission"],
+    deps = [
+        "//compiler/backend/plan:admission",
+        "//compiler/model:diagnostics",
+    ],
 )
 backend_emit_library(
     name = "dispatch",
@@ -45,10 +48,19 @@ backend_emit_library(
 )
 backend_emit_library(
     name = "memory",
-    deps = ["//compiler/backend/plan:admission"],
+    deps = [
+        "//compiler/backend/plan:admission",
+        "//compiler/model:diagnostics",
+    ],
 )
 backend_emit_library(name = "namecall")
 backend_emit_library(name = "operators")
-backend_emit_library(name = "scalar")
+backend_emit_library(
+    name = "scalar",
+    deps = ["//compiler/model:diagnostics"],
+)
 backend_emit_library(name = "tables")
-backend_emit_library(name = "table_values")
+backend_emit_library(
+    name = "table_values",
+    deps = ["//compiler/model:diagnostics"],
+)

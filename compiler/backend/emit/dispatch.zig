@@ -66,6 +66,14 @@ const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
 const tvalue_extra_offset = abi.tvalue_extra_offset;
 
 pub noinline fn emitInstruction(self: anytype, instruction_id: u32, block_kind: snapshot_v1.IrBlockKind) Error!bool {
+    if (self.instruction(instruction_id)) |instruction_value| {
+        var detail: [48]u8 = undefined;
+        const phase = std.fmt.bufPrint(&detail, "insn {d} cmd {d}", .{
+            instruction_id,
+            @intFromEnum(instruction_value.command),
+        }) catch "insn";
+        diagnostics.trace(phase);
+    } else |_| {}
     const result = emitInstructionInner(self, instruction_id, block_kind) catch |err| {
         const failed = self.instruction(instruction_id) catch return err;
         diagnostics.recordInstruction(@errorName(err), instruction_id, @intFromEnum(failed.command));
@@ -83,7 +91,7 @@ fn emitPlannedCluster(self: anytype, cluster: anytype) Error!void {
         .constant_truthy => try self.emitConstantTruthyFallback(
             (try self.constantTruthyFallbackPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow,
         ),
-        .inline_const_table_get => try self.emitGenericTableFallbackCall(
+        .inline_const_table_get => try self.emitGuardedConstantTableGet(
             ((try self.inlineConstantTableGetPatternAt(cluster.at)) orelse return Error.UnsupportedControlFlow).pattern,
         ),
         .inline_array_get => try self.emitInlineArrayGet(
@@ -646,6 +654,9 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
     return terminated;
 }
 pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
+    var detail: [32]u8 = undefined;
+    const phase = std.fmt.bufPrint(&detail, "block {d}", .{block_id}) catch "block";
+    diagnostics.trace(phase);
     if (try emitGenericForLoopBlock(self, block_id))
         return;
     if (try emitDirectLoopBlock(self, block_id))

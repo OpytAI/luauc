@@ -3,10 +3,14 @@ const std = @import("std");
 var buffer: [192]u8 = undefined;
 var length: usize = 0;
 var function_id: u32 = 0;
+var trace_buffer: [96]u8 = undefined;
+var trace_length: usize = 0;
+var combined: [192]u8 = undefined;
 
 pub fn reset() void {
     length = 0;
     function_id = 0;
+    trace_length = 0;
 }
 
 pub fn enterFunction(next_function_id: u32) void {
@@ -48,4 +52,16 @@ pub fn recordPhase(error_name: []const u8, phase: []const u8) void {
 
 pub fn message() []const u8 {
     return buffer[0..length];
+}
+
+pub fn trace(phase: []const u8) void {
+    const rendered = std.fmt.bufPrint(&trace_buffer, "fn {d} {s}", .{ function_id, phase }) catch return;
+    trace_length = rendered.len;
+}
+
+pub fn published(error_name: []const u8) []const u8 {
+    const base: []const u8 = if (length != 0) buffer[0..length] else error_name;
+    if (trace_length == 0)
+        return base;
+    return std.fmt.bufPrint(&combined, "{s} | {s}", .{ base, trace_buffer[0..trace_length] }) catch base;
 }

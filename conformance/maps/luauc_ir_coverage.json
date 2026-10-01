@@ -4,7 +4,7 @@
   "pin": "luau-0.725+luauc-patches",
   "compiler_build_digest": "516e83c07e602eebfb0c1cabbb4e743bb917a00e68faa886276745a2d46138c7",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
+  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,

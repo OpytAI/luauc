@@ -4,6 +4,7 @@ const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const admission = @import("luauc_backend_admission");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const ValueSlot = model.ValueSlot;
@@ -470,6 +471,17 @@ pub noinline fn emitCopyTValueRegisterToAddress(
     try self.body.i64Load(self.allocator, 3, source_offset + 8);
     try self.body.i64Store(self.allocator, 3, destination_offset + destination_byte_offset + 8);
 }
+fn emitCopyRegisterToPointer(self: anytype, destination: snapshot_v1.IrOperand, source_register: u32) Error!void {
+    const source_offset = std.math.mul(u32, source_register, tvalue_size) catch return Error.ResourceLimit;
+    try self.emitTValueAddress(destination);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Load(self.allocator, 3, source_offset);
+    try self.body.i64Store(self.allocator, 3, 0);
+    try self.emitTValueAddress(destination);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Load(self.allocator, 3, source_offset + 8);
+    try self.body.i64Store(self.allocator, 3, 8);
+}
 pub noinline fn emitStoreSplitTValue(
     self: anytype,
     instruction_id: u32,
@@ -491,11 +503,35 @@ pub noinline fn emitStoreSplitTValue(
     if (source.kind == .instruction and source.value < self.function.instruction_count and
         (try self.instruction(source.value)).command == .newclosure)
     {
-        if (destination == null or instruction_value.operand_count != 3 or tag_value != 8)
+        if (tag_value != 8) {
+            diagnostics.trace("split cl tag");
             return Error.UnsupportedControlFlow;
+        }
         const pattern = try self.newClosurePattern(source.value);
-        try self.emitCopyTValueRegisters(destination.?, pattern.destination);
-        return;
+        if (destination != null and instruction_value.operand_count == 3) {
+            try self.emitCopyTValueRegisters(destination.?, pattern.destination);
+            return;
+        }
+        // The closure already lives in its destination register. A field write
+        // names the node, so the copy uses that register.
+        if (destination_operand.kind == .instruction and instruction_value.operand_count == 4) {
+            const offset = try self.tvalueByteOffset(instruction_value, 3);
+            const producer = try self.instruction(destination_operand.value);
+            const slot_node = producer.command == abi.ir_cmd_get_slot_node_addr or
+                producer.command == abi.ir_cmd_get_hash_node_addr;
+            const live = slot_node and self.plan.validateNodeUse(
+                self.snapshot,
+                self.function,
+                destination_operand.value,
+                instruction_id,
+            ) catch false;
+            if (slot_node and offset == 0 and live) {
+                try emitCopyRegisterToPointer(self, destination_operand, pattern.destination);
+                return;
+            }
+        }
+        diagnostics.trace("split cl");
+        return Error.UnsupportedControlFlow;
     }
 
     const address_offset = if (instruction_value.operand_count == 4)
@@ -505,28 +541,63 @@ pub noinline fn emitStoreSplitTValue(
     const reloaded_table_register: ?u32 = if (tag_value == lua_tag_table and source.kind == .instruction and
         self.plan.isProvenTablePointer(source.value))
     reload: {
-        const producer_block = self.plan.instructionBlock(source.value) orelse
+        const producer_block = self.plan.instructionBlock(source.value) orelse {
+            diagnostics.trace("split rb");
             return Error.UnsupportedControlFlow;
-        const consumer_block = self.plan.instructionBlock(instruction_id) orelse
+        };
+        const consumer_block = self.plan.instructionBlock(instruction_id) orelse {
+            diagnostics.trace("split cb");
             return Error.UnsupportedControlFlow;
+        };
         if (producer_block == consumer_block)
             break :reload null;
-        const register = (try self.loadedPointerRegister(source)) orelse
+        const loaded = try self.loadedPointerRegister(source);
+        const fresh = try self.freshTableRegister(source.value);
+        const register = loaded orelse fresh orelse {
+            diagnostics.trace("split rr");
             return Error.UnsupportedControlFlow;
-        const predecessors = self.plan.predecessorSlice(consumer_block) orelse
+        };
+        var scan_from = source.value + 1;
+        if (loaded == null) {
+            const producer_cmd = (try self.instruction(source.value)).command;
+            if (producer_cmd == abi.ir_cmd_new_table) {
+                const allocation = (try self.tableAllocationPatternAt(source.value)) orelse {
+                    diagnostics.trace("split ra");
+                    return Error.UnsupportedControlFlow;
+                };
+                scan_from = allocation.finish + 1;
+            } else if (producer_cmd == abi.ir_cmd_dup_table and source.value != 0) {
+                const clone = (try self.dupTablePatternAt(source.value - 1)) orelse {
+                    diagnostics.trace("split rd");
+                    return Error.UnsupportedControlFlow;
+                };
+                scan_from = clone.finish + 1;
+            }
+        }
+        const predecessors = self.plan.predecessorSlice(consumer_block) orelse {
+            diagnostics.trace("split rp");
             return Error.UnsupportedControlFlow;
-        if (predecessors.len != 1 or predecessors[0] != producer_block)
+        };
+        if (predecessors.len != 1 or predecessors[0] != producer_block) {
+            diagnostics.trace("split pred");
             return Error.UnsupportedControlFlow;
+        }
         const producer = try self.snapshot.irBlock(self.function, producer_block);
-        var cursor = source.value + 1;
-        while (cursor <= producer.finish) : (cursor += 1)
-            if (try self.storesVmRegister(try self.instruction(cursor), register))
+        var cursor = scan_from;
+        while (cursor <= producer.finish) : (cursor += 1) {
+            if (try self.storesVmRegister(try self.instruction(cursor), register)) {
+                diagnostics.trace("split rps");
                 return Error.UnsupportedControlFlow;
+            }
+        }
         const consumer = try self.snapshot.irBlock(self.function, consumer_block);
         cursor = consumer.start;
-        while (cursor < instruction_id) : (cursor += 1)
-            if (try self.storesVmRegister(try self.instruction(cursor), register))
+        while (cursor < instruction_id) : (cursor += 1) {
+            if (try self.storesVmRegister(try self.instruction(cursor), register)) {
+                diagnostics.trace("split rcs");
                 return Error.UnsupportedControlFlow;
+            }
+        }
         break :reload register;
     } else null;
 
@@ -544,8 +615,10 @@ pub noinline fn emitStoreSplitTValue(
     }
 
     if (destination_operand.kind == .instruction) {
-        if (destination_operand.value >= self.function.instruction_count)
+        if (destination_operand.value >= self.function.instruction_count) {
+            diagnostics.trace("split dx");
             return Error.UnsupportedControlFlow;
+        }
         const producer = try self.instruction(destination_operand.value);
         if (producer.command == abi.ir_cmd_get_arr_addr) {
             if (!try self.plan.validateArrayAddressUse(
@@ -553,8 +626,62 @@ pub noinline fn emitStoreSplitTValue(
                 self.function,
                 destination_operand.value,
                 instruction_id,
-            ))
+            )) {
+                const table_op = try self.operand(producer, 0);
+                const index_op = try self.operand(producer, 1);
+                var index_value: i64 = -1;
+                if (index_op.kind == .constant) {
+                    const index_constant = try self.constant(index_op.value);
+                    if (index_constant.intValue()) |value| index_value = value;
+                }
+                var array_count: i64 = -1;
+                var table_cmd: u32 = 0;
+                if (table_op.kind == .instruction) {
+                    const allocation = try self.instruction(table_op.value);
+                    table_cmd = @intFromEnum(allocation.command);
+                    if (allocation.operand_count >= 1) {
+                        const count_op = try self.operand(allocation, 0);
+                        if (count_op.kind == .constant) {
+                            const count_constant = try self.constant(count_op.value);
+                            if (count_constant.uintValue()) |value|
+                                array_count = value
+                            else if (count_constant.intValue()) |value|
+                                array_count = value;
+                        }
+                    }
+                }
+                var invalid_cmd: u32 = 0;
+                var invalid_at: u32 = 0;
+                var cursor = destination_operand.value + 1;
+                while (cursor < instruction_id) : (cursor += 1) {
+                    const command = (try self.instruction(cursor)).command;
+                    const raw: u32 = @intFromEnum(command);
+                    const invalid = switch (command) {
+                        .cmp_any, .do_arith, .get_cached_import, .interrupt, .check_gc, .call, .fallback_prepvarargs, .fallback_getvarargs, .newclosure, .fallback_dupclosure => true,
+                        else => switch (raw) {
+                            100, 101, 102, 105, 120, 121, 124, 125, 126, 128, 153, 156, 157, 158, 160, 161, 162, 163, 164, 169 => true,
+                            else => false,
+                        },
+                    };
+                    if (invalid) {
+                        invalid_cmd = raw;
+                        invalid_at = cursor;
+                        break;
+                    }
+                }
+                var detail: [80]u8 = undefined;
+                const text = std.fmt.bufPrint(&detail, "arr off{d} i{d} n{d} t{d} c{d} inv{d}@{d}", .{
+                    address_offset,
+                    index_value,
+                    array_count,
+                    @intFromEnum(table_op.kind),
+                    table_cmd,
+                    invalid_cmd,
+                    invalid_at,
+                }) catch "split arr";
+                diagnostics.trace(text);
                 return Error.UnsupportedControlFlow;
+            }
         } else if (producer.command == abi.ir_cmd_get_hash_node_addr or
             producer.command == abi.ir_cmd_get_slot_node_addr)
         {
@@ -565,8 +692,16 @@ pub noinline fn emitStoreSplitTValue(
                     destination_operand.value,
                     instruction_id,
                 ))
+            {
+                diagnostics.trace("split node");
                 return Error.UnsupportedControlFlow;
+            }
         } else {
+            var detail: [32]u8 = undefined;
+            const text = std.fmt.bufPrint(&detail, "split p{d}", .{
+                @intFromEnum(producer.command),
+            }) catch "split p";
+            diagnostics.trace(text);
             return Error.UnsupportedControlFlow;
         }
     } else if (destination_operand.kind != .vm_reg) return Error.InvalidOperandType;

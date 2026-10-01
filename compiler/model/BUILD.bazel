@@ -28,6 +28,7 @@ zig_library(
     import_name = "luauc_backend_model",
     visibility = ["//visibility:public"],
     deps = [
+        ":diagnostics",
         ":runtime_abi",
         ":static_package_v1",
         "//compiler/ir:frontend_snapshot_v1",

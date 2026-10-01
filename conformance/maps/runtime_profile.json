@@ -3,7 +3,7 @@
   "generator_version": "luauc-runtime-profile-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "ac5a7481f9904162f4bee7ea3a6e89a8815e197fc500ac74e1084abafca98157",
+  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
   "input_sha256": {
     "profile": "98dc524ac661e114a1e05a25ce1e5a7bd76c3436cee0803ffb0a8e18d3825ffb",
     "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",

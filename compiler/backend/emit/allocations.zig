@@ -405,7 +405,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
             self.requireSingleCompilableBlockRange(start, store_id + 1) catch return null;
             if ((try self.stringFallbackRejoin(fallback.value, .set, pc_value, source.value, table, key_operand.value)) == null)
                 return null;
-            return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = source.value, .key = key };
+            return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = source.value, .key = key, .key_constant = key_operand.value };
         }
 
         if (suffix.command != ir_cmd_barrier_table_forward or suffix.operand_count != 3)
@@ -433,6 +433,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
                 .table = table,
                 .value = value.value,
                 .key = key,
+                .key_constant = key_operand.value,
             };
         }
         if (barrier_tag.kind != .constant or (try self.constant(barrier_tag.value)).tagValue() != lua_tag_string or
@@ -449,7 +450,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         self.requireSingleCompilableBlockRange(start, store_id + 1) catch return null;
         if ((try self.stringFallbackRejoin(fallback.value, .set, pc_value, value.value, table, key_operand.value)) == null)
             return null;
-        return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value.value, .key = key };
+        return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value.value, .key = key, .key_constant = key_operand.value };
     }
     if (store.command != .store_split_tvalue or store.operand_count != 4 or
         store_id + 1 >= self.function.instruction_count or start < 2)
@@ -478,7 +479,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
         self.requireSingleCompilableBlockRange(start, store_id + 1) catch return null;
         if ((try self.stringFallbackRejoin(fallback.value, .set, pc_value, value_register, table, key_operand.value)) == null)
             return null;
-        return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_register, .key = key };
+        return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_register, .key = key, .key_constant = key_operand.value };
     }
     if (tag_value == lua_tag_number and value.kind == .instruction) {
         if (suffix.command != .nop or suffix.operand_count != 0)
@@ -495,6 +496,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
             .value = source,
             .materialized_tag = lua_tag_number,
             .key = key,
+                .key_constant = key_operand.value,
         };
     }
     if (suffix.command != .nop or suffix.operand_count != 0 or value.kind != .constant)
@@ -553,7 +555,7 @@ pub noinline fn literalFieldSetPatternAt(self: anytype, start: u32) Error!?Liter
     self.requireSingleCompilableBlockRange(publication_id, store_id + 1) catch return null;
     if ((try self.stringFallbackRejoin(fallback.value, .set, pc_value, value_destination.value, table, key_operand.value)) == null)
         return null;
-    return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_destination.value, .key = key };
+    return .{ .start = start, .finish = store_id + 1, .pc = pc_value, .table = table, .value = value_destination.value, .key = key, .key_constant = key_operand.value };
 }
 pub noinline fn guardedLiteralFieldSetPatternAt(self: anytype, start: u32) Error!?LiteralFieldSetPattern {
     if (start + 3 >= self.function.instruction_count)
@@ -589,20 +591,13 @@ pub noinline fn guardedLiteralFieldSetPatternAt(self: anytype, start: u32) Error
     return pattern;
 }
 pub noinline fn emitLiteralFieldSet(self: anytype, pattern: LiteralFieldSetPattern) Error!void {
-    const key = try self.string_keys.intern(self.allocator, pattern.key);
     try self.emitPcLocation(pattern.pc);
     if (pattern.materialized_tag) |tag| {
         try self.body.localGet(self.allocator, self.base_local);
         try self.body.i32Const(self.allocator, tag);
         try self.body.i32Store(self.allocator, 2, pattern.value * tvalue_size + tvalue_tag_offset);
     }
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.table));
-    try self.body.i32Const(self.allocator, @intCast(pattern.value));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
-    try self.body.i32Const(self.allocator, @intCast(key.length));
-    try self.body.call(self.allocator, self.table_set_string orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
+    try self.emitStringSlotSetOrHelper(pattern.table, pattern.value, pattern.key, pattern.key_constant);
 }
 /// The fast path stores the constant into the new array slot. The fallback
 /// block stores that same constant into the call's argument register.
@@ -655,6 +650,19 @@ fn fallbackConstantRegister(self: anytype, constant_number: f64) Error!?u32 {
         found = source;
     }
     return found;
+}
+
+pub fn freshTableRegister(self: anytype, pointer_id: u32) Error!?u32 {
+    const pointer = try self.instruction(pointer_id);
+    if (pointer.command == ir_cmd_new_table) {
+        const allocation = (try self.tableAllocationPatternAt(pointer_id)) orelse return null;
+        if (allocation.start != pointer_id)
+            return null;
+        return allocation.destination;
+    }
+    if (pointer.command == ir_cmd_dup_table)
+        return tableRegisterForPointer(self, pointer_id);
+    return null;
 }
 
 fn allocatedTableRegister(self: anytype, pointer_id: u32) Error!?u32 {

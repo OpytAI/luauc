@@ -5,6 +5,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const ValueSlot = model.ValueSlot;
@@ -347,6 +348,65 @@ pub noinline fn emitStoreVector(self: anytype, instruction_value: snapshot_v1.Ir
         try self.body.i32Store(self.allocator, 2, try self.vmRegisterOffset(destination, tvalue_tag_offset));
     }
 }
+fn upvalueNodeStore(
+    self: anytype,
+    instruction_id: u32,
+    destination: snapshot_v1.IrOperand,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!?u32 {
+    if (destination.kind != .instruction or instruction_value.operand_count != 3)
+        return null;
+    const producer = try self.instruction(destination.value);
+    if (producer.command != abi.ir_cmd_get_hash_node_addr and producer.command != abi.ir_cmd_get_slot_node_addr)
+        return null;
+    const offset = try self.tvalueByteOffset(instruction_value, 2);
+    const live = self.plan.validateNodeUse(self.snapshot, self.function, destination.value, instruction_id) catch false;
+    if (offset != 0 or !live) {
+        var detail: [48]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "upv n{d} off{d} live{d}", .{
+            destination.value,
+            offset,
+            @intFromBool(live),
+        }) catch "upv";
+        diagnostics.trace(text);
+        return Error.UnsupportedControlFlow;
+    }
+    return offset;
+}
+fn emitClosureUpvalueSlot(self: anytype, upvalue_index: u32) Error!void {
+    const slot_bytes = std.math.mul(u32, upvalue_index, abi.tvalue_size) catch return Error.ResourceLimit;
+    const byte_offset = std.math.add(u32, abi.closure_l_uprefs_offset, slot_bytes) catch return Error.ResourceLimit;
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Const(self.allocator, @intCast(byte_offset));
+    try self.body.opcode(self.allocator, 0x6a);
+}
+fn emitResolvedUpvalueAddress(self: anytype, upvalue_index: u32) Error!void {
+    try emitClosureUpvalueSlot(self, upvalue_index);
+    try self.body.i32Load(self.allocator, 2, abi.tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, abi.lua_tag_upval);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifI32(self.allocator);
+    try emitClosureUpvalueSlot(self, upvalue_index);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Load(self.allocator, 2, abi.upval_v_offset);
+    try self.body.else_(self.allocator);
+    try emitClosureUpvalueSlot(self, upvalue_index);
+    try self.body.end(self.allocator);
+}
+fn emitUpvalueTValueStore(self: anytype, upvalue_index: u32, destination: snapshot_v1.IrOperand, destination_offset: u32) Error!void {
+    var half: u32 = 0;
+    while (half < 2) : (half += 1) {
+        const byte = half * 8;
+        try self.emitTValueAddress(destination);
+        try emitResolvedUpvalueAddress(self, upvalue_index);
+        try self.body.i64Load(self.allocator, 3, byte);
+        const store_offset = std.math.add(u32, destination_offset, byte) catch return Error.ResourceLimit;
+        try self.body.i64Store(self.allocator, 3, store_offset);
+    }
+}
 pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (self.plan.closureContaining(instruction_id) != null)
         return;
@@ -357,6 +417,16 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
     if (source.kind == .instruction) {
         const source_instruction = try self.instruction(source.value);
         if (source_instruction.command == .get_upvalue) {
+            try self.requireOperandCount(source_instruction, 1);
+            const upvalue = try self.operand(source_instruction, 0);
+            if (upvalue.kind != .vm_upvalue or upvalue.value >= self.proto.nups)
+                return Error.InvalidOperandType;
+            // The register helper cannot target a hash node. A forwarded upvalue
+            // still names the cell, so the node copy reads that cell.
+            if (try upvalueNodeStore(self, instruction_id, destination, instruction_value)) |offset| {
+                try emitUpvalueTValueStore(self, upvalue.value, destination, offset);
+                return;
+            }
             if (source.value + 1 != instruction_id) {
                 const first_store = try self.instruction(source.value + 1);
                 if (first_store.command != .store_tvalue or first_store.operand_count != 2)
@@ -371,17 +441,14 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
                         return Error.UnsupportedControlFlow;
                 }
             }
-            if (instruction_value.operand_count != 2)
+            if (instruction_value.operand_count != 2) {
+                diagnostics.trace("upv ops");
                 return Error.UnsupportedControlFlow;
-            try self.requireOperandCount(source_instruction, 1);
-            const upvalue = try self.operand(source_instruction, 0);
-            if (upvalue.kind != .vm_upvalue or upvalue.value >= self.proto.nups)
-                return Error.InvalidOperandType;
+            }
 
-            try self.body.localGet(self.allocator, 0);
-            try self.body.i32Const(self.allocator, @intCast(try self.vmRegisterIndex(destination)));
-            try self.body.i32Const(self.allocator, @intCast(upvalue.value));
-            try self.body.call(self.allocator, self.get_upvalue orelse return Error.UnsupportedCommand);
+            // Same cell load the node store already uses. The index is inside this
+            // proto, and the copy does not allocate, so the register path stays inline.
+            try emitUpvalueTValueStore(self, upvalue.value, destination, try self.vmRegisterOffset(destination, 0));
             return;
         }
     }
@@ -394,12 +461,21 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
     if (destination.kind == .instruction) {
         const producer = try self.instruction(destination.value);
         if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
-            if (address_offset != 0 or
-                !try self.plan.validateNodeUse(self.snapshot, self.function, destination.value, instruction_id))
+            const live = self.plan.validateNodeUse(self.snapshot, self.function, destination.value, instruction_id) catch false;
+            if (address_offset != 0 or !live) {
+                var detail: [64]u8 = undefined;
+                const text = std.fmt.bufPrint(&detail, "store n{d} off{d} live{d}", .{
+                    destination.value,
+                    address_offset,
+                    @intFromBool(live),
+                }) catch "store";
+                diagnostics.trace(text);
                 return Error.UnsupportedControlFlow;
+            }
         } else if (producer.command == abi.ir_cmd_get_arr_addr and
             !try self.plan.validateArrayAddressUse(self.snapshot, self.function, destination.value, instruction_id))
         {
+            diagnostics.trace("arr");
             return Error.UnsupportedControlFlow;
         }
     }

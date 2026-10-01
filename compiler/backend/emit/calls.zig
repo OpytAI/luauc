@@ -638,7 +638,7 @@ pub noinline fn emitSafeEnvCheck(self: anytype, instruction_id: u32) Error!void 
     const instruction_value = try self.instruction(instruction_id);
     try self.requireOperandCount(instruction_value, 1);
     const failure = try self.operand(instruction_value, 0);
-    if (failure.kind != .block)
+    if (failure.kind != .block and failure.kind != .vm_exit)
         return Error.InvalidOperandType;
     // Same three results as luauc_runtime_v1_check_safe_env: internal error when the closure has
     // no environment, unsupported when safeenv is clear, OK otherwise. The active frame is this
@@ -666,6 +666,19 @@ pub noinline fn emitSafeEnvCheck(self: anytype, instruction_id: u32) Error!void 
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.emitReloadBase();
+
+    // vm_exit has no compiled slow arm. An unsafe environment returns its status.
+    // A safe environment falls through into the guarded IR.
+    if (failure.kind == .vm_exit) {
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.return_(self.allocator);
+        try self.body.end(self.allocator);
+        return;
+    }
 
     // The runtime returns only OK, UNSUPPORTED_TYPE (take the compiled slow arm), or a fatal
     // status. Preserve fatal statuses and route ordinary unsafe environments through the same

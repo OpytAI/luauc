@@ -196,6 +196,7 @@ pub noinline fn plainTableNamecallPattern(self: anytype, block: snapshot_v1.IrBl
         .destination = destination.value,
         .source = source.value,
         .key = key,
+        .key_constant = key_operand.value,
         .pc = pc_value,
         .first_fast = first_fast.value,
         .second_fast = second_fast.value,
@@ -244,6 +245,12 @@ pub noinline fn emitFallbackNamecall(
 pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTableNamecallPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
     try self.emitPcLocation(pattern.pc);
+    // Own slot or one table __index. A function __index, a chain longer than
+    // the walk, and a missing method stay on namecall_plain.
+    try self.emitInlineNamecallProbe(pattern.source, pattern.destination, pattern.key_constant);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
     try self.body.i32Const(self.allocator, @intCast(pattern.source));
@@ -251,6 +258,7 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
     try self.body.i32Const(self.allocator, @intCast(key.length));
     try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    try self.body.end(self.allocator);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }

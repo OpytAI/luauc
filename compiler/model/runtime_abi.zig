@@ -188,6 +188,9 @@ pub const closure_nupvalues_offset: u32 = 4;
 pub const closure_stacksize_offset: u32 = 5;
 pub const closure_env_offset: u32 = 20;
 pub const closure_l_proto_offset: u32 = 24;
+// Closure.l.uprefs. The proto pointer ends at 28 and TValue is aligned to 8.
+pub const closure_l_uprefs_offset: u32 = 32;
+pub const lua_tag_upval: i32 = 16;
 pub const proto_nups_offset: u32 = 3;
 pub const proto_numparams_offset: u32 = 4;
 pub const proto_is_vararg_offset: u32 = 5;
@@ -219,6 +222,10 @@ pub const lua_node_key_tag_offset: u32 = 28;
 pub const lua_node_key_tag_mask: i32 = 0xF;
 // offsetof(global_State, cb) + offsetof(lua_Callbacks, interrupt). Locked in call_frame.cpp.
 pub const global_interrupt_offset: u32 = 700;
+// offsetof(global_State, tmname). TM_INDEX is element 0. Locked in call_frame.cpp.
+pub const global_tmname_offset: u32 = 528;
+// LuaTable.tmcache. Bit 1<<TM_INDEX means __index is absent.
+pub const table_tmcache_offset: u32 = 3;
 pub const table_readonly_offset: u32 = 4;
 pub const table_sizearray_offset: u32 = 8;
 pub const table_metatable_offset: u32 = 16;
@@ -254,6 +261,7 @@ pub const lua_utag_limit: u32 = 128;
 pub const vector_lane_count: u32 = 3;
 pub const tvalue_lane_count: u32 = 4;
 pub const round_number_bias: f64 = @bitCast(@as(u64, 0x3fdf_ffff_ffff_ffff));
+pub const upstream_tm_index: u32 = 0;
 pub const upstream_tm_add: i32 = 8;
 pub const upstream_tm_pow: i32 = 14;
 pub const upstream_tm_unm: i32 = 15;
