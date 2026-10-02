@@ -2,6 +2,7 @@ const std = @import("std");
 const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const diagnostics = @import("luauc_backend_diagnostics");
 const recognize = @import("luauc_backend_recognize");
 const recognize_tables = @import("luauc_backend_recognize_tables");
 const recognize_calls = @import("luauc_backend_recognize_calls");
@@ -163,13 +164,17 @@ pub const FunctionPlan = struct {
             const block = try snapshot.irBlock(function, block_id);
             if (block.isEmpty())
                 continue;
-            if (block.start > block.finish or block.finish >= function.instruction_count)
+            if (block.start > block.finish or block.finish >= function.instruction_count) {
+                diagnostics.trace("plan range");
                 return Error.UnsupportedControlFlow;
+            }
 
             var instruction_id = block.start;
             while (instruction_id <= block.finish) : (instruction_id += 1) {
-                if (instruction_blocks[instruction_id] != snapshot_v1.no_id)
+                if (instruction_blocks[instruction_id] != snapshot_v1.no_id) {
+                    diagnostics.trace("plan overlap");
                     return Error.UnsupportedControlFlow;
+                }
                 instruction_blocks[instruction_id] = block_id;
 
                 const instruction = try snapshot.irInstruction(function, instruction_id);
@@ -178,8 +183,10 @@ pub const FunctionPlan = struct {
                     const operand = try snapshot.irOperand(instruction, operand_id);
                     switch (operand.kind) {
                         .instruction => {
-                            if (operand.value >= function.instruction_count)
+                            if (operand.value >= function.instruction_count) {
+                                diagnostics.trace("plan use");
                                 return Error.UnsupportedControlFlow;
+                            }
                             instruction_use_counts[operand.value] = std.math.add(
                                 u32,
                                 instruction_use_counts[operand.value],
@@ -187,8 +194,10 @@ pub const FunctionPlan = struct {
                             ) catch return Error.ResourceLimit;
                         },
                         .block => {
-                            if (operand.value >= function.block_count)
+                            if (operand.value >= function.block_count) {
+                                diagnostics.trace("plan edge");
                                 return Error.UnsupportedControlFlow;
+                            }
                             block_reference_counts[operand.value] = std.math.add(
                                 u32,
                                 block_reference_counts[operand.value],
@@ -234,8 +243,12 @@ pub const FunctionPlan = struct {
                 if (invalidatesTransientAddress(instruction.command)) {
                     array_guards.clearRetainingCapacity();
                     last_array_guard = null;
-                    @memset(guarded_table_registers, false);
-                    @memset(pending_table_registers, false);
+                    // A collector check does not change the type of a live register.
+                    // Array interior pointers still die here: a later write can rehash.
+                    if (instruction.command != .check_gc) {
+                        @memset(guarded_table_registers, false);
+                        @memset(pending_table_registers, false);
+                    }
                 }
 
                 if (try writtenVmRegister(snapshot, instruction)) |destination| {
@@ -269,8 +282,24 @@ pub const FunctionPlan = struct {
                             source.kind == .instruction and source.value < instruction_count)
                         {
                             const producer = try snapshot.irInstruction(function, source.value);
-                            pending_table_registers[destination.value] =
-                                producer.command == abi.ir_cmd_new_table or producer.command == abi.ir_cmd_dup_table;
+                            const publishes_table = producer.command == abi.ir_cmd_new_table or
+                                producer.command == abi.ir_cmd_dup_table;
+                            pending_table_registers[destination.value] = publishes_table;
+                            // A following STORE_TAG clears this guard and sets it again for a table tag.
+                            // Const-prop deletes that store when the register is already a table.
+                            if (publishes_table and destination.value < guarded_table_registers.len) {
+                                var followed_by_tag = false;
+                                if (instruction_id + 1 < function.instruction_count) {
+                                    const next = try snapshot.irInstruction(function, instruction_id + 1);
+                                    if (next.command == .store_tag and next.operand_count == 2) {
+                                        const tag_destination = try snapshot.irOperand(next, 0);
+                                        followed_by_tag = tag_destination.kind == .vm_reg and
+                                            tag_destination.value == destination.value;
+                                    }
+                                }
+                                if (!followed_by_tag)
+                                    guarded_table_registers[destination.value] = true;
+                            }
                         }
                     },
                     .store_tag => if (instruction.operand_count == 2) {
@@ -296,7 +325,7 @@ pub const FunctionPlan = struct {
                         136 => if (instruction.operand_count == 3) {
                             const table = try snapshot.irOperand(instruction, 0);
                             const index = try snapshot.irOperand(instruction, 1);
-                            if (hasTablePointerProvenance(table_pointer_provenance, table) and
+                            if (try arrayCheckTable(snapshot, function, table_pointer_provenance, table) and
                                 (index.kind == .instruction or index.kind == .constant))
                             {
                                 const guard = arrayGuard(table, index);
@@ -307,7 +336,7 @@ pub const FunctionPlan = struct {
                         9 => if (instruction.operand_count == 2) {
                             const table = try snapshot.irOperand(instruction, 0);
                             const index = try snapshot.irOperand(instruction, 1);
-                            if (hasTablePointerProvenance(table_pointer_provenance, table)) {
+                            if (try arrayCheckTable(snapshot, function, table_pointer_provenance, table)) {
                                 const address = arrayGuard(table, index);
                                 const covered: ?ArrayGuard = if (array_guards.contains(address))
                                     address
@@ -387,16 +416,20 @@ pub const FunctionPlan = struct {
                 const operand = try snapshot.irOperand(instruction, operand_id);
                 if (operand.kind != .instruction)
                     continue;
-                if (operand.value >= function.instruction_count)
+                if (operand.value >= function.instruction_count) {
+                    diagnostics.trace("plan use late");
                     return Error.UnsupportedControlFlow;
+                }
                 const producer_block = instruction_blocks[operand.value];
                 if (producer_block == snapshot_v1.no_id) {
                     resume_safe_blocks[consumer_block] = false;
                     continue;
                 }
                 if (producer_block == consumer_block) {
-                    if (operand.value >= instruction_id)
+                    if (operand.value >= instruction_id) {
+                        diagnostics.trace("plan forward");
                         return Error.UnsupportedControlFlow;
+                    }
                     continue;
                 }
                 if (dominators.immediate[producer_block] == snapshot_v1.no_id or
@@ -847,10 +880,8 @@ pub const FunctionPlan = struct {
         producer_id: u32,
         consumer_id: u32,
     ) Error!bool {
-        if (!self.isGuardedArrayAddress(producer_id))
-            return false;
         const producer = try snapshot.irInstruction(function, producer_id);
-        if (producer.command != abi.ir_cmd_get_arr_addr)
+        if (producer.command != abi.ir_cmd_get_arr_addr or producer.operand_count != 2)
             return false;
         const producer_block = self.instructionBlock(producer_id) orelse return false;
         const consumer_block = self.instructionBlock(consumer_id) orelse return false;
@@ -872,8 +903,6 @@ pub const FunctionPlan = struct {
                 return false;
         }
 
-        const guard = self.array_address_guards[producer_id] orelse return false;
-        const address_index = try snapshot.irOperand(producer, 1);
         const consumer = try snapshot.irInstruction(function, consumer_id);
         const byte_offset: u32 = switch (consumer.command) {
             .load_tvalue => if (consumer.operand_count >= 2)
@@ -893,11 +922,20 @@ pub const FunctionPlan = struct {
         };
         if (byte_offset % abi.tvalue_size != 0)
             return false;
+        const address_index = try snapshot.irOperand(producer, 1);
+        if (!self.isGuardedArrayAddress(producer_id))
+            return try provedConstantArraySlot(self, snapshot, function, producer, address_index, byte_offset);
+
+        const guard = self.array_address_guards[producer_id] orelse return false;
         if (sameOperandKey(guard.index_kind, guard.index_value, address_index)) {
             if (byte_offset == 0)
                 return true;
             // One fresh array address is reused at later constant slots.
-            return freshArrayElement(snapshot, function, producer, byte_offset / abi.tvalue_size);
+            if (try freshArrayElement(snapshot, function, producer, byte_offset / abi.tvalue_size))
+                return true;
+            // GETTABLEN reuses an index-0 address. The slot check was removed after
+            // the frontend proved the constant index, or it guards a different copy.
+            return try provedConstantArraySlot(self, snapshot, function, producer, address_index, byte_offset);
         }
         const base = try constantIndex(snapshot, function, address_index) orelse return false;
         const limit = try constantIndexFromGuard(snapshot, function, guard) orelse return false;
@@ -983,6 +1021,25 @@ fn arrayGuard(table: snapshot_v1.IrOperand, index: snapshot_v1.IrOperand) ArrayG
 
 fn hasTablePointerProvenance(provenance: []const bool, operand: snapshot_v1.IrOperand) bool {
     return operand.kind == .instruction and operand.value < provenance.len and provenance[operand.value];
+}
+
+/// A size check on a register load is still a bounds gate after const-prop deletes CHECK_TAG.
+/// The load is not marked proved; only this check and its address share the guard.
+fn arrayCheckTable(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    provenance: []const bool,
+    table: snapshot_v1.IrOperand,
+) Error!bool {
+    if (hasTablePointerProvenance(provenance, table))
+        return true;
+    if (table.kind != .instruction or table.value >= function.instruction_count)
+        return false;
+    const producer = try snapshot.irInstruction(function, table.value);
+    if (producer.command != .load_pointer or producer.operand_count != 1)
+        return false;
+    const source = try snapshot.irOperand(producer, 0);
+    return source.kind == .vm_reg;
 }
 
 fn sameOperandKey(kind: snapshot_v1.IrOperandKind, value: u32, operand: snapshot_v1.IrOperand) bool {
@@ -1107,6 +1164,22 @@ fn freshAllocatedArrayAddress(
     }
     return true;
 }
+fn provedConstantArraySlot(
+    plan: FunctionPlan,
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    producer: snapshot_v1.IrInstruction,
+    address_index: snapshot_v1.IrOperand,
+    byte_offset: u32,
+) Error!bool {
+    const table = try snapshot.irOperand(producer, 0);
+    if (table.kind != .instruction or !plan.isProvenTablePointer(table.value))
+        return false;
+    if (byte_offset == 0)
+        return true;
+    return (try constantIndex(snapshot, function, address_index)) != null;
+}
+
 fn constantIndex(
     snapshot: snapshot_v1.Snapshot,
     function: snapshot_v1.IrFunction,
@@ -1377,8 +1450,10 @@ fn buildDominators(
     predecessors: []const u32,
 ) Error!Dominators {
     const block_count = successor_offsets.len - 1;
-    if (entry_block >= block_count)
+    if (entry_block >= block_count) {
+        diagnostics.trace("plan dom");
         return Error.UnsupportedControlFlow;
+    }
 
     const dfs_index = try allocator.alloc(u32, block_count);
     defer allocator.free(dfs_index);

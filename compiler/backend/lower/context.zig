@@ -20,6 +20,10 @@ const calls = @import("luauc_backend_emit_calls");
 const dispatch = @import("luauc_backend_emit_dispatch");
 const admission = @import("luauc_backend_admission");
 
+pub const max_inline_direct_siblings = control.max_inline_direct_siblings;
+pub const max_direct_dispatch_arms = control.max_direct_dispatch_arms;
+pub const emitDirectDispatchTrampoline = control.emitDirectDispatchTrampoline;
+
 const StringKeyPool = model.StringKeyPool;
 const ValueSlot = model.ValueSlot;
 const CallContinuation = model.CallContinuation;
@@ -53,6 +57,7 @@ pub const Context = struct {
     generated_type: u32,
     self_function: wasm.FunctionRef,
     sibling_functions: []const wasm.FunctionRef = &.{},
+    sibling_trampoline: ?wasm.FunctionRef = null,
     planned_function_id: u32,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
@@ -130,8 +135,12 @@ pub const Context = struct {
     call_meta_local: u32,
     call_aux_local: u32,
     call_cached_closure_local: u32,
-    // Proto.k for this activation. Zero until the first constant-string slot use.
+    // Proto.k for this activation. Filled once at entry when the frame is this function.
     constant_array_local: u32,
+    // Continuation id last written into this frame. Zero means a quiet interrupt can skip the memory read.
+    live_continuation_local: u32,
+    // Source line last stored in this frame. A repeat on the same line does not store again.
+    last_line_local: u32,
     call_continuations: []const CallContinuation,
     continuation_indices: []const u32,
     string_keys: *StringKeyPool,
@@ -145,6 +154,7 @@ pub const Context = struct {
     pub const vmRegisterIndex = core.vmRegisterIndex;
     pub const valueOperandEncoding = core.valueOperandEncoding;
     pub const emitReloadBase = core.emitReloadBase;
+    pub const emitCacheConstantArray = core.emitCacheConstantArray;
     pub const requireSingleBytecodeBlockRange = core.requireSingleBytecodeBlockRange;
     pub const requireSingleCompilableBlockRange = core.requireSingleCompilableBlockRange;
     pub const requireSingleCallBlockRange = core.requireSingleCallBlockRange;
@@ -172,6 +182,7 @@ pub const Context = struct {
     pub const tvalueByteOffset = core.tvalueByteOffset;
     pub const emitI64Value = core.emitI64Value;
     pub const emitF32Value = core.emitF32Value;
+    pub const emitNumberPayload = core.emitNumberPayload;
     pub const emitF64Value = core.emitF64Value;
     pub const emitTagValue = core.emitTagValue;
     pub const tvalueSlot = core.tvalueSlot;
@@ -268,6 +279,7 @@ pub const Context = struct {
     pub const emitBuiltinTypeError = memory.emitBuiltinTypeError;
     pub const emitFornPreparation = memory.emitFornPreparation;
     pub const emitCheckTag = memory.emitCheckTag;
+    pub const tagLoadFeedsOnlyUnenforcedCheck = memory.tagLoadFeedsOnlyUnenforcedCheck;
     pub const emitInvalidSignedConversion = memory.emitInvalidSignedConversion;
     pub const emitNumToInt = memory.emitNumToInt;
     pub const emitNumToInt64 = memory.emitNumToInt64;
@@ -288,6 +300,7 @@ pub const Context = struct {
     pub const requireLiveNode = memory.requireLiveNode;
     pub const emitGetHashNodeAddr = memory.emitGetHashNodeAddr;
     pub const emitGetSlotNodeAddr = memory.emitGetSlotNodeAddr;
+    pub const publishEscapedSlotNodes = memory.publishEscapedSlotNodes;
     pub const emitJumpSlotMatch = memory.emitJumpSlotMatch;
     pub const emitCheckSlotMatch = memory.emitCheckSlotMatch;
     pub const emitTryCallFastGetTm = memory.emitTryCallFastGetTm;
@@ -412,6 +425,7 @@ pub const Context = struct {
     pub const emitGeneralGetTableKs = tables.emitGeneralGetTableKs;
     pub const emitGeneralSetTableKs = tables.emitGeneralSetTableKs;
     pub const emitStringSlotSetOrHelper = tables.emitStringSlotSetOrHelper;
+    pub const emitInlineNonTableNamecall = tables.emitInlineNonTableNamecall;
     pub const emitInlineNamecallProbe = tables.emitInlineNamecallProbe;
     pub const emitSlotNodeFromTable = tables.emitSlotNodeFromTable;
     pub const emitSlotMatchFromNode = tables.emitSlotMatchFromNode;
@@ -420,11 +434,13 @@ pub const Context = struct {
     pub const lengthSequenceAt = tables.lengthSequenceAt;
     pub const freshTableLenPattern = tables.freshTableLenPattern;
     pub const emitFreshTableLen = tables.emitFreshTableLen;
+    pub const publishLengthSlot = tables.publishLengthSlot;
     pub const emitRegisterLength = tables.emitRegisterLength;
     pub const emitPlainTableLen = tables.emitPlainTableLen;
     pub const emitPlainLenCluster = tables.emitPlainLenCluster;
     pub const bypassedPlainLenGuard = tables.bypassedPlainLenGuard;
     pub const emitGeneralTableLen = tables.emitGeneralTableLen;
+    pub const emitIntToNum = tables.emitIntToNum;
 
     // operators
     pub const powPattern = operators.powPattern;
@@ -483,7 +499,10 @@ pub const Context = struct {
     pub const emitSavedPcLocation = control.emitSavedPcLocation;
     pub const emitPcLocation = control.emitPcLocation;
     pub const emitDoArith = control.emitDoArith;
+    pub const emitUniformNumericRun = control.emitUniformNumericRun;
+    pub const emitUniformArithmeticFallback = control.emitUniformArithmeticFallback;
     pub const emitDoLen = control.emitDoLen;
+    pub const emitCompilableDoLen = control.emitCompilableDoLen;
     pub const emitGeneralConcat = control.emitGeneralConcat;
     pub const comparisonOperation = control.comparisonOperation;
     pub const emitCompareAny = control.emitCompareAny;

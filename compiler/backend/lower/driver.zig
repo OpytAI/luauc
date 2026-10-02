@@ -6,7 +6,8 @@ const model = @import("luauc_backend_model");
 const FunctionPlan = @import("luauc_backend_plan").FunctionPlan;
 const continuation_plan = @import("luauc_backend_continuation_plan");
 const abi = @import("luauc_backend_runtime_abi");
-const Context = @import("luauc_backend_context").Context;
+const backend_context = @import("luauc_backend_context");
+const Context = backend_context.Context;
 const continuations = @import("luauc_backend_continuations");
 const runtime_imports = @import("luauc_backend_imports");
 const diagnostics = @import("luauc_backend_diagnostics");
@@ -33,9 +34,139 @@ const status_internal_error = abi.status_internal_error;
 const max_lowered_locals = abi.max_lowered_locals;
 
 pub const br_table_page_size: u32 = 256;
-pub const br_table_case_limit: u32 = 512;
-pub const function_body_limit: usize = 256 * 1024;
+// Nested dispatch blocks. The high br_table already holds every label past the first page.
+// The frontend allows 32768 blocks, and call continuations add dispatch arms past that.
+pub const br_table_case_limit: u32 = 65536;
+// Wasm function body cap. A uniform numeric run lowers as a counted loop.
+// This bound only applies when a long fallback stays unrolled.
+pub const function_body_limit: usize = 8 * 1024 * 1024;
 pub const i32_ge_u: u8 = 0x4f;
+
+// Temporary IR dump for the case-83 tag-stack mismatch. The compiler wasm has no
+// imports, so the text stays in memory and the host copies it after a successful compile.
+var ir_dump: []u8 = &.{};
+var ir_dump_len: usize = 0;
+
+fn resetIrDump() void {
+    ir_dump_len = 0;
+}
+
+pub fn irDumpText() []const u8 {
+    return ir_dump[0..ir_dump_len];
+}
+
+fn dumpAppend(bytes: []const u8) void {
+    if (ir_dump.len == 0 or ir_dump_len >= ir_dump.len)
+        return;
+    const room = ir_dump.len - ir_dump_len;
+    const count = @min(room, bytes.len);
+    @memcpy(ir_dump[ir_dump_len..][0..count], bytes[0..count]);
+    ir_dump_len += count;
+}
+
+fn dumpU32(value: u32) void {
+    var buf: [10]u8 = undefined;
+    var n = value;
+    var i: usize = buf.len;
+    if (n == 0) {
+        dumpAppend("0");
+        return;
+    }
+    while (n > 0) {
+        i -= 1;
+        buf[i] = '0' + @as(u8, @intCast(n % 10));
+        n /= 10;
+    }
+    dumpAppend(buf[i..]);
+}
+
+fn dumpInteresting(command: u32) bool {
+    return switch (command) {
+        3, 16, 36, 38, 98, 99, 106, 124 => true,
+        else => false,
+    };
+}
+
+fn dumpFunctionIr(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    function_id: u32,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    plan: *const FunctionPlan,
+    slots: []const ValueSlot,
+    folded: []const bool,
+) void {
+    if (ir_dump.len == 0) {
+        ir_dump = allocator.alloc(u8, 192 * 1024) catch return;
+        ir_dump_len = 0;
+    }
+    if (ir_dump_len + 48 >= ir_dump.len)
+        return;
+    dumpAppend("FUNC line ");
+    dumpU32(proto.line_defined);
+    dumpAppend(" id ");
+    dumpU32(function_id);
+    dumpAppend(" ins ");
+    dumpU32(function.instruction_count);
+    dumpAppend(" stack ");
+    dumpU32(proto.max_stack_size);
+    dumpAppend("\n");
+    // The case chunk's line_defined is 1. Keep that body. Skip the generated codecs.
+    const walk_chunk = proto.line_defined <= 1 and function.instruction_count > 2000 and
+        function.instruction_count < 4000 and proto.max_stack_size >= 20;
+    if (!walk_chunk)
+        return;
+    var total: u32 = 0;
+    var scan: u32 = 0;
+    while (scan < function.instruction_count) : (scan += 1) {
+        const instruction = snapshot.irInstruction(function, scan) catch return;
+        if (dumpInteresting(@intFromEnum(instruction.command)))
+            total += 1;
+    }
+    const keep: u32 = 900;
+    const skip: u32 = if (total > keep) total - keep else 0;
+    var seen: u32 = 0;
+    var instruction_id: u32 = 0;
+    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        const instruction = snapshot.irInstruction(function, instruction_id) catch return;
+        const command: u32 = @intFromEnum(instruction.command);
+        if (!dumpInteresting(command))
+            continue;
+        if (seen < skip) {
+            seen += 1;
+            continue;
+        }
+        seen += 1;
+        if (ir_dump_len + 96 >= ir_dump.len)
+            return;
+        dumpAppend("I ");
+        dumpU32(instruction_id);
+        dumpAppend(" C ");
+        dumpU32(command);
+        dumpAppend(" u ");
+        dumpU32(instruction.use_count);
+        const shape: u32 = if (instruction_id < slots.len) @intFromEnum(slots[instruction_id].shape) else 0;
+        dumpAppend(" s ");
+        dumpU32(shape);
+        dumpAppend(" f ");
+        dumpU32(@intFromBool(instruction_id < folded.len and folded[instruction_id]));
+        dumpAppend(" c ");
+        dumpU32(@intFromBool(plan.clusterAt(instruction_id) != null));
+        dumpAppend(" n ");
+        dumpU32(instruction.operand_count);
+        var operand_index: u32 = 0;
+        const operand_limit = @min(instruction.operand_count, 4);
+        while (operand_index < operand_limit) : (operand_index += 1) {
+            const operand = snapshot.irOperand(instruction, operand_index) catch return;
+            dumpAppend(" k ");
+            dumpU32(@intFromEnum(operand.kind));
+            dumpAppend(" v ");
+            dumpU32(operand.value);
+        }
+        dumpAppend("\n");
+    }
+}
 
 pub const DispatchMode = enum { flat, paged };
 
@@ -48,6 +179,69 @@ pub fn dispatchMode(case_count: u32, block_plus_cont: u32) Error!DispatchMode {
 pub fn checkFunctionBodyLimit(len: usize) Error!void {
     if (len > function_body_limit)
         return Error.ResourceLimit;
+}
+
+fn markUniformNumericRuns(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    plan: *FunctionPlan,
+    folded: []bool,
+) Error!void {
+    var scan_id: u32 = 0;
+    while (scan_id < function.instruction_count) {
+        const owner = plan.instructionBlock(scan_id) orelse {
+            scan_id += 1;
+            continue;
+        };
+        const owner_block = try snapshot.irBlock(function, owner);
+        if (owner_block.isEmpty() or scan_id < owner_block.start or scan_id > owner_block.finish or
+            plan.clusterAt(scan_id) != null)
+        {
+            scan_id += 1;
+            continue;
+        }
+        const scan_instruction = try snapshot.irInstruction(function, scan_id);
+        switch (scan_instruction.command) {
+            .load_double, .add_num, .sub_num, .mul_num, .div_num => {},
+            else => {
+                scan_id += 1;
+                continue;
+            },
+        }
+        const scan_end = std.math.add(u32, owner_block.finish, 1) catch return Error.ResourceLimit;
+        const found = try admission.uniformNumericRun(
+            snapshot,
+            function,
+            proto,
+            plan.instruction_use_counts,
+            scan_id,
+            scan_end,
+        );
+        if (found == null) {
+            scan_id += 1;
+            continue;
+        }
+        const run = found.?;
+        var blocked = false;
+        var covered = run.start;
+        while (covered <= run.finish) : (covered += 1) {
+            if (plan.clusterAt(covered) != null) {
+                blocked = true;
+                break;
+            }
+        }
+        if (blocked) {
+            scan_id += 1;
+            continue;
+        }
+        covered = run.start;
+        while (covered <= run.finish) : (covered += 1) {
+            if (covered != run.accumulator)
+                folded[covered] = true;
+        }
+        scan_id = run.finish + 1;
+    }
 }
 
 pub fn emitPagedBrTable(
@@ -88,6 +282,7 @@ fn lowerFunction(
     string_keys: *StringKeyPool,
     reserved: ?wasm.FunctionRef,
     siblings: []const wasm.FunctionRef,
+    sibling_trampoline: ?wasm.FunctionRef,
 ) Error!wasm.FunctionRef {
     diagnostics.enterFunction(function_id);
     diagnostics.trace("lower");
@@ -138,10 +333,17 @@ fn lowerFunction(
     try locals.append(allocator, .{ .count = 5, .value_type = .i32 });
     var next_local: u32 = 7; // parameters 0/1; base, dispatcher, helper status, continuation, table index are 2..6.
 
+    const numeric_folded = try allocator.alloc(bool, function.instruction_count);
+    defer allocator.free(numeric_folded);
+    @memset(numeric_folded, false);
+    try markUniformNumericRuns(snapshot, function, proto, &plan, numeric_folded);
+
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
         const instruction_value = try snapshot.irInstruction(function, instruction_id);
-        const shape = continuations.resultShape(instruction_value.command);
+        var shape = continuations.resultShape(instruction_value.command);
+        if (numeric_folded[instruction_id])
+            shape = .none;
         slots[instruction_id].shape = shape;
         switch (shape) {
             .none => {},
@@ -190,11 +392,11 @@ fn lowerFunction(
             },
         }
     }
-    if (next_local > max_lowered_locals - 7)
+    if (next_local > max_lowered_locals - 9)
         return Error.ResourceLimit;
     const call_func_local = next_local;
-    next_local += 7;
-    try locals.append(allocator, .{ .count = 7, .value_type = .i32 });
+    next_local += 9;
+    try locals.append(allocator, .{ .count = 9, .value_type = .i32 });
 
     var body = try wasm.Body.init(allocator, locals.items);
     defer body.deinit(allocator);
@@ -227,6 +429,7 @@ fn lowerFunction(
         .generated_type = imports.generated_type,
         .self_function = if (reserved) |ref| ref else try object.pendingFunctionRef(imports.generated_type),
         .sibling_functions = siblings,
+        .sibling_trampoline = sibling_trampoline,
         .planned_function_id = std.math.add(u32, function_id_base, function_id) catch return Error.ResourceLimit,
         .exchange_continuation = imports.exchange_continuation,
         .set_location = imports.set_location,
@@ -301,6 +504,8 @@ fn lowerFunction(
         .call_aux_local = call_func_local + 4,
         .call_cached_closure_local = call_func_local + 5,
         .constant_array_local = call_func_local + 6,
+        .live_continuation_local = call_func_local + 7,
+        .last_line_local = call_func_local + 8,
         .call_continuations = &.{},
         .continuation_indices = &.{},
         .string_keys = string_keys,
@@ -309,6 +514,16 @@ fn lowerFunction(
         diagnostics.recordPhase(@errorName(err), "cluster index");
         return err;
     };
+    dumpFunctionIr(allocator, snapshot, function_id, function, proto, &plan, slots, numeric_folded);
+    {
+        var folded_id: u32 = 0;
+        while (folded_id < numeric_folded.len) : (folded_id += 1) {
+            if (numeric_folded[folded_id] and plan.clusterAt(folded_id) != null) {
+                diagnostics.trace("num cluster");
+                return Error.UnsupportedControlFlow;
+            }
+        }
+    }
     plan.indexBlocks(context) catch |err| {
         diagnostics.recordPhase(@errorName(err), "block index");
         return err;
@@ -377,6 +592,7 @@ fn lowerFunction(
     }
 
     try context.emitReloadBase();
+    try context.emitCacheConstantArray();
     if (call_continuations.len == 0) {
         try body.i32Const(allocator, @intCast(function.entry_block));
         try body.localSet(allocator, context.dispatch_local);
@@ -440,7 +656,10 @@ fn lowerFunction(
     const case_count: u32 = @intCast(cases.items.len);
     const block_plus_cont = std.math.add(u32, function.block_count, @intCast(call_continuations.len)) catch
         return Error.ResourceLimit;
-    const mode = try dispatchMode(case_count, block_plus_cont);
+    const mode = dispatchMode(case_count, block_plus_cont) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "dispatch");
+        return err;
+    };
     const nest = case_count + 1;
     var opened: u32 = 0;
     while (opened < nest) : (opened += 1)
@@ -498,6 +717,27 @@ fn lowerFunction(
     return object.defineFunction(symbol_name, imports.generated_type, wasm.symbol.visibility_hidden, body);
 }
 
+fn directDispatchTrampoline(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    siblings: []const wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    const count = siblings.len;
+    if (count <= backend_context.max_inline_direct_siblings or count > backend_context.max_direct_dispatch_arms)
+        return null;
+    const direct = imports.count_direct_call orelse return null;
+    const indirect = imports.count_indirect_call orelse return null;
+    return try backend_context.emitDirectDispatchTrampoline(
+        allocator,
+        object,
+        imports.generated_type,
+        direct,
+        indirect,
+        siblings,
+    );
+}
+
 fn reserveNamedFunction(
     allocator: std.mem.Allocator,
     object: *wasm.Object,
@@ -530,6 +770,7 @@ fn buildProtoIdentityMap(allocator: std.mem.Allocator, snapshot: snapshot_v1.Sna
 }
 
 pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_id: u32) Error![]u8 {
+    resetIrDump();
     diagnostics.reset();
     diagnostics.enterFunction(function_id);
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
@@ -552,12 +793,13 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
-    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, proto_id_by_bytecode_id, &string_keys, null, &.{});
+    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null);
     try emitStringKeyData(&object, string_keys);
     return object.emit();
 }
 
 pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Error![]u8 {
+    resetIrDump();
     diagnostics.reset();
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
     try snapshot_v1.validateModel(snapshot);
@@ -582,6 +824,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1)
         function_refs[function_id] = try reserveNamedFunction(allocator, &object, imports, function_id);
 
+    const trampoline = try directDispatchTrampoline(allocator, &object, imports, function_refs);
     function_id = 0;
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{function_id});
@@ -599,6 +842,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
             &string_keys,
             function_refs[function_id],
             function_refs,
+            trampoline,
         );
     }
     try emitStringKeyData(&object, string_keys);
@@ -1002,6 +1246,7 @@ fn emitStaticPackageMetadata(
 }
 
 pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u8) Error![]u8 {
+    resetIrDump();
     diagnostics.reset();
     const package = try static_package_v1.parse(package_bytes);
     const function_bases = try allocator.alloc(u32, @intCast(package.module_count));
@@ -1052,6 +1297,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
         }
     }
 
+    const trampoline = try directDispatchTrampoline(allocator, &object, imports, function_refs);
     module_id = 0;
     while (module_id < package.module_count) : (module_id += 1) {
         const module = try package.module(module_id);
@@ -1077,6 +1323,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
                 &string_keys,
                 function_refs[@intCast(global_function_id)],
                 function_refs,
+                trampoline,
             );
         }
     }

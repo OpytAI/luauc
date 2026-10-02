@@ -383,6 +383,14 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
             diagnostic,
         );
     }
+    if (backend_result.diagnostic != 0 and backend_result.diagnostic_size != 0) {
+        const dump_pointer: [*]const u8 = @ptrFromInt(backend_result.diagnostic);
+        const owned = allocator.dupe(u8, dump_pointer[0..backend_result.diagnostic_size]) catch null;
+        if (owned) |bytes| {
+            result.diagnostic = @intCast(@intFromPtr(bytes.ptr));
+            result.diagnostic_size = @intCast(bytes.len);
+        }
+    }
     const object_pointer: [*]const u8 = @ptrFromInt(backend_result.data);
     const object = object_pointer[0..backend_result.size];
     const linked = linker.link(allocator, slot.pack.?, object, profile, .{}, .{

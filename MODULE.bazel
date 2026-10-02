@@ -61,10 +61,12 @@ http_archive(
         "//third_party/luau:patches/0018-aot-semantic-type-fallbacks.patch",
         "//third_party/luau:patches/0019-aot-literal-and-namecall-fallbacks.patch",
         "//third_party/luau:patches/0020-aot-goto-labels.patch",
+        "//third_party/luau:patches/0021-aot-vector-fallbacks.patch",
+        "//third_party/luau:patches/0022-aot-straight-add-chain.patch",
     ],
     # Bazel 9 caches this archive by the attribute text. Patch file bytes are not part of that key.
     # Keep the digest below equal to the patchset sha256 so a patch edit fetches Luau again.
-    patch_cmds = ["true # patchset cde6e846a45c3fc9d3315a45175d7b32a9fb4a1a32489fb8c29eed5e1d07eae6"],
+    patch_cmds = ["true # patchset 617b453d3f2f9d91e7c8d969be40be0f608bc76f46acc6a5ab483d1ee3d11934"],
     sha256 = "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     strip_prefix = "luau-0.725",
     type = "tar.gz",

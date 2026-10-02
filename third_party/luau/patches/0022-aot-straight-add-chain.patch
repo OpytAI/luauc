@@ -1,0 +1,308 @@
+diff --git a/CodeGen/src/IrTranslation.h b/CodeGen/src/IrTranslation.h
+--- a/CodeGen/src/IrTranslation.h
++++ b/CodeGen/src/IrTranslation.h
+@@ -83,5 +83,12 @@
+ void beforeInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
+ void afterInstForNLoop(IrBuilder& build, const Instruction* pc);
+ 
++// Straight-line in-place K arithmetic shares one number check and one paired fallback.
++// The main path stays inline adds. The fallback is SET_SAVEDPC + DO_ARITH for every step.
++void resetNumericChain();
++bool numericChainIsOpen();
++bool numericChainShouldContinue(IrBuilder& build, const Instruction* pc, int pcpos);
++void closeNumericChain(IrBuilder& build, int rejoinPc);
++
+ } // namespace CodeGen
+ } // namespace Luau
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -586,6 +586,239 @@
+         build.beginBlock(next);
+ }
+ 
++// One number check covers a straight run of in-place K arithmetic. Number op number stays a
++// number, so later steps on the main path do not check again. The miss path is one fallback
++// block of SET_SAVEDPC + DO_ARITH pairs, in order, then a jump to the first instruction that
++// is not part of the run. A metamethod on step N is still reached with that step's pc.
++static constexpr uint32_t kNumericChainStepLimit = 28000;
++static constexpr uint32_t kNumericChainMainLimit = 48000;
++
++struct NumericChainStep
++{
++    int pcpos;
++    int ra;
++    IrOp opb;
++    IrOp opc;
++    TMS tm;
++};
++
++static bool numericChainOpen = false;
++static int numericChainRa = -1;
++static IrOp numericChainFallback;
++static std::vector<NumericChainStep> numericChainSteps;
++
++static bool inPlaceNumberK(IrBuilder& build, int ra, int rb, int rc, IrOp opc, TMS tm, BytecodeTypes bcTypes)
++{
++    if (ra != rb || rb < 0 || rc != -1 || opc.kind != IrOpKind::VmConst)
++        return false;
++
++    switch (tm)
++    {
++    case TM_ADD:
++    case TM_SUB:
++    case TM_MUL:
++    case TM_DIV:
++    case TM_IDIV:
++    case TM_MOD:
++        break;
++    default:
++        return false;
++    }
++
++    if (bcTypes.a == LBC_TYPE_VECTOR || bcTypes.b == LBC_TYPE_VECTOR)
++        return false;
++    if (isUserdataBytecodeType(bcTypes.a) || isUserdataBytecodeType(bcTypes.b))
++        return false;
++
++    CODEGEN_ASSERT(build.function.proto);
++    TValue protok = build.function.proto->k[vmConstOp(opc)];
++    return protok.tt == LUA_TNUMBER;
++}
++
++static TMS numericChainTm(LuauOpcode op)
++{
++    switch (op)
++    {
++    case LOP_ADDK:
++        return TM_ADD;
++    case LOP_SUBK:
++        return TM_SUB;
++    case LOP_MULK:
++        return TM_MUL;
++    case LOP_DIVK:
++        return TM_DIV;
++    case LOP_MODK:
++        return TM_MOD;
++    case LOP_IDIVK:
++        return TM_IDIV;
++    default:
++        return TM_N;
++    }
++}
++
++static void ensureNumericChainBytecodeBlock(IrBuilder& build)
++{
++    IrBlock& active = build.function.blocks[build.activeBlockIdx];
++    if (active.start == ~0u)
++        return;
++    const uint32_t count = uint32_t(build.function.instructions.size()) - active.start;
++    if (active.kind == IrBlockKind::Bytecode && count < kNumericChainMainLimit)
++        return;
++
++    IrOp cont = build.block(IrBlockKind::Bytecode);
++    build.inst(IrCmd::JUMP, cont);
++    build.beginBlock(cont);
++}
++
++static void emitInPlaceNumericBody(IrBuilder& build, int ra, IrOp opb, IrOp opc, TMS tm)
++{
++    IrOp vb = loadDoubleOrConstant(build, opb);
++    IrOp vc = loadDoubleOrConstant(build, opc);
++    IrOp result;
++
++    switch (tm)
++    {
++    case TM_ADD:
++        result = build.inst(IrCmd::ADD_NUM, vb, vc);
++        break;
++    case TM_SUB:
++        result = build.inst(IrCmd::SUB_NUM, vb, vc);
++        break;
++    case TM_MUL:
++        result = build.inst(IrCmd::MUL_NUM, vb, vc);
++        break;
++    case TM_DIV:
++        result = build.inst(IrCmd::DIV_NUM, vb, vc);
++        break;
++    case TM_IDIV:
++        result = build.inst(IrCmd::IDIV_NUM, vb, vc);
++        break;
++    case TM_MOD:
++        result = build.inst(IrCmd::MOD_NUM, vb, vc);
++        break;
++    default:
++        CODEGEN_ASSERT(!"Unsupported numeric chain op");
++    }
++
++    // ra == rb, so the register already carries the number tag when the check passed.
++    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(ra), result);
++}
++
++static bool translateInPlaceNumericChain(IrBuilder& build, int ra, int rb, int rc, IrOp opb, IrOp opc, int pcpos, TMS tm, BytecodeTypes bcTypes)
++{
++    if (!inPlaceNumberK(build, ra, rb, rc, opc, tm, bcTypes))
++        return false;
++    if (numericChainOpen && numericChainRa != ra)
++        return false;
++    if (numericChainOpen && numericChainSteps.size() >= kNumericChainStepLimit)
++        return false;
++
++    if (!numericChainOpen)
++    {
++        ensureNumericChainBytecodeBlock(build);
++        numericChainFallback = build.fallbackBlock(pcpos);
++        numericChainRa = ra;
++        numericChainOpen = true;
++        IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
++        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TNUMBER), numericChainFallback);
++    }
++    else
++    {
++        ensureNumericChainBytecodeBlock(build);
++    }
++
++    emitInPlaceNumericBody(build, ra, opb, opc, tm);
++    numericChainSteps.push_back({pcpos, ra, opb, opc, tm});
++    return true;
++}
++
++void resetNumericChain()
++{
++    numericChainOpen = false;
++    numericChainRa = -1;
++    numericChainFallback = IrOp{};
++    numericChainSteps.clear();
++}
++
++bool numericChainIsOpen()
++{
++    return numericChainOpen;
++}
++
++bool numericChainShouldContinue(IrBuilder& build, const Instruction* pc, int pcpos)
++{
++    if (!numericChainOpen || build.interruptRequested)
++        return false;
++    if (numericChainSteps.size() >= kNumericChainStepLimit)
++        return false;
++    // A jump into the next instruction would skip the chain's single number check.
++    if (pcpos < 0 || uint32_t(pcpos) >= build.instIndexToBlock.size() || build.instIndexToBlock[uint32_t(pcpos)] != ~0u)
++        return false;
++
++    const TMS tm = numericChainTm(LuauOpcode(LUAU_INSN_OP(*pc)));
++    if (tm == TM_N)
++        return false;
++
++    const int ra = LUAU_INSN_A(*pc);
++    const int rb = LUAU_INSN_B(*pc);
++    if (ra != numericChainRa)
++        return false;
++
++    BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
++    return inPlaceNumberK(build, ra, rb, -1, build.vmConst(LUAU_INSN_C(*pc)), tm, bcTypes);
++}
++
++void closeNumericChain(IrBuilder& build, int rejoinPc)
++{
++    if (!numericChainOpen)
++        return;
++
++    CODEGEN_ASSERT(!build.inTerminatedBlock);
++    CODEGEN_ASSERT(!numericChainSteps.empty());
++    CODEGEN_ASSERT(numericChainFallback.kind == IrOpKind::Block);
++
++    IrOp rejoin;
++    if (rejoinPc >= 0)
++    {
++        const uint32_t existing = build.instIndexToBlock[uint32_t(rejoinPc)];
++        if (existing != ~0u)
++        {
++            rejoin = IrOp{IrOpKind::Block, existing};
++        }
++        else
++        {
++            rejoin = build.block(IrBlockKind::Bytecode);
++            build.instIndexToBlock[uint32_t(rejoinPc)] = rejoin.index;
++            build.function.blockOp(rejoin).startpc = uint32_t(rejoinPc);
++        }
++    }
++    else
++    {
++        rejoin = build.block(IrBlockKind::Bytecode);
++    }
++
++    build.inst(IrCmd::JUMP, rejoin);
++    build.beginBlock(numericChainFallback);
++
++    for (const NumericChainStep& step : numericChainSteps)
++    {
++        build.inst(IrCmd::SET_SAVEDPC, build.constUint(step.pcpos + 1));
++        build.inst(IrCmd::DO_ARITH, build.vmReg(step.ra), step.opb, step.opc, build.constInt(step.tm));
++    }
++
++    build.inst(IrCmd::JUMP, rejoin);
++
++    if (rejoinPc < 0)
++    {
++        // Bytecode that ends inside the chain has no following instruction. Terminate the rejoin
++        // so the fallback target is a real block. Luau functions end with RETURN, so this is idle.
++        build.beginBlock(rejoin);
++        build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(0));
++    }
++
++    resetNumericChain();
++}
++
+ static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fallback, int ra, IrOp opb, IrOp opc, TMS tm, int pcpos)
+ {
+     if (fallback.kind != IrOpKind::None)
+@@ -737,6 +970,9 @@
+     }
+ 
+     // fast-path: number
++    if (translateInPlaceNumericChain(build, ra, rb, rc, opb, opc, pcpos, tm, bcTypes))
++        return;
++
+     if (rb != -1)
+     {
+         IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+diff --git a/CodeGen/src/IrBuilder.cpp b/CodeGen/src/IrBuilder.cpp
+--- a/CodeGen/src/IrBuilder.cpp
++++ b/CodeGen/src/IrBuilder.cpp
+@@ -139,6 +139,8 @@
+ 
+ void IrBuilder::buildFunctionIr(Proto* proto)
+ {
++    resetNumericChain();
++
+     function.proto = proto;
+     function.variadic = proto->is_vararg != 0;
+ 
+@@ -224,6 +226,16 @@
+         i = nexti;
+         CODEGEN_ASSERT(i <= proto->sizecode);
+ 
++        // Close before the fallthrough jump and before the next pc is mapped, so the paired
++        // fallback is not attributed to the rejoin instruction.
++        if (numericChainIsOpen())
++        {
++            const bool hasNext = i < proto->sizecode;
++            const bool cont = hasNext && numericChainShouldContinue(*this, &proto->code[i], i);
++            if (!cont)
++                closeNumericChain(*this, hasNext ? i : -1);
++        }
++
+         // If we are going into a new block at the next instruction and it's a fallthrough, jump has to be placed to mark block termination
+         if (i < int(instIndexToBlock.size()) && instIndexToBlock[i] != kNoAssociatedBlockIndex)
+         {
+@@ -236,6 +248,9 @@
+             function.bcMapping[pcIndex].irLocation = ~0u;
+     }
+ 
++    if (numericChainIsOpen())
++        closeNumericChain(*this, -1);
++
+     // Now that all has been generated, compute use counts
+     updateUseCounts(function);
+ }

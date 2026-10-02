@@ -1049,11 +1049,461 @@ fn emitInlineVectorCreate(self: anytype, pattern: FastcallPattern) Error!void {
     }
 }
 
+fn numericOperandOk(self: anytype, encoded: u32) Error!bool {
+    if (encoded == lbf_operand_none)
+        return false;
+    if (encoded < 0x8000_0000)
+        return encoded < self.proto.max_stack_size;
+    const index = encoded & 0x7fff_ffff;
+    if (index >= self.proto.vm_constant_count)
+        return false;
+    const value = try self.snapshot.vmConstant(self.proto, index);
+    return value.kind == .number;
+}
+
+fn numericFastcallCanInline(self: anytype, pattern: FastcallPattern) Error!bool {
+    if (!try numericOperandOk(self, pattern.source))
+        return false;
+    if (pattern.parameter_count >= 2 and !try numericOperandOk(self, pattern.argument_two))
+        return false;
+    if (pattern.parameter_count >= 3 and !try numericOperandOk(self, pattern.argument_three))
+        return false;
+    // pow keeps the running product in the destination and reloads the base.
+    if (pattern.builtin_id == 21 and pattern.destination == pattern.source)
+        return false;
+    return true;
+}
+
+fn emitEncodedF64(self: anytype, encoded: u32) Error!void {
+    if (encoded >= 0x8000_0000) {
+        const value = try self.snapshot.vmConstant(self.proto, encoded & 0x7fff_ffff);
+        if (value.kind != .number)
+            return Error.InvalidOperandType;
+        try self.body.f64Const(self.allocator, @as(f64, @bitCast(value.bits0)));
+        return;
+    }
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, encoded * tvalue_size);
+}
+
+fn emitFastcallLiveGate(self: anytype, pattern: FastcallPattern) Error!void {
+    // Constants are not stack slots. Destination is always a register.
+    try emitSlotBelowTop(self, pattern.destination);
+    if (pattern.source < 0x8000_0000) {
+        try emitSlotBelowTop(self, pattern.source);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+    }
+    if (pattern.argument_two < 0x8000_0000) {
+        try emitSlotBelowTop(self, pattern.argument_two);
+        try self.body.opcode(self.allocator, 0x71);
+    }
+    if (pattern.argument_three < 0x8000_0000) {
+        try emitSlotBelowTop(self, pattern.argument_three);
+        try self.body.opcode(self.allocator, 0x71);
+    }
+}
+
+fn emitFastcallTagGate(self: anytype, pattern: FastcallPattern) Error!void {
+    var emitted = false;
+    if (pattern.source < 0x8000_0000) {
+        try emitSlotTagEquals(self, pattern.source, lua_tag_number);
+        emitted = true;
+    }
+    if (pattern.argument_two < 0x8000_0000) {
+        try emitSlotTagEquals(self, pattern.argument_two, lua_tag_number);
+        if (emitted)
+            try self.body.opcode(self.allocator, 0x71); // i32.and
+        emitted = true;
+    }
+    if (pattern.argument_three < 0x8000_0000) {
+        try emitSlotTagEquals(self, pattern.argument_three, lua_tag_number);
+        if (emitted)
+            try self.body.opcode(self.allocator, 0x71);
+        emitted = true;
+    }
+    if (!emitted)
+        try self.body.i32Const(self.allocator, 1);
+}
+
+fn emitDestAddress(self: anytype, destination: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(destination * tvalue_size));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+}
+
+fn emitFinishNumber(self: anytype, destination: u32) Error!void {
+    try self.body.f64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, destination * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+}
+
+fn emitF64InRange(self: anytype, encoded: u32, low: f64, high: f64) Error!void {
+    try emitEncodedF64(self, encoded);
+    try self.body.f64Const(self.allocator, low);
+    try self.body.f64Ge(self.allocator);
+    try emitEncodedF64(self, encoded);
+    try self.body.f64Const(self.allocator, high);
+    try self.body.f64Le(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+}
+
+fn emitTruncSatI32(self: anytype, encoded: u32) Error!void {
+    try emitEncodedF64(self, encoded);
+    try self.body.opcode(self.allocator, 0x9d); // f64.trunc
+    try self.body.opcode(self.allocator, 0xfc);
+    try self.body.opcode(self.allocator, 0x02); // i32.trunc_sat_f64_s
+}
+
+fn emitTruncSatU32(self: anytype, encoded: u32) Error!void {
+    try emitEncodedF64(self, encoded);
+    try self.body.opcode(self.allocator, 0x9d); // f64.trunc
+    try self.body.opcode(self.allocator, 0xfc);
+    try self.body.opcode(self.allocator, 0x03); // i32.trunc_sat_f64_u
+}
+
+fn emitInlineFloor(self: anytype, pattern: FastcallPattern) Error!void {
+    try emitDestAddress(self, pattern.destination);
+    try emitEncodedF64(self, pattern.source);
+    try self.body.opcode(self.allocator, 0x9c); // f64.floor
+    try emitFinishNumber(self, pattern.destination);
+}
+
+fn emitInlineLerp(self: anytype, pattern: FastcallPattern) Error!void {
+    // (t == 1) ? b : a + (b - a) * t. The address stays under the if.
+    try emitDestAddress(self, pattern.destination);
+    try emitEncodedF64(self, pattern.argument_three);
+    try self.body.f64Const(self.allocator, 1);
+    try self.body.f64Eq(self.allocator);
+    try self.body.ifF64(self.allocator);
+    try emitEncodedF64(self, pattern.argument_two);
+    try self.body.else_(self.allocator);
+    try emitEncodedF64(self, pattern.source);
+    try emitEncodedF64(self, pattern.argument_two);
+    try emitEncodedF64(self, pattern.source);
+    try self.body.opcode(self.allocator, 0xa1); // f64.sub
+    try emitEncodedF64(self, pattern.argument_three);
+    try self.body.opcode(self.allocator, 0xa2); // f64.mul
+    try self.body.f64Add(self.allocator);
+    try self.body.end(self.allocator);
+    try emitFinishNumber(self, pattern.destination);
+}
+
+fn emitInlineClamp(self: anytype, pattern: FastcallPattern) Error!void {
+    // min <= max. NaN makes the compare fail, so the fastcall stores nothing.
+    try emitEncodedF64(self, pattern.argument_two);
+    try emitEncodedF64(self, pattern.argument_three);
+    try self.body.f64Le(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    // r = v < min ? min : v; then r = r > max ? max : r. NaN v stays NaN.
+    try emitDestAddress(self, pattern.destination);
+    try emitEncodedF64(self, pattern.source);
+    try emitEncodedF64(self, pattern.argument_two);
+    try self.body.f64Lt(self.allocator);
+    try self.body.ifF64(self.allocator);
+    try emitEncodedF64(self, pattern.argument_two);
+    try self.body.else_(self.allocator);
+    try emitEncodedF64(self, pattern.source);
+    try emitEncodedF64(self, pattern.argument_three);
+    try self.body.f64Gt(self.allocator);
+    try self.body.ifF64(self.allocator);
+    try emitEncodedF64(self, pattern.argument_three);
+    try self.body.else_(self.allocator);
+    try emitEncodedF64(self, pattern.source);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try emitFinishNumber(self, pattern.destination);
+    try self.body.end(self.allocator); // min <= max
+}
+
+fn emitInlinePow(self: anytype, pattern: FastcallPattern) Error!void {
+    try emitF64InRange(self, pattern.argument_two, 0, 32);
+    try emitEncodedF64(self, pattern.argument_two);
+    try emitEncodedF64(self, pattern.argument_two);
+    try self.body.opcode(self.allocator, 0x9d); // f64.trunc
+    try self.body.f64Eq(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try emitTruncSatU32(self, pattern.argument_two);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try emitDestAddress(self, pattern.destination);
+    try self.body.f64Const(self.allocator, 1);
+    try self.body.f64Store(self.allocator, 3, 0);
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.branchIf(self.allocator, 1);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, pattern.destination * tvalue_size);
+    try emitEncodedF64(self, pattern.source);
+    try self.body.opcode(self.allocator, 0xa2); // f64.mul
+    try self.body.f64Store(self.allocator, 3, pattern.destination * tvalue_size);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator); // loop
+    try self.body.end(self.allocator); // block
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.end(self.allocator); // integer exponent 0..32
+}
+
+fn emitEncodedWord(self: anytype, encoded: u32, high: bool) Error!void {
+    if (encoded >= 0x8000_0000) {
+        const value = try self.snapshot.vmConstant(self.proto, encoded & 0x7fff_ffff);
+        if (value.kind != .number)
+            return Error.InvalidOperandType;
+        const bits: u32 = @truncate(if (high) value.bits0 >> 32 else value.bits0);
+        try self.body.i32Const(self.allocator, @as(i32, @bitCast(bits)));
+        return;
+    }
+    try self.body.localGet(self.allocator, self.base_local);
+    const field: u32 = if (high) 4 else 0;
+    try self.body.i32Load(self.allocator, 2, encoded * tvalue_size + field);
+}
+
+fn emitInlineLdexp(self: anytype, pattern: FastcallPattern) Error!void {
+    // int(exp) truncates toward 0. Values outside i32 stay on the helper.
+    try emitF64InRange(self, pattern.argument_two, -2147483648.0, 2147483647.0);
+    try self.body.ifVoid(self.allocator);
+    try emitTruncSatI32(self, pattern.argument_two);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    // exp_bits is at most 2046. Keep the add inside i32 so a wrapped exponent cannot look normal.
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, -2046);
+    try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 2046);
+    try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try emitEncodedWord(self, pattern.source, true);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Const(self.allocator, 20);
+    try self.body.opcode(self.allocator, 0x76); // i32.shr_u
+    try self.body.i32Const(self.allocator, 0x7ff);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator); // exponent field != 0
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Const(self.allocator, 0x7ff);
+    try self.body.opcode(self.allocator, 0x47); // i32.ne
+    try self.body.opcode(self.allocator, 0x71);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Const(self.allocator, 0x7ff);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.opcode(self.allocator, 0x71);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Const(self.allocator, @as(i32, @bitCast(@as(u32, 0x800f_ffff))));
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Const(self.allocator, 20);
+    try self.body.opcode(self.allocator, 0x74); // i32.shl
+    try self.body.opcode(self.allocator, 0x72); // i32.or
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try emitEncodedWord(self, pattern.source, false);
+    try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size + 4);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, pattern.destination * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.end(self.allocator); // normal result
+    try self.body.end(self.allocator); // normal input
+    try self.body.end(self.allocator); // exponent delta fits in the normal range
+    try self.body.end(self.allocator); // exponent fits in i32
+}
+
+fn emitExtractMask(self: anytype) Error!void {
+    // ~(0xfffffffe << (w - 1)), with w already in call_closure_local and in 1..32.
+    try self.body.i32Const(self.allocator, @as(i32, @bitCast(@as(u32, 0xffff_fffe))));
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.opcode(self.allocator, 0x74); // i32.shl
+    try self.body.i32Const(self.allocator, -1);
+    try self.body.opcode(self.allocator, 0x73); // i32.xor
+}
+
+fn emitInlineExtract(self: anytype, pattern: FastcallPattern) Error!void {
+    try emitEncodedF64(self, pattern.source);
+    try self.body.f64Const(self.allocator, 0);
+    try self.body.f64Ge(self.allocator);
+    try emitEncodedF64(self, pattern.source);
+    try self.body.f64Const(self.allocator, 4294967296.0);
+    try self.body.f64Lt(self.allocator);
+    try self.body.opcode(self.allocator, 0x71);
+    try self.body.ifVoid(self.allocator);
+    try emitTruncSatU32(self, pattern.source);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try emitF64InRange(self, pattern.argument_two, -2147483648.0, 2147483647.0);
+    try self.body.ifVoid(self.allocator);
+    try emitTruncSatI32(self, pattern.argument_two);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    if (pattern.parameter_count == 2) {
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Const(self.allocator, 32);
+        try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+        try self.body.ifVoid(self.allocator);
+        try emitDestAddress(self, pattern.destination);
+        try self.body.localGet(self.allocator, self.call_func_local);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.opcode(self.allocator, 0x76); // i32.shr_u
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.opcode(self.allocator, 0x71);
+        try self.body.opcode(self.allocator, 0xb8); // f64.convert_i32_u
+        try emitFinishNumber(self, pattern.destination);
+        try self.body.end(self.allocator);
+    } else {
+        try emitF64InRange(self, pattern.argument_three, -2147483648.0, 2147483647.0);
+        try self.body.ifVoid(self.allocator);
+        try emitTruncSatI32(self, pattern.argument_three);
+        try self.body.localSet(self.allocator, self.call_closure_local);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Const(self.allocator, 31);
+        try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+        try self.body.opcode(self.allocator, 0x71);
+        try self.body.localGet(self.allocator, self.call_closure_local);
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+        try self.body.opcode(self.allocator, 0x71);
+        try self.body.localGet(self.allocator, self.call_closure_local);
+        try self.body.i32Const(self.allocator, 32);
+        try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+        try self.body.opcode(self.allocator, 0x71);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.localGet(self.allocator, self.call_closure_local);
+        try self.body.opcode(self.allocator, 0x6a); // i32.add
+        try self.body.i32Const(self.allocator, 32);
+        try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+        try self.body.opcode(self.allocator, 0x71);
+        try self.body.ifVoid(self.allocator);
+        try emitDestAddress(self, pattern.destination);
+        try self.body.localGet(self.allocator, self.call_func_local);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.opcode(self.allocator, 0x76); // i32.shr_u
+        try emitExtractMask(self);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+        try self.body.opcode(self.allocator, 0xb8); // f64.convert_i32_u
+        try emitFinishNumber(self, pattern.destination);
+        try self.body.end(self.allocator); // field and width
+        try self.body.end(self.allocator); // width fits in i32
+    }
+    try self.body.end(self.allocator); // field fits in i32
+    try self.body.end(self.allocator); // value fits in u32
+}
+
+fn emitInlineNumericBody(self: anytype, pattern: FastcallPattern) Error!void {
+    switch (pattern.builtin_id) {
+        12 => try emitInlineFloor(self, pattern),
+        15 => try emitInlineLdexp(self, pattern),
+        21 => try emitInlinePow(self, pattern),
+        34, 59 => try emitInlineExtract(self, pattern),
+        46 => try emitInlineClamp(self, pattern),
+        89 => try emitInlineLerp(self, pattern),
+        else => return Error.UnsupportedCommand,
+    }
+}
+
+fn emitInlineNumericFastcall(self: anytype, pattern: FastcallPattern) Error!void {
+    const starts_at_guard = (try self.instruction(pattern.start)).command == .check_safe_env;
+    const saved_id = pattern.start + @intFromBool(starts_at_guard);
+    const guarded_before = !starts_at_guard and pattern.start > 0 and
+        (try self.instruction(pattern.start - 1)).command == .check_safe_env;
+    try self.emitSavedPcLocation(try self.instruction(saved_id));
+    try self.body.i32Const(self.allocator, -1);
+    try self.body.localSet(self.allocator, self.status_local);
+
+    if (!guarded_before) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
+        try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
+        try self.body.i32Load(self.allocator, 2, 0);
+        try self.body.i32Load(self.allocator, 2, closure_env_offset);
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+    }
+
+    try self.emitReloadBase();
+    try emitFastcallLiveGate(self, pattern);
+    try self.body.ifVoid(self.allocator);
+    try emitFastcallTagGate(self, pattern);
+    try self.body.ifVoid(self.allocator);
+    try emitInlineNumericBody(self, pattern);
+    try self.body.end(self.allocator); // number tags
+    try self.body.end(self.allocator); // live slots
+    if (!guarded_before) {
+        try self.body.end(self.allocator); // safeenv
+        try self.body.end(self.allocator); // environment pointer
+    }
+
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, @intCast(pattern.fallback));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.else_(self.allocator);
+    if (pattern.finish > pattern.start and
+        (try self.instruction(pattern.finish - 1)).command == ir_cmd_adjust_stack_to_top)
+        try self.emitAdjustStackToTop();
+    try self.body.i32Const(self.allocator, @intCast(pattern.fast_target));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.end(self.allocator);
+
+    if (!self.rejoin_fallthrough) {
+        try self.body.branch(self.allocator, self.loop_branch_depth);
+    } else {
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+        try self.body.ifVoid(self.allocator);
+        try self.body.branch(self.allocator, self.loop_branch_depth + 1);
+        try self.body.end(self.allocator);
+    }
+}
+
 pub noinline fn emitFastcallCluster(self: anytype, pattern: FastcallPattern) Error!void {
     if (pattern.isStringByteRegister())
         return emitInlineStringByte(self, pattern);
     if (pattern.isVectorCreateRegister())
         return emitInlineVectorCreate(self, pattern);
+    if (pattern.isInlineNumericFastcall() and try numericFastcallCanInline(self, pattern))
+        return emitInlineNumericFastcall(self, pattern);
     const saved_id = pattern.start + @intFromBool((try self.instruction(pattern.start)).command == .check_safe_env);
     try self.emitSavedPcLocation(try self.instruction(saved_id));
     try self.body.localGet(self.allocator, 0);

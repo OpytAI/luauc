@@ -230,10 +230,16 @@ pub noinline fn emitFallbackNamecall(
     const pc = (try self.constant(pc_operand.value)).uintValue() orelse return Error.InvalidOperandType;
     const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
     const source = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
-    const key_bytes = (try self.stringKey(try self.operand(instruction_value, 3))) orelse
+    const key_operand = try self.operand(instruction_value, 3);
+    const key_bytes = (try self.stringKey(key_operand)) orelse
         return Error.InvalidOperandType;
     const key = try self.string_keys.intern(self.allocator, key_bytes);
     try self.emitPcLocation(pc);
+    // Strings and other non-tables hit __index in the type metatable. A miss keeps this helper.
+    try self.emitInlineNonTableNamecall(destination, source, key_operand.value);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(destination));
     try self.body.i32Const(self.allocator, @intCast(source));
@@ -241,13 +247,18 @@ pub noinline fn emitFallbackNamecall(
     try self.body.i32Const(self.allocator, @intCast(key.length));
     try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    try self.body.end(self.allocator);
 }
 pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTableNamecallPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
     try self.emitPcLocation(pattern.pc);
-    // Own slot or one table __index. A function __index, a chain longer than
-    // the walk, and a missing method stay on namecall_plain.
+    // Own slot or one table __index. A string receiver uses the type metatable.
+    // A function __index, a chain longer than the walk, and a missing method stay on namecall_plain.
     try self.emitInlineNamecallProbe(pattern.source, pattern.destination, pattern.key_constant);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.emitInlineNonTableNamecall(pattern.destination, pattern.source, pattern.key_constant);
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
@@ -258,6 +269,7 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
     try self.body.i32Const(self.allocator, @intCast(key.length));
     try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
@@ -327,17 +339,19 @@ pub noinline fn emitSetList(self: anytype, instruction_value: snapshot_v1.IrInst
     const count = try self.intConstant(try self.operand(instruction_value, 3));
     const start_index = try self.uintConstant(try self.operand(instruction_value, 4));
     const known_size_operand = try self.operand(instruction_value, 5);
-    if (count <= 0 or start_index == 0 or
+    if (count < -1 or count == 0 or start_index == 0 or
         (known_size_operand.kind != .constant and known_size_operand.kind != .undef))
         return Error.UnsupportedControlFlow;
     const known_size = if (known_size_operand.kind == .constant)
         try self.uintConstant(known_size_operand)
     else
         std.math.maxInt(u32);
-    const count_u32: u32 = @intCast(count);
-    if (count_u32 > @as(u32, self.proto.max_stack_size) - source or
-        (known_size_operand.kind == .constant and count_u32 > known_size -| (start_index - 1)))
-        return Error.UnsupportedControlFlow;
+    if (count > 0) {
+        const count_u32: u32 = @intCast(count);
+        if (count_u32 > @as(u32, self.proto.max_stack_size) - source or
+            (known_size_operand.kind == .constant and count_u32 > known_size -| (start_index - 1)))
+            return Error.UnsupportedControlFlow;
+    }
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(table));
     try self.body.i32Const(self.allocator, @intCast(source));

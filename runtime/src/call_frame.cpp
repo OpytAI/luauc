@@ -24,6 +24,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 static_assert(LUAUC_RUNTIME_V1_MULTRET == LUA_MULTRET, "Luau MULTRET sentinel drift");
@@ -33,6 +34,10 @@ static_assert(LUA_TVECTOR == 5, "vector tag");
 static_assert(offsetof(TValue, value) == 0, "TValue.value");
 static_assert(offsetof(TValue, extra) == 8, "TValue.extra holds vector lane 2");
 static_assert(offsetof(TValue, tt) == 12, "TValue.tt");
+static_assert(offsetof(GCheader, marked) == 1, "GCheader.marked");
+static_assert((1 << BLACKBIT) == 4, "GC black mask");
+static_assert(WHITEBITS == 3, "GC white mask");
+static_assert(LUA_TSTRING == 6, "collectable types start at string");
 static_assert(offsetof(lua_State, global) == 16, "lua_State.global");
 static_assert(offsetof(lua_State, ci) == 20, "lua_State.ci");
 static_assert(offsetof(CallInfo, aotstate) == 12, "CallInfo.aotstate");
@@ -100,6 +105,11 @@ static_assert(offsetof(LuaucRuntimeProtoV1, max_stack_size) == 59, "metadata max
 static_assert(offsetof(global_State, GCthreshold) == 36, "global_State.GCthreshold");
 static_assert(offsetof(global_State, totalbytes) == 40, "global_State.totalbytes");
 static_assert(offsetof(global_State, tmname) == 528, "global_State.tmname");
+static_assert(offsetof(global_State, mt) == 416, "global_State.mt");
+static_assert(offsetof(lua_State, namecall) == 68, "lua_State.namecall");
+static_assert(offsetof(Udata, metatable) == 8, "Udata.metatable");
+static_assert(LUA_T_COUNT == 14, "type tag count");
+static_assert(TM_NAMECALL == 3, "TM_NAMECALL");
 static_assert(TM_INDEX == 0, "TM_INDEX");
 static_assert(LUA_TFUNCTION == 8, "function tag");
 static_assert(LUA_CALLINFO_NATIVE == 4, "native callinfo flag");
@@ -113,6 +123,73 @@ static uint32_t gIndirectCalls;
 
 static void countRuntimeHelper() {
     gHelperCalls++;
+}
+
+// Temporary fuel profile. One line every 262144 helper entries. Remove before a proof that claims speed.
+struct FuelProf {
+    uint32_t prepare;
+    uint32_t lua;
+    uint32_t arith;
+    uint32_t tset;
+    uint32_t tget;
+    uint32_t ncall;
+    uint32_t dup;
+    uint32_t fast;
+    uint32_t concat;
+    uint32_t other;
+    const char *name[16];
+    uint32_t nameCount[16];
+};
+
+static FuelProf gFuelProf;
+
+static void flushFuelProf() {
+    const uint32_t total = gFuelProf.prepare + gFuelProf.arith + gFuelProf.tset + gFuelProf.tget +
+                           gFuelProf.ncall + gFuelProf.dup + gFuelProf.fast + gFuelProf.concat;
+    if ((total & 262143u) != 0)
+        return;
+    fprintf(stderr, "PROF p=%u lua=%u a=%u ts=%u tg=%u n=%u d=%u f=%u c=%u", gFuelProf.prepare,
+            gFuelProf.lua, gFuelProf.arith, gFuelProf.tset, gFuelProf.tget, gFuelProf.ncall, gFuelProf.dup,
+            gFuelProf.fast, gFuelProf.concat);
+    for (uint32_t index = 0; index < 16; ++index) {
+        if (!gFuelProf.name[index])
+            continue;
+        fprintf(stderr, " %s=%u", gFuelProf.name[index], gFuelProf.nameCount[index]);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+
+static void noteFuelProf(uint32_t *slot) {
+    *slot += 1;
+    flushFuelProf();
+}
+
+static void notePrepareName(const char *name) {
+    if (!name)
+        name = "-";
+    uint32_t smallest = 0;
+    for (uint32_t index = 0; index < 16; ++index) {
+        if (gFuelProf.name[index] == name) {
+            gFuelProf.nameCount[index] += 1;
+            return;
+        }
+        if (!gFuelProf.name[index]) {
+            gFuelProf.name[index] = name;
+            gFuelProf.nameCount[index] = 1;
+            return;
+        }
+        if (gFuelProf.nameCount[index] < gFuelProf.nameCount[smallest])
+            smallest = index;
+    }
+    // A one-off startup name yields its slot to a name that shows up later.
+    if (gFuelProf.nameCount[smallest] == 1) {
+        gFuelProf.other += 1;
+        gFuelProf.name[smallest] = name;
+        gFuelProf.nameCount[smallest] = 1;
+        return;
+    }
+    gFuelProf.other += 1;
 }
 
 static constexpr uint32_t AOT_FASTCALL_NO_OPERAND = UINT32_MAX;
@@ -668,6 +745,7 @@ extern "C" void luauc_runtime_v1_coverage_hit(lua_State *L, uint32_t siteId) {
 
 extern "C" void luauc_runtime_v1_dup_table(lua_State *L, uint32_t destinationRegister,
                                          uint32_t constantId) {
+    noteFuelProf(&gFuelProf.dup);
     Proto *proto = activeAotFrameProto(L, "table template clone");
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "table template clone");
     if (destination >= L->top)
@@ -762,6 +840,7 @@ extern "C" void luauc_runtime_v1_table_insert_append(lua_State *L, uint32_t tabl
 extern "C" void luauc_runtime_v1_table_set_string(lua_State *L, uint32_t tableRegister,
                                                 uint32_t sourceRegister, const char *keyPointer,
                                                 size_t keyLength) {
+    noteFuelProf(&gFuelProf.tset);
     Proto *proto = activeAotFrameProto(L, "string table set");
     TValue *tableValue = activeAotRegister(L, proto, tableRegister, "string table set");
     TValue *source = activeAotRegister(L, proto, sourceRegister, "string table set");
@@ -791,6 +870,7 @@ extern "C" void luauc_runtime_v1_table_set_string(lua_State *L, uint32_t tableRe
 extern "C" void luauc_runtime_v1_table_get_string(lua_State *L, uint32_t destinationRegister,
                                                 uint32_t tableRegister, const char *keyPointer,
                                                 size_t keyLength) {
+    noteFuelProf(&gFuelProf.tget);
     Proto *proto = activeAotFrameProto(L, "string table get");
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "string table get");
     TValue *tableValue = activeAotRegister(L, proto, tableRegister, "string table get");
@@ -819,6 +899,7 @@ extern "C" void luauc_runtime_v1_table_get_string(lua_State *L, uint32_t destina
 extern "C" void luauc_runtime_v1_namecall_plain(lua_State *L, uint32_t destinationRegister,
                                               uint32_t sourceRegister, const char *keyPointer,
                                               size_t keyLength) {
+    noteFuelProf(&gFuelProf.ncall);
     Proto *proto = activeAotFrameProto(L, "namecall");
     if (destinationRegister == UINT32_MAX)
         luaG_runerror(L, "strict AOT namecall destination pair overflow");
@@ -1147,6 +1228,7 @@ extern "C" int32_t luauc_runtime_v1_fastcall(lua_State *L, uint32_t builtinId,
                                            uint32_t destinationRegister, uint32_t sourceRegister,
                                            uint32_t argumentTwo, uint32_t argumentThree,
                                            int32_t resultCount, int32_t parameterCount) {
+    noteFuelProf(&gFuelProf.fast);
     Proto *proto = activeAotFrameProto(L, "fastcall");
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "fastcall");
     TValue *source = activeAotRegister(L, proto, sourceRegister, "fastcall");
@@ -1331,11 +1413,26 @@ extern "C" uint32_t luauc_runtime_v1_type_name(lua_State *L, uint32_t destinatio
 extern "C" void luauc_runtime_v1_set_list(lua_State *L, uint32_t tableRegister, uint32_t sourceStart,
                                         uint32_t count, uint32_t startIndex, uint32_t knownSize) {
     Proto *proto = activeAotFrameProto(L, "SETLIST");
+    uint32_t resolved = count;
+    uint32_t sizeLimit = knownSize;
+    if (int32_t(count) == -1) {
+        // Match LOP_SETLIST: C == 0 means copy every value from the source through L->top.
+        if (!L->base || !L->ci || L->top < L->base + sourceStart)
+            luaG_runerror(L, "strict AOT SETLIST rejected the validated array range");
+        resolved = uint32_t(L->top - (L->base + sourceStart));
+        L->top = L->ci->top;
+        sizeLimit = UINT32_MAX;
+    }
     LuaTable *table = activeAotTable(L, proto, tableRegister, false, "SETLIST");
-    if (count == 0 || sourceStart >= proto->maxstacksize ||
-        count > uint32_t(proto->maxstacksize) - sourceStart || startIndex == 0 ||
-        L->base + sourceStart + count > L->top)
+    if (sourceStart >= proto->maxstacksize || startIndex == 0 ||
+        (int32_t(count) != -1 && (resolved == 0 || resolved > uint32_t(proto->maxstacksize) - sourceStart ||
+                                     L->base + sourceStart + resolved > L->top)) ||
+        (int32_t(count) == -1 && resolved > uint32_t(proto->maxstacksize) - sourceStart))
         luaG_runerror(L, "strict AOT SETLIST rejected the validated array range");
+    if (resolved == 0)
+        return;
+    count = resolved;
+    knownSize = sizeLimit;
 
     const uint64_t last = uint64_t(startIndex) + count - 1;
     if (last > INT_MAX)
@@ -1402,6 +1499,7 @@ extern "C" void luauc_runtime_v1_table_len(lua_State *L, uint32_t destinationReg
 
 extern "C" void luauc_runtime_v1_concat(lua_State *L, uint32_t destinationRegister,
                                       uint32_t sourceStart, uint32_t count) {
+    noteFuelProf(&gFuelProf.concat);
     Proto *proto = activeAotFrameProto(L, "concatenation");
     if (count < 2 || sourceStart >= proto->maxstacksize ||
         count > uint32_t(proto->maxstacksize) - sourceStart)
@@ -1659,6 +1757,7 @@ extern "C" uint32_t luauc_runtime_v1_interrupt(lua_State *L, uint32_t line) {
 extern "C" void luauc_runtime_v1_do_arith(lua_State *L, uint32_t destinationRegister,
                                         uint32_t lhsRegister, uint32_t rhsRegister,
                                         uint32_t operation) {
+    noteFuelProf(&gFuelProf.arith);
     Proto *proto = activeAotFrameProto(L, "arithmetic");
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "arithmetic");
     const TValue *lhs = activeAotValueOperand(L, proto, lhsRegister, "arithmetic");
@@ -2041,6 +2140,15 @@ extern "C" const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_c
         luaG_runerror(L, "strict AOT prepared call target is outside the compiled caller frame");
 
     StkId function = L->base + functionRegister;
+    gFuelProf.prepare += 1;
+    if (ttisfunction(function)) {
+        Closure *closure = clvalue(function);
+        if (closure->isC)
+            notePrepareName(closure->c.debugname);
+        else
+            gFuelProf.lua += 1;
+    }
+    flushFuelProf();
     if (parameterCount == LUAUC_RUNTIME_V1_MULTRET) {
         if (L->top < function + 1)
             luaG_runerror(L, "strict AOT prepared dynamic call starts above the live stack top");

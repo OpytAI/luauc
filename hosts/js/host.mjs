@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -9,7 +11,7 @@ function hexBytes(hex) {
 }
 
 // Must match compiler/ir/frontend_identity_v1.zig frontend_contract_sha256.
-const FRONTEND_CONTRACT = hexBytes("639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f");
+const FRONTEND_CONTRACT = hexBytes("ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5");
 
 function bytes(value) {
   if (typeof value === "string") return encoder.encode(value);
@@ -257,6 +259,8 @@ export async function compilePackage(compilerBytes, profileBytes, packBytes, mod
         : "";
       if (compileStatus || view.getUint32(16, true))
         throw new Error(`compile failed with ${compileStatus}/${view.getUint32(16, true)}: ${diagnostic}`);
+      if (diagnostic.startsWith("FUNC line"))
+        writeFileSync("/tmp/luauc-ir83.txt", diagnostic);
       const dataPointer = view.getUint32(0, true);
       const dataSize = view.getUint32(4, true);
       const artifact = copyBytes(new Uint8Array(api.memory.buffer, dataPointer, dataSize));

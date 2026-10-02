@@ -26,8 +26,14 @@ pub noinline fn emitStatusReturn(self: anytype, status: i32) Error!void {
     try self.body.return_(self.allocator);
 }
 pub noinline fn emitInstructionResultSet(self: anytype, instruction_id: u32) Error!void {
-    if (instruction_id >= self.slots.len or self.slots[instruction_id].shape == .none)
+    if (instruction_id >= self.slots.len) {
+        diagnostics.trace("slot len");
         return Error.InvalidInstructionResult;
+    }
+    if (self.slots[instruction_id].shape == .none) {
+        diagnostics.trace("slot none");
+        return Error.InvalidInstructionResult;
+    }
     try self.body.localSet(self.allocator, self.slots[instruction_id].first);
 }
 pub noinline fn emitLoadTag(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
@@ -224,7 +230,10 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
     }
     if (instruction_id + 1 < self.function.instruction_count and
         (try self.instruction(instruction_id + 1)).command == .set_upvalue)
-        _ = try self.setUpvaluePattern(instruction_id + 1);
+        _ = self.setUpvaluePattern(instruction_id + 1) catch |err| {
+            diagnostics.trace("ltv upv");
+            return err;
+        };
     if (instruction_value.operand_count != 1 and instruction_value.operand_count != 2 and
         instruction_value.operand_count != 3)
         return Error.InvalidOperandCount;
@@ -240,10 +249,24 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
         if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
             if (address_offset != 0 or
                 !try self.plan.validateNodeUse(self.snapshot, self.function, source.value, instruction_id))
+            {
+                diagnostics.trace("ltv node");
                 return Error.UnsupportedControlFlow;
+            }
         } else if (producer.command == abi.ir_cmd_get_arr_addr and
             !try self.plan.validateArrayAddressUse(self.snapshot, self.function, source.value, instruction_id))
         {
+            const table = try self.operand(producer, 0);
+            const proved: u32 = @intCast(@intFromBool(table.kind == .instruction and
+                self.plan.isProvenTablePointer(table.value)));
+            const guarded: u32 = @intCast(@intFromBool(self.plan.isGuardedArrayAddress(source.value)));
+            var detail: [32]u8 = undefined;
+            const text = std.fmt.bufPrint(&detail, "ltv arr g{d} p{d} o{d}", .{
+                guarded,
+                proved,
+                address_offset,
+            }) catch "ltv arr";
+            diagnostics.trace(text);
             return Error.UnsupportedControlFlow;
         }
     }
@@ -407,6 +430,92 @@ fn emitUpvalueTValueStore(self: anytype, upvalue_index: u32, destination: snapsh
         try self.body.i64Store(self.allocator, 3, store_offset);
     }
 }
+fn emitRegisterTValueStore(self: anytype, source_register: u32, destination: snapshot_v1.IrOperand, destination_offset: u32) Error!void {
+    var half: u32 = 0;
+    while (half < 2) : (half += 1) {
+        const byte = half * 8;
+        try self.emitTValueAddress(destination);
+        try self.body.localGet(self.allocator, self.base_local);
+        const source_offset = std.math.add(u32, source_register * abi.tvalue_size, byte) catch return Error.ResourceLimit;
+        try self.body.i64Load(self.allocator, 3, source_offset);
+        const store_offset = std.math.add(u32, destination_offset, byte) catch return Error.ResourceLimit;
+        try self.body.i64Store(self.allocator, 3, store_offset);
+    }
+}
+fn upvalueCellMutable(self: anytype, instruction_value: snapshot_v1.IrInstruction, upvalue_index: u32) Error!bool {
+    switch (instruction_value.command) {
+        .set_upvalue => {
+            if (instruction_value.operand_count == 0)
+                return true;
+            const slot = try self.operand(instruction_value, 0);
+            return slot.kind != .vm_upvalue or slot.value == upvalue_index;
+        },
+        .call, .do_arith, .cmp_any, .interrupt, .get_cached_import, .fallback_prepvarargs, .fallback_getvarargs => return true,
+        else => return switch (@intFromEnum(instruction_value.command)) {
+            120, 121, 124, 125, 126, 128, 156, 157, 158, 160, 161, 162, 163, 164, 169 => true,
+            else => false,
+        },
+    }
+}
+fn heldUpvalueRegister(self: anytype, first_store: snapshot_v1.IrInstruction, upvalue_id: u32) Error!u32 {
+    if (first_store.command == .store_tvalue and first_store.operand_count == 2) {
+        const first_source = try self.operand(first_store, 1);
+        if (first_source.kind != .instruction or first_source.value != upvalue_id) {
+            diagnostics.trace("stv src");
+            return Error.UnsupportedControlFlow;
+        }
+        return self.vmRegisterIndex(try self.operand(first_store, 0)) catch {
+            diagnostics.trace("stv reg");
+            return Error.InvalidOperandType;
+        };
+    }
+    if (first_store.command == .store_split_tvalue and first_store.operand_count >= 3) {
+        const first_source = try self.operand(first_store, 2);
+        if (first_source.kind != .instruction or first_source.value != upvalue_id) {
+            diagnostics.trace("stv src");
+            return Error.UnsupportedControlFlow;
+        }
+        return self.vmRegisterIndex(try self.operand(first_store, 0)) catch {
+            diagnostics.trace("stv reg");
+            return Error.InvalidOperandType;
+        };
+    }
+    var detail: [24]u8 = undefined;
+    const text = std.fmt.bufPrint(&detail, "stv fst {d}", .{@intFromEnum(first_store.command)}) catch "stv fst";
+    diagnostics.trace(text);
+    return Error.UnsupportedControlFlow;
+}
+fn forwardedUpvalueOffset(
+    self: anytype,
+    instruction_id: u32,
+    destination: snapshot_v1.IrOperand,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!u32 {
+    const address_offset = if (instruction_value.operand_count == 3)
+        try self.tvalueByteOffset(instruction_value, 2)
+    else if (instruction_value.operand_count == 2)
+        0
+    else
+        return Error.InvalidOperandCount;
+    if (destination.kind == .instruction) {
+        const producer = try self.instruction(destination.value);
+        if (producer.command == abi.ir_cmd_get_hash_node_addr or producer.command == abi.ir_cmd_get_slot_node_addr) {
+            const live = try self.plan.validateNodeUse(self.snapshot, self.function, destination.value, instruction_id);
+            if (address_offset != 0 or !live)
+                return Error.UnsupportedControlFlow;
+            return address_offset;
+        }
+        if (producer.command == abi.ir_cmd_get_arr_addr) {
+            if (!try self.plan.validateArrayAddressUse(self.snapshot, self.function, destination.value, instruction_id))
+                return Error.UnsupportedControlFlow;
+            return address_offset;
+        }
+        return Error.UnsupportedControlFlow;
+    }
+    if (address_offset != 0)
+        return Error.InvalidOperandType;
+    return try self.vmRegisterOffset(destination, 0);
+}
 pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     if (self.plan.closureContaining(instruction_id) != null)
         return;
@@ -429,16 +538,39 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
             }
             if (source.value + 1 != instruction_id) {
                 const first_store = try self.instruction(source.value + 1);
-                if (first_store.command != .store_tvalue or first_store.operand_count != 2)
-                    return Error.UnsupportedControlFlow;
-                const first_source = try self.operand(first_store, 1);
-                if (first_source.kind != .instruction or first_source.value != source.value)
-                    return Error.UnsupportedControlFlow;
+                const held_register = try heldUpvalueRegister(self, first_store, source.value);
                 var gap = source.value + 2;
+                var untouched = true;
+                var clobber_cmd: ?u32 = null;
+                var cell_mutated = false;
                 while (gap < instruction_id) : (gap += 1) {
                     const marker = try self.instruction(gap);
                     if (marker.command != .nop or marker.operand_count != 0)
-                        return Error.UnsupportedControlFlow;
+                        untouched = false;
+                    if (clobber_cmd == null and try self.instructionWritesRegister(gap, held_register))
+                        clobber_cmd = @intFromEnum(marker.command);
+                    if (try upvalueCellMutable(self, marker, upvalue.value))
+                        cell_mutated = true;
+                }
+                // The first register still holds the value captured at GET_UPVALUE.
+                // Copying it keeps that value when a later instruction reuses the upvalue.
+                if (!untouched and clobber_cmd == null) {
+                    const destination_offset = try forwardedUpvalueOffset(self, instruction_id, destination, instruction_value);
+                    try emitRegisterTValueStore(self, held_register, destination, destination_offset);
+                    return;
+                }
+                // The register was reused. The cell still has the captured value when
+                // nothing in the gap can assign that upvalue.
+                if (!untouched and !cell_mutated) {
+                    const destination_offset = try forwardedUpvalueOffset(self, instruction_id, destination, instruction_value);
+                    try emitUpvalueTValueStore(self, upvalue.value, destination, destination_offset);
+                    return;
+                }
+                if (clobber_cmd) |command| {
+                    var detail: [24]u8 = undefined;
+                    const text = std.fmt.bufPrint(&detail, "stv clobber {d}", .{command}) catch "stv clobber";
+                    diagnostics.trace(text);
+                    return Error.UnsupportedControlFlow;
                 }
             }
             if (instruction_value.operand_count != 2) {
@@ -1196,9 +1328,15 @@ pub noinline fn emitSplitTValueComparison(self: anytype, instruction_id: u32, in
     const lhs = try self.operand(instruction_value, 2);
     const rhs = try self.operand(instruction_value, 3);
     switch (expected_tag) {
-        lua_tag_boolean, lua_tag_string => {
+        lua_tag_boolean => {
             try self.emitI32Value(lhs);
             try self.emitI32Value(rhs);
+            try self.emitIntegerCondition(condition);
+        },
+        // Interned strings compare by pointer. The shortcut loads both addresses.
+        lua_tag_string => {
+            try self.emitPointerValue(lhs);
+            try self.emitPointerValue(rhs);
             try self.emitIntegerCondition(condition);
         },
         lua_tag_number => {

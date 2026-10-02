@@ -183,6 +183,8 @@ pub const lua_callinfo_opyield: i32 = 8;
 pub const lua_state_marked_offset: u32 = 1;
 pub const lua_state_base_ci_offset: u32 = 36;
 pub const lua_black_bit: i32 = 4;
+/// `marked & lua_white_bits` is Luau `iswhite`: either white bit is set.
+pub const lua_white_bits: i32 = 3;
 pub const closure_is_c_offset: u32 = 3;
 pub const closure_nupvalues_offset: u32 = 4;
 pub const closure_stacksize_offset: u32 = 5;
@@ -224,6 +226,16 @@ pub const lua_node_key_tag_mask: i32 = 0xF;
 pub const global_interrupt_offset: u32 = 700;
 // offsetof(global_State, tmname). TM_INDEX is element 0. Locked in call_frame.cpp.
 pub const global_tmname_offset: u32 = 528;
+// offsetof(global_State, mt). Basic-type metatables, indexed by the TValue tag. Locked in call_frame.cpp.
+pub const global_mt_offset: u32 = 416;
+// offsetof(lua_State, namecall). Set only when the __namecall metamethod is the call target.
+pub const lua_state_namecall_offset: u32 = 68;
+// offsetof(Udata, metatable). Userdata does not use global_State.mt.
+pub const userdata_metatable_offset: u32 = 8;
+// LUA_T_COUNT. A tag at or above this is not an index into global_State.mt.
+pub const lua_type_count: u32 = 14;
+// TMS.NAMECALL. Bit 1<<TM_NAMECALL in LuaTable.tmcache means the metamethod is absent.
+pub const upstream_tm_namecall: u32 = 3;
 // LuaTable.tmcache. Bit 1<<TM_INDEX means __index is absent.
 pub const table_tmcache_offset: u32 = 3;
 pub const table_readonly_offset: u32 = 4;

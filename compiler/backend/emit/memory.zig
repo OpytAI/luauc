@@ -29,6 +29,10 @@ const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
 const ir_cmd_check_userdata_tag = abi.ir_cmd_check_userdata_tag;
 const ir_cmd_get_hash_node_addr = abi.ir_cmd_get_hash_node_addr;
 const ir_cmd_get_slot_node_addr = abi.ir_cmd_get_slot_node_addr;
+const ir_cmd_do_len = abi.ir_cmd_do_len;
+const ir_cmd_fallback_gettableks = abi.ir_cmd_fallback_gettableks;
+const ir_cmd_fallback_settableks = abi.ir_cmd_fallback_settableks;
+const ir_cmd_fallback_namecall = abi.ir_cmd_fallback_namecall;
 const tvalue_size = abi.tvalue_size;
 const tvalue_tag_offset = abi.tvalue_tag_offset;
 const buffer_len_offset = abi.buffer_len_offset;
@@ -153,8 +157,61 @@ pub noinline fn emitFornPreparation(
     try self.emitReloadBase();
     return true;
 }
-pub noinline fn emitCheckTag(self: anytype, instruction_value: snapshot_v1.IrInstruction) Error!void {
+fn continuationIsGeneralOperation(self: anytype, check_id: u32) Error!bool {
+    var cursor = check_id + 1;
+    if (cursor >= self.function.instruction_count)
+        return false;
+    var command = (try self.instruction(cursor)).command;
+    if (command == .set_savedpc and cursor + 1 < self.function.instruction_count) {
+        cursor += 1;
+        command = (try self.instruction(cursor)).command;
+    }
+    return command == ir_cmd_fallback_gettableks or command == ir_cmd_fallback_settableks or
+        command == ir_cmd_fallback_namecall or command == ir_cmd_do_len or command == .do_arith;
+}
+
+/// Annotation guards use a pc outside the prototype. The interpreter does not
+/// enforce them. A userdata guard whose next instruction is already the general
+/// operation is the same work a table performs, so the compare is not emitted.
+fn unenforcedVmExitCheck(self: anytype, check_id: u32) Error!bool {
+    const instruction_value = try self.instruction(check_id);
+    if (instruction_value.command != .check_tag or instruction_value.operand_count != 3)
+        return false;
+    const failure = try self.operand(instruction_value, 2);
+    if (failure.kind != .vm_exit)
+        return false;
+    if (failure.value >= self.proto.code_count)
+        return true;
+    const expected = try self.operand(instruction_value, 1);
+    if (expected.kind != .constant or
+        (try self.constant(expected.value)).tagValue() != lua_tag_userdata)
+        return false;
+    return continuationIsGeneralOperation(self, check_id);
+}
+
+pub noinline fn tagLoadFeedsOnlyUnenforcedCheck(self: anytype, load_id: u32) Error!bool {
+    var saw_use = false;
+    var instruction_id = load_id + 1;
+    while (instruction_id < self.function.instruction_count) : (instruction_id += 1) {
+        const instruction_value = try self.instruction(instruction_id);
+        var operand_index: u32 = 0;
+        while (operand_index < instruction_value.operand_count) : (operand_index += 1) {
+            const operand = try self.operand(instruction_value, operand_index);
+            if (operand.kind != .instruction or operand.value != load_id)
+                continue;
+            if (instruction_value.command != .check_tag or operand_index != 0 or
+                !try unenforcedVmExitCheck(self, instruction_id))
+                return false;
+            saw_use = true;
+        }
+    }
+    return saw_use;
+}
+
+pub noinline fn emitCheckTag(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 3);
+    if (try unenforcedVmExitCheck(self, instruction_id))
+        return;
     try self.emitI32Value(try self.operand(instruction_value, 0));
     try self.emitI32Value(try self.operand(instruction_value, 1));
     const failure = try self.operand(instruction_value, 2);
@@ -707,6 +764,47 @@ pub noinline fn emitGetSlotNodeAddr(
     }
     try self.emitSlotNodeFromTable(key.value);
     try self.emitInstructionResultSet(instruction_id);
+}
+
+fn slotNodeEscapes(self: anytype, node_id: u32, finish: u32) Error!bool {
+    const uses = self.plan.instructionUses(node_id) orelse return false;
+    if (uses == 0)
+        return false;
+    var inside: u32 = 0;
+    var scan = node_id + 1;
+    const limit = @min(finish + 1, self.function.instruction_count);
+    while (scan < limit) : (scan += 1) {
+        const instruction = try self.instruction(scan);
+        var operand_index: u32 = 0;
+        while (operand_index < instruction.operand_count) : (operand_index += 1) {
+            const operand = try self.operand(instruction, operand_index);
+            if (operand.kind == .instruction and operand.value == node_id)
+                inside += 1;
+        }
+    }
+    return uses > inside;
+}
+
+/// A fused string-key probe does not emit GET_SLOT_NODE_ADDR. Const-prop still
+/// reloads that node from a later CHECK_NODE_VALUE, and the unset local is null.
+pub fn publishEscapedSlotNodes(self: anytype, start: u32, finish: u32) Error!void {
+    if (start > finish or finish >= self.function.instruction_count)
+        return;
+    var cursor = start;
+    while (cursor <= finish) : (cursor += 1) {
+        const instruction = try self.instruction(cursor);
+        if (instruction.command != ir_cmd_get_slot_node_addr)
+            continue;
+        if (!try slotNodeEscapes(self, cursor, finish))
+            continue;
+        const table = try self.operand(instruction, 0);
+        if (table.kind == .instruction) {
+            const producer = try self.instruction(table.value);
+            if (producer.command == .load_env)
+                try self.emitLoadEnv(table.value);
+        }
+        try self.emitGetSlotNodeAddr(cursor, instruction);
+    }
 }
 pub noinline fn emitJumpSlotMatch(
     self: anytype,

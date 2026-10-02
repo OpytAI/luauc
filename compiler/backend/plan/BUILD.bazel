@@ -13,6 +13,7 @@ zig_library(
     visibility = ["//visibility:public"],
     deps = [
         "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:diagnostics",
         "//compiler/model:model",
         "//compiler/model:runtime_abi",
     ],
@@ -64,6 +65,7 @@ zig_library(
         ":recognize_calls",
         ":recognize_tables",
         "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/model:diagnostics",
         "//compiler/model:model",
         "//compiler/model:runtime_abi",
     ],

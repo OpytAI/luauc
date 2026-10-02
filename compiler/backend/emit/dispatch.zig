@@ -184,7 +184,10 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
             if (self.plan.closureContaining(instruction_id) == null)
                 return Error.UnsupportedControlFlow;
         },
-        .load_tag => try self.emitLoadTag(instruction_id, instruction_value),
+        .load_tag => {
+            if (!try self.tagLoadFeedsOnlyUnenforcedCheck(instruction_id))
+                try self.emitLoadTag(instruction_id, instruction_value);
+        },
         .load_pointer, .load_int => try self.emitLoadI32(instruction_id, instruction_value),
         .load_int64 => try self.emitLoadI64(instruction_id, instruction_value),
         .load_float => try self.emitLoadFloat(instruction_id, instruction_value),
@@ -276,7 +279,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .cmp_int64 => try self.emitComparisonI64(instruction_id, instruction_value),
         .cmp_tag => try self.emitComparisonTag(instruction_id, instruction_value),
         .cmp_split_tvalue => try self.emitSplitTValueComparison(instruction_id, instruction_value),
-        .int_to_num => try self.emitUnaryI32(instruction_id, instruction_value, 0xb7), // f64.convert_i32_s
+        .int_to_num => try self.emitIntToNum(instruction_id, instruction_value),
         .int64_to_num => try self.emitUnaryI64(instruction_id, instruction_value, 0xb9), // f64.convert_i64_s
         .uint_to_num => try self.emitUnaryI32(instruction_id, instruction_value, 0xb8), // f64.convert_i32_u
         .uint_to_float => try self.emitUnaryI32(instruction_id, instruction_value, 0xb3), // f32.convert_i32_u
@@ -313,7 +316,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .get_upvalue => try self.emitGetUpvalue(instruction_id, instruction_value),
         .set_upvalue => try self.emitSetUpvalue(instruction_id),
         .check_div_int64 => try self.emitCheckDivInt64(instruction_value),
-        .check_tag => try self.emitCheckTag(instruction_value),
+        .check_tag => try self.emitCheckTag(instruction_id, instruction_value),
         ir_cmd_check_buffer_len => try self.emitBufferLengthCheck(instruction_id, instruction_value),
         ir_cmd_check_userdata_tag => try self.emitCheckUserdataTag(instruction_value),
         .check_truthy => try self.emitCheckTruthy(instruction_value),
@@ -358,23 +361,48 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
                 {} else if (instruction_id + 2 < self.function.instruction_count and
                     (try self.instruction(instruction_id + 2)).command == .newclosure)
                 {
-                    if (self.plan.closureContaining(instruction_id + 2) == null)
+                    if (self.plan.closureContaining(instruction_id + 2) == null) {
+                        const at = struct {
+                            fn cmd(context: anytype, id: u32) Error!u32 {
+                                if (id >= context.function.instruction_count)
+                                    return 0;
+                                return @intFromEnum((try context.instruction(id)).command);
+                            }
+                        };
+                        const c4 = try at.cmd(self, instruction_id + 4);
+                        const c6 = try at.cmd(self, instruction_id + 6);
+                        const c7 = try at.cmd(self, instruction_id + 7);
+                        var detail: [48]u8 = undefined;
+                        const text = std.fmt.bufPrint(&detail, "ncl miss {d} {d} {d}", .{
+                            c4,
+                            c6,
+                            c7,
+                        }) catch "ncl miss";
+                        diagnostics.trace(text);
                         return Error.UnsupportedControlFlow;
-                } else if (instruction_id + 1 >= self.function.instruction_count or
-                    ((try self.instruction(instruction_id + 1)).command != .call and
-                        (try self.instruction(instruction_id + 1)).command != .cmp_any and
-                        (try self.instruction(instruction_id + 1)).command != .do_arith and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_do_len and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_concat and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_get_table and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_set_table and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_invoke_fastcall and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_forgloop_fallback and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_gettableks and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_settableks and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_getglobal and
-                        (try self.instruction(instruction_id + 1)).command != ir_cmd_fallback_setglobal))
-                    return Error.UnsupportedControlFlow;
+                    }
+                } else {
+                    const follower = if (instruction_id + 1 < self.function.instruction_count)
+                        (try self.instruction(instruction_id + 1)).command
+                    else
+                        null;
+                    const accepted = if (follower) |command|
+                        command == .call or command == .cmp_any or command == .do_arith or
+                            command == ir_cmd_do_len or command == ir_cmd_concat or
+                            command == ir_cmd_get_table or command == ir_cmd_set_table or
+                            command == ir_cmd_invoke_fastcall or command == ir_cmd_forgloop_fallback or
+                            command == ir_cmd_fallback_gettableks or command == ir_cmd_fallback_settableks or
+                            command == ir_cmd_fallback_getglobal or command == ir_cmd_fallback_setglobal
+                    else
+                        false;
+                    if (!accepted) {
+                        const next_cmd: u32 = if (follower) |command| @intFromEnum(command) else 0;
+                        var detail: [24]u8 = undefined;
+                        const text = std.fmt.bufPrint(&detail, "spc {d}", .{next_cmd}) catch "spc";
+                        diagnostics.trace(text);
+                        return Error.UnsupportedControlFlow;
+                    }
+                }
             }
         },
         .capture => {
@@ -395,9 +423,13 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
             try self.emitDoArith(instruction_id, instruction_value);
         },
         ir_cmd_do_len => {
-            if (block_kind != .fallback)
-                return Error.UnsupportedControlFlow;
-            try self.emitDoLen(instruction_id, instruction_value);
+            if (block_kind != .fallback) {
+                if (!block_kind.isCompilable())
+                    return Error.UnsupportedControlFlow;
+                try self.emitCompilableDoLen(instruction_id, instruction_value);
+            } else {
+                try self.emitDoLen(instruction_id, instruction_value);
+            }
         },
         ir_cmd_concat => try self.emitGeneralConcat(instruction_id, instruction_value),
         .check_safe_env => {
@@ -548,6 +580,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 if (!occupied) {
                     try self.emitSavedPcLocation(sequence.marker);
                     try self.emitRegisterLength(sequence.destination, sequence.source);
+                    try self.publishLengthSlot(sequence.start + 5, sequence.destination);
                     self.plan.noteLoweredRange(self.snapshot, self.function, sequence.start, sequence.finish);
                     instruction_id = sequence.finish;
                     continue;
@@ -571,6 +604,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             continue;
         }
         if (try self.globalHeadPatternAt(instruction_id, block)) |pattern| {
+            try self.publishEscapedSlotNodes(pattern.start, block.finish);
             try self.emitGlobalOperation(pattern);
             try self.body.branch(self.allocator, self.loop_branch_depth);
             instruction_id = block.finish;
@@ -607,6 +641,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         if (try self.stringTablePattern(block)) |pattern| {
             if (instruction_id == pattern.start) {
                 // Always rejoin. The fused loop suppresses only the block emitter's rejoin.
+                try self.publishEscapedSlotNodes(pattern.start, block.finish);
                 try self.emitStringTableHelper(pattern);
                 try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
                 try self.body.localSet(self.allocator, self.dispatch_local);
@@ -617,11 +652,13 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             }
         }
         if (try self.inlineStringGetPatternAt(instruction_id, block)) |pattern| {
+            try self.publishEscapedSlotNodes(pattern.start, instruction_id + 6);
             try self.emitStringTableHelper(pattern);
             instruction_id += 6;
             continue;
         }
         if (try self.inlineStringSetPatternAt(instruction_id, block)) |operation| {
+            try self.publishEscapedSlotNodes(operation.pattern.start, operation.finish);
             try self.emitStringTableHelper(operation.pattern);
             instruction_id = operation.finish;
             continue;
@@ -647,6 +684,47 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 instruction_id = block.finish;
                 terminated = true;
                 continue;
+            }
+        }
+        const stepped = (try self.instruction(instruction_id)).command;
+        const numeric_head = switch (stepped) {
+            .load_double, .add_num, .sub_num, .mul_num, .div_num => true,
+            else => false,
+        };
+        if (numeric_head and self.plan.clusterAt(instruction_id) == null) {
+            if (self.plan.instructionBlock(instruction_id)) |owner_id| {
+                const owner_block = try self.snapshot.irBlock(self.function, owner_id);
+                const range_limit = std.math.add(u32, finish, 1) catch return Error.ResourceLimit;
+                const block_limit = std.math.add(u32, owner_block.finish, 1) catch return Error.ResourceLimit;
+                if (try admission.uniformNumericRun(
+                    self.snapshot,
+                    self.function,
+                    self.proto,
+                    self.plan.instruction_use_counts,
+                    instruction_id,
+                    @min(range_limit, block_limit),
+                )) |run| {
+                    var blocked = false;
+                    var covered = run.start;
+                    while (covered <= run.finish) : (covered += 1) {
+                        if (self.plan.clusterAt(covered) != null or
+                            self.builtin_number_sources[covered] != std.math.maxInt(u32))
+                        {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                    if (!blocked and run.finish <= finish) {
+                        try self.emitUniformNumericRun(run);
+                        self.plan.noteLoweredRange(self.snapshot, self.function, run.start, run.finish);
+                        instruction_id = run.finish;
+                        continue;
+                    }
+                }
+            }
+            if (instruction_id < self.slots.len and self.slots[instruction_id].shape == .none) {
+                diagnostics.trace("num none");
+                return Error.UnsupportedControlFlow;
             }
         }
         terminated = try self.emitInstruction(instruction_id, block.kind);
@@ -730,6 +808,8 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         .dispatch, .none => {
             if (block.kind == .fallback and !try admission.supportsFallback(self, block))
                 return Error.UnsupportedControlFlow;
+            if (block.kind == .fallback and try self.emitUniformArithmeticFallback(block))
+                return;
             return emitDispatchBlock(self, block);
         },
     }

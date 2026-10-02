@@ -7,6 +7,7 @@ pub const diagnostics = @import("luauc_backend_diagnostics");
 pub const build = driver.build;
 pub const buildPackage = driver.buildPackage;
 pub const buildStaticPackage = driver.buildStaticPackage;
+pub const irDumpText = driver.irDumpText;
 pub const generated_symbol = abi.generated_symbol;
 pub const return_symbol = abi.return_symbol;
 pub const interrupt_symbol = abi.interrupt_symbol;

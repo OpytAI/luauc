@@ -2,12 +2,13 @@ const std = @import("std");
 const wasm = @import("luauc_wasm_object");
 const driver = @import("luauc_backend_driver");
 
-test "dispatchMode pages above 256 and fail-closes above 512 cases" {
+test "dispatchMode pages above 256 and fail-closes above the case limit" {
     try std.testing.expectEqual(driver.DispatchMode.flat, try driver.dispatchMode(1, 1));
     try std.testing.expectEqual(driver.DispatchMode.flat, try driver.dispatchMode(256, 256));
     try std.testing.expectEqual(driver.DispatchMode.paged, try driver.dispatchMode(257, 257));
     try std.testing.expectEqual(driver.DispatchMode.paged, try driver.dispatchMode(512, 300));
-    try std.testing.expectError(error.ResourceLimit, driver.dispatchMode(513, 1));
+    try std.testing.expectEqual(driver.DispatchMode.paged, try driver.dispatchMode(driver.br_table_case_limit, 300));
+    try std.testing.expectError(error.ResourceLimit, driver.dispatchMode(driver.br_table_case_limit + 1, 1));
 }
 
 test "paged br_table emits i32.ge_u 256 and two br_table ops" {
@@ -28,7 +29,7 @@ test "paged br_table emits i32.ge_u 256 and two br_table ops" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, &[_]u8{ 0x05, 0x20, 0x00, 0x0e }) != null);
 }
 
-test "function body over 256 KiB is a ResourceLimit" {
+test "function body over the configured limit is a ResourceLimit" {
     try driver.checkFunctionBodyLimit(driver.function_body_limit);
     try std.testing.expectError(error.ResourceLimit, driver.checkFunctionBodyLimit(driver.function_body_limit + 1));
 }

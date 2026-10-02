@@ -2,6 +2,7 @@ const std = @import("std");
 const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const diagnostics = @import("luauc_backend_diagnostics");
 
 const Error = model.Error;
 const TableAllocationPattern = model.TableAllocationPattern;
@@ -183,8 +184,10 @@ pub fn recognize(
 
         const instruction = try snapshot.irInstruction(function, instruction_id);
         if (instruction.command == ir_cmd_new_table) {
-            if (instruction.operand_count != 2)
+            if (instruction.operand_count != 2) {
+                diagnostics.trace("rec newtable ops");
                 return Error.UnsupportedControlFlow;
+            }
             const array_count = try uintOperand(snapshot, function, try snapshot.irOperand(instruction, 0));
             const node_count = try uintOperand(snapshot, function, try snapshot.irOperand(instruction, 1));
             var alloc = TableAlloc{
@@ -285,8 +288,10 @@ pub fn recognize(
     for (table_alloc_slice, 0..) |alloc, index| {
         var cursor = alloc.start;
         while (cursor <= alloc.finish) : (cursor += 1) {
-            if (table_alloc_index[cursor] != snapshot_v1.no_id)
+            if (table_alloc_index[cursor] != snapshot_v1.no_id) {
+                diagnostics.trace("rec alloc overlap");
                 return Error.UnsupportedControlFlow;
+            }
             table_alloc_index[cursor] = @intCast(index);
         }
     }
@@ -325,10 +330,11 @@ fn newClosureRangeAt(
     const load_env = try snapshot.irInstruction(function, newclosure_id - 1);
     const newclosure = try snapshot.irInstruction(function, newclosure_id);
     const store_pointer = try snapshot.irInstruction(function, newclosure_id + 1);
+    // Const-prop kills STORE_TAG when the register is already a function.
     const store_tag = try snapshot.irInstruction(function, newclosure_id + 2);
     if (marker.command != .set_savedpc or load_env.command != .load_env or
         newclosure.command != .newclosure or store_pointer.command != .store_pointer or
-        store_tag.command != .store_tag)
+        (store_tag.command != .store_tag and store_tag.command != .nop))
         return null;
     if (newclosure.operand_count != 3)
         return null;
@@ -397,7 +403,9 @@ fn skipInitializedCapture(
             return null;
         const address = try snapshot.irInstruction(function, cursor + 1);
         const store = try snapshot.irInstruction(function, cursor + 2);
-        if (address.command != .get_closure_upval_addr or store.command != .store_tvalue)
+        // Const-prop rewrites a value capture's STORE_TVALUE into STORE_SPLIT.
+        if (address.command != .get_closure_upval_addr or
+            (store.command != .store_tvalue and store.command != .store_split_tvalue))
             return null;
         return cursor + 3;
     }
@@ -430,7 +438,7 @@ fn skipInitializedCapture(
     const load = try snapshot.irInstruction(function, cursor + 2);
     const store = try snapshot.irInstruction(function, cursor + 3);
     if (address.command != .get_closure_upval_addr or load.command != .load_tvalue or
-        store.command != .store_tvalue)
+        (store.command != .store_tvalue and store.command != .store_split_tvalue))
         return null;
     return cursor + 4;
 }
@@ -442,41 +450,57 @@ pub fn tableAllocationAt(
     instruction_blocks: []const u32,
     start: u32,
 ) Error!?TableAllocationPattern {
-    if (function.instruction_count < 3 or start > function.instruction_count - 3)
+    if (function.instruction_count < 2 or start >= function.instruction_count - 1)
         return null;
     const allocation = try snapshot.irInstruction(function, start);
     const store_pointer = try snapshot.irInstruction(function, start + 1);
-    const store_tag = try snapshot.irInstruction(function, start + 2);
     if (allocation.command != ir_cmd_new_table or allocation.operand_count != 2 or
-        store_pointer.command != .store_pointer or store_pointer.operand_count != 2 or
-        store_tag.command != .store_tag or store_tag.operand_count != 2)
+        store_pointer.command != .store_pointer or store_pointer.operand_count != 2)
         return null;
-    var finish = start + 2;
+    var finish: u32 = start + 1;
+    var cursor: u32 = start + 2;
+    var tagged = false;
+    if (cursor < function.instruction_count) {
+        const store_tag = try snapshot.irInstruction(function, cursor);
+        if (store_tag.command == .store_tag) {
+            if (store_tag.operand_count != 2)
+                return null;
+            const early_destination = try snapshot.irOperand(store_pointer, 0);
+            const tag_destination = try snapshot.irOperand(store_tag, 0);
+            const tag = try snapshot.irOperand(store_tag, 1);
+            if (early_destination.kind != .vm_reg or tag_destination.kind != .vm_reg or
+                tag_destination.value != early_destination.value or tag.kind != .constant or
+                (try snapshot.irConstant(function, tag.value)).tagValue() != lua_tag_table)
+                return null;
+            tagged = true;
+            finish = cursor;
+            cursor += 1;
+        }
+    }
     var assist = false;
-    if (start + 3 < function.instruction_count) {
-        const possible_check = try snapshot.irInstruction(function, start + 3);
+    if (cursor < function.instruction_count) {
+        const possible_check = try snapshot.irInstruction(function, cursor);
         if (possible_check.command == .check_gc and possible_check.operand_count == 0) {
-            finish = start + 3;
+            finish = cursor;
             assist = true;
         } else if (possible_check.command == .nop and possible_check.operand_count == 0) {
-            finish = start + 3;
+            finish = cursor;
         }
     }
     requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, start, finish) catch return null;
     const destination = try snapshot.irOperand(store_pointer, 0);
     const pointer = try snapshot.irOperand(store_pointer, 1);
-    const tag_destination = try snapshot.irOperand(store_tag, 0);
-    const tag = try snapshot.irOperand(store_tag, 1);
     if (destination.kind != .vm_reg or destination.value >= proto.max_stack_size or
-        pointer.kind != .instruction or pointer.value != start or
-        tag_destination.kind != .vm_reg or tag_destination.value != destination.value or
-        tag.kind != .constant or (try snapshot.irConstant(function, tag.value)).tagValue() != lua_tag_table)
+        pointer.kind != .instruction or pointer.value != start)
         return null;
+    // new + pointer + tag, with no collector marker, still needs a later check.
+    // Const-prop deletes a redundant table-tag store. The pointer store still names the register.
+    const deferred = if (tagged) finish == start + 2 else finish == start + 1;
     return .{
         .start = start,
         .finish = finish,
         .assist = assist,
-        .deferred_to_later_gc = finish == start + 2,
+        .deferred_to_later_gc = deferred,
         .destination = destination.value,
         .array_count = try uintOperand(snapshot, function, try snapshot.irOperand(allocation, 0)),
         .node_count = try uintOperand(snapshot, function, try snapshot.irOperand(allocation, 1)),
@@ -564,32 +588,46 @@ pub fn dupTableAt(
     instruction_blocks: []const u32,
     start: u32,
 ) Error!?DupTablePattern {
-    const prefix = [_]snapshot_v1.IrCommand{
-        .load_pointer, ir_cmd_dup_table, .store_pointer, .store_tag,
-    };
-    const prefix_len: u32 = @intCast(prefix.len);
-    if (!try commandRangeMatches(snapshot, function, start, &prefix))
+    // Const-prop deletes a redundant table-tag store. The pointer store still names the register.
+    if (function.instruction_count < 3 or start >= function.instruction_count - 2)
         return null;
-    var finish = start + prefix_len - 1;
-    var assist = false;
-
     const load = try snapshot.irInstruction(function, start);
     const duplicate = try snapshot.irInstruction(function, start + 1);
     const store_pointer = try snapshot.irInstruction(function, start + 2);
-    const store_tag = try snapshot.irInstruction(function, start + 3);
-    if (start + prefix_len < function.instruction_count) {
-        const possible_gc = try snapshot.irInstruction(function, start + prefix_len);
+    if (load.command != .load_pointer or duplicate.command != ir_cmd_dup_table or
+        store_pointer.command != .store_pointer)
+        return null;
+    if (load.operand_count != 1 or duplicate.operand_count != 1 or store_pointer.operand_count != 2)
+        return null;
+    var finish: u32 = start + 2;
+    var cursor: u32 = start + 3;
+    if (cursor < function.instruction_count) {
+        const store_tag = try snapshot.irInstruction(function, cursor);
+        if (store_tag.command == .store_tag) {
+            if (store_tag.operand_count != 2)
+                return null;
+            const early_destination = try snapshot.irOperand(store_pointer, 0);
+            const tag_destination = try snapshot.irOperand(store_tag, 0);
+            const tag = try snapshot.irOperand(store_tag, 1);
+            if (early_destination.kind != .vm_reg or tag_destination.kind != .vm_reg or
+                tag_destination.value != early_destination.value or tag.kind != .constant or
+                (try snapshot.irConstant(function, tag.value)).tagValue() != lua_tag_table)
+                return null;
+            finish = cursor;
+            cursor += 1;
+        }
+    }
+    var assist = false;
+    if (cursor < function.instruction_count) {
+        const possible_gc = try snapshot.irInstruction(function, cursor);
         if (possible_gc.command == .check_gc or possible_gc.command == .nop) {
             if (possible_gc.operand_count != 0)
                 return null;
-            finish += 1;
+            finish = cursor;
             assist = possible_gc.command == .check_gc;
         }
     }
     requireSingleCompilableBlockRange(snapshot, function, instruction_blocks, start, finish) catch return null;
-    if (load.operand_count != 1 or duplicate.operand_count != 1 or
-        store_pointer.operand_count != 2 or store_tag.operand_count != 2)
-        return null;
 
     const constant_operand = try snapshot.irOperand(load, 0);
     if (constant_operand.kind != .vm_const or constant_operand.value >= proto.vm_constant_count or
@@ -598,13 +636,9 @@ pub fn dupTableAt(
     const duplicate_source = try snapshot.irOperand(duplicate, 0);
     const destination = try snapshot.irOperand(store_pointer, 0);
     const stored_pointer = try snapshot.irOperand(store_pointer, 1);
-    const tag_destination = try snapshot.irOperand(store_tag, 0);
-    const tag = try snapshot.irOperand(store_tag, 1);
     if (duplicate_source.kind != .instruction or duplicate_source.value != start or
         stored_pointer.kind != .instruction or stored_pointer.value != start + 1 or
-        destination.kind != .vm_reg or destination.value >= proto.max_stack_size or
-        tag_destination.kind != .vm_reg or tag_destination.value != destination.value or
-        tag.kind != .constant or (try snapshot.irConstant(function, tag.value)).tagValue() != lua_tag_table)
+        destination.kind != .vm_reg or destination.value >= proto.max_stack_size)
         return null;
     return .{
         .start = start,
@@ -651,9 +685,21 @@ fn validateSetList(
     const count = try intOperand(snapshot, function, try snapshot.irOperand(instruction, 3));
     const start_index = try uintOperand(snapshot, function, try snapshot.irOperand(instruction, 4));
     const known_size_operand = try snapshot.irOperand(instruction, 5);
-    if (count <= 0 or start_index == 0 or
+    if (count < -1 or count == 0 or start_index == 0 or
         (known_size_operand.kind != .constant and known_size_operand.kind != .undef))
+    {
+        var detail: [48]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "rec setlist c{d} i{d} k{d}", .{
+            count,
+            start_index,
+            @intFromEnum(known_size_operand.kind),
+        }) catch "rec setlist";
+        diagnostics.trace(text);
         return Error.UnsupportedControlFlow;
+    }
+    // Count -1 is LUA_MULTRET: the helper copies from the source through L->top.
+    if (count < 0)
+        return;
     const known_size: ?u32 = if (known_size_operand.kind == .constant)
         try uintOperand(snapshot, function, known_size_operand)
     else
@@ -661,7 +707,10 @@ fn validateSetList(
     const count_u32: u32 = @intCast(count);
     if (count_u32 > @as(u32, proto.max_stack_size) - source or
         (known_size != null and count_u32 > known_size.? -| (start_index - 1)))
+    {
+        diagnostics.trace("rec setlist range");
         return Error.UnsupportedControlFlow;
+    }
 }
 
 fn plainLenAt(
@@ -827,6 +876,21 @@ fn attachDeferredGc(
     // CHECK_GC. A bare NEW_TABLE still needs a collector assist after its stores.
     if (alloc.dest_reg != snapshot_v1.no_id)
         return;
+    var followed: [48]u8 = undefined;
+    var next_commands: [3]u32 = .{ 0, 0, 0 };
+    var index: u32 = 0;
+    while (index < 3) : (index += 1) {
+        const at = alloc.start + 1 + index;
+        if (at >= function.instruction_count)
+            break;
+        next_commands[index] = @intFromEnum((try snapshot.irInstruction(function, at)).command);
+    }
+    const text = std.fmt.bufPrint(&followed, "rec bare {d} {d} {d}", .{
+        next_commands[0],
+        next_commands[1],
+        next_commands[2],
+    }) catch "rec bare table";
+    diagnostics.trace(text);
     return Error.UnsupportedControlFlow;
 }
 
@@ -852,30 +916,21 @@ fn requireSingleCompilableBlockRange(
     start: u32,
     finish: u32,
 ) Error!void {
-    if (start > finish or start >= instruction_blocks.len or finish >= instruction_blocks.len)
+    if (start > finish or start >= instruction_blocks.len or finish >= instruction_blocks.len) {
+        diagnostics.trace("rec range bounds");
         return Error.UnsupportedControlFlow;
+    }
     const start_block = instruction_blocks[start];
     const finish_block = instruction_blocks[finish];
-    if (start_block == snapshot_v1.no_id or start_block != finish_block)
+    if (start_block == snapshot_v1.no_id or start_block != finish_block) {
+        diagnostics.trace("rec range block");
         return Error.UnsupportedControlFlow;
-    const block = try snapshot.irBlock(function, start_block);
-    if (block.isEmpty() or !block.kind.isCompilable() or block.start > start or block.finish < finish)
-        return Error.UnsupportedControlFlow;
-}
-
-fn commandRangeMatches(
-    snapshot: snapshot_v1.Snapshot,
-    function: snapshot_v1.IrFunction,
-    start: u32,
-    commands: []const snapshot_v1.IrCommand,
-) Error!bool {
-    if (start > function.instruction_count -| @as(u32, @intCast(commands.len)))
-        return false;
-    for (commands, 0..) |command, offset| {
-        if ((try snapshot.irInstruction(function, start + @as(u32, @intCast(offset)))).command != command)
-            return false;
     }
-    return true;
+    const block = try snapshot.irBlock(function, start_block);
+    if (block.isEmpty() or !block.kind.isCompilable() or block.start > start or block.finish < finish) {
+        diagnostics.trace("rec range kind");
+        return Error.UnsupportedControlFlow;
+    }
 }
 
 fn uintOperand(

@@ -27,7 +27,12 @@ backend_emit_library(
     ],
 )
 backend_emit_library(name = "closures")
-backend_emit_library(name = "control")
+backend_emit_library(
+    name = "control",
+    deps = [
+        "//compiler/backend/plan:admission",
+    ],
+)
 backend_emit_library(
     name = "core",
     deps = [

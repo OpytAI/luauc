@@ -95,19 +95,18 @@ pub noinline fn emitGetArrayAddress(
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
     try self.requireOperandCount(instruction_value, 2);
-    if (!self.plan.isGuardedArrayAddress(instruction_id)) {
-        diagnostics.trace("arr unguarded");
-        return Error.UnsupportedControlFlow;
-    }
     const table = try self.operand(instruction_value, 0);
     const fresh = if (table.kind == .instruction)
         try self.freshTableRegister(table.value)
     else
         null;
-    if (fresh == null and
-        (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value)))
-    {
-        diagnostics.trace("arr unproven");
+    const proved = table.kind == .instruction and self.plan.isProvenTablePointer(table.value);
+    const guarded = self.plan.isGuardedArrayAddress(instruction_id);
+    // A killed size check leaves a proved address unguarded. A register whose
+    // tag check was deleted stays unproved, and the size check that remains is
+    // the bounds gate. The load still rejects an index outside that guard.
+    if (!guarded and fresh == null and !proved) {
+        diagnostics.trace("arr unguarded");
         return Error.UnsupportedControlFlow;
     }
 
@@ -186,6 +185,28 @@ pub fn preservedFreshTablePointer(self: anytype, pointer: snapshot_v1.IrOperand,
     return true;
 }
 
+fn layoutTablePointer(self: anytype, table: snapshot_v1.IrOperand, instruction_id: u32) Error!bool {
+    if (table.kind != .instruction)
+        return false;
+    if (self.plan.isProvenTablePointer(table.value))
+        return true;
+    if (try preservedFreshTablePointer(self, table, instruction_id))
+        return true;
+    if (try self.dupTableRegisterForPointer(table.value)) |_|
+        return true;
+    const producer = try self.instruction(table.value);
+    // A killed CHECK_TAG leaves the fast-path size check on a pointer the frontend
+    // already proved was a table. The guard still branches to the fallback.
+    if (producer.command == .load_pointer and producer.operand_count == 1) {
+        const source = try self.operand(producer, 0);
+        if (source.kind == .vm_reg)
+            return true;
+        if (source.kind == .vm_const)
+            return (try self.snapshot.vmConstant(self.proto, source.value)).kind == .table;
+    }
+    return producer.command == abi.ir_cmd_new_table or producer.command == abi.ir_cmd_dup_table;
+}
+
 pub noinline fn emitTableLayoutGuard(
     self: anytype,
     instruction_id: u32,
@@ -194,9 +215,7 @@ pub noinline fn emitTableLayoutGuard(
     if (instruction_value.command == abi.ir_cmd_check_no_metatable) {
         try self.requireOperandCount(instruction_value, 2);
         const table = try self.operand(instruction_value, 0);
-        if (table.kind != .instruction or
-            (!self.plan.isProvenTablePointer(table.value) and
-                !try preservedFreshTablePointer(self, table, instruction_id)))
+        if (!try layoutTablePointer(self, table, instruction_id))
             return Error.UnsupportedControlFlow;
         try self.emitPointerValue(table);
         try self.body.i32Load(self.allocator, 2, abi.table_metatable_offset);
@@ -210,10 +229,19 @@ pub noinline fn emitTableLayoutGuard(
         return Error.UnsupportedCommand;
     try self.requireOperandCount(instruction_value, 3);
     const table = try self.operand(instruction_value, 0);
-    if (table.kind != .instruction or
-        (!self.plan.isProvenTablePointer(table.value) and
-            !try preservedFreshTablePointer(self, table, instruction_id)))
+    if (!try layoutTablePointer(self, table, instruction_id)) {
+        const producer_cmd: u32 = if (table.kind == .instruction)
+            @intFromEnum((self.instruction(table.value) catch return Error.UnsupportedControlFlow).command)
+        else
+            0;
+        var detail: [32]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "arrsz k{d} c{d}", .{
+            @intFromEnum(table.kind),
+            producer_cmd,
+        }) catch "arrsz";
+        diagnostics.trace(text);
         return Error.UnsupportedControlFlow;
+    }
     try self.emitPointerValue(table);
     try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
     try self.emitI32Value(try self.operand(instruction_value, 1));
@@ -233,23 +261,89 @@ pub noinline fn emitForwardTableBarrier(
         try self.freshTableRegister(table.value)
     else
         null;
-    if ((fresh == null and
-        (table.kind != .instruction or !self.plan.isProvenTablePointer(table.value))) or
+    // A collector check clears the planner's type guard. The register publication remains a table.
+    var proved = table.kind == .instruction and self.plan.isProvenTablePointer(table.value);
+    if (!proved and fresh == null and table.kind == .instruction)
+        proved = (try self.dupTableRegisterForPointer(table.value)) != null;
+    // Const-prop deletes CHECK_TAG and leaves the barrier on the register load.
+    if (!proved and fresh == null and table.kind == .instruction) {
+        const producer = try self.instruction(table.value);
+        if (producer.command == .load_pointer and producer.operand_count == 1) {
+            const loaded = try self.operand(producer, 0);
+            if (loaded.kind == .vm_reg)
+                proved = true;
+            if (loaded.kind == .vm_const)
+                proved = (try self.snapshot.vmConstant(self.proto, loaded.value)).kind == .table;
+        }
+    }
+    if ((fresh == null and !proved) or
         source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
         (known_tag.kind != .undef and known_tag.kind != .constant))
+    {
+        const producer_cmd: u32 = if (table.kind == .instruction)
+            @intFromEnum((self.instruction(table.value) catch return Error.UnsupportedControlFlow).command)
+        else
+            0;
+        var detail: [64]u8 = undefined;
+        const text = std.fmt.bufPrint(&detail, "bar k{d} c{d} s{d} t{d}", .{
+            @intFromEnum(table.kind),
+            producer_cmd,
+            @intFromEnum(source.kind),
+            @intFromEnum(known_tag.kind),
+        }) catch "bar";
+        diagnostics.trace(text);
         return Error.UnsupportedControlFlow;
+    }
     if (known_tag.kind == .constant and (try self.constant(known_tag.value)).tagValue() == null)
         return Error.InvalidOperandType;
 
-    try self.body.localGet(self.allocator, 0);
+    // luaC_barriert is a no-op unless the value is collectable, the table is black, and the value is white.
+    const known_collectable: ?bool = if (known_tag.kind == .constant)
+        (try self.constant(known_tag.value)).tagValue().? >= abi.lua_tag_string
+    else
+        null;
+    if (known_collectable == false)
+        return;
+    if (known_collectable == null) {
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, source.value * tvalue_size + abi.tvalue_tag_offset);
+        try self.body.i32Const(self.allocator, abi.lua_tag_string);
+        try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+        try self.body.ifVoid(self.allocator);
+        try emitForwardBarrierWhenMarked(self, table, fresh, source.value);
+        try self.body.end(self.allocator);
+        return;
+    }
+    try emitForwardBarrierWhenMarked(self, table, fresh, source.value);
+}
+
+fn emitForwardBarrierTable(self: anytype, table: snapshot_v1.IrOperand, fresh: ?u32) Error!void {
     if (fresh) |register| {
         try self.body.localGet(self.allocator, self.base_local);
         try self.body.i32Load(self.allocator, 2, register * tvalue_size);
     } else {
         try self.emitPointerValue(table);
     }
-    try self.body.i32Const(self.allocator, @intCast(source.value));
+}
+
+fn emitForwardBarrierWhenMarked(self: anytype, table: snapshot_v1.IrOperand, fresh: ?u32, source_reg: u32) Error!void {
+    try emitForwardBarrierTable(self, table, fresh);
+    try self.body.i32Load8U(self.allocator, 0, abi.lua_state_marked_offset);
+    try self.body.i32Const(self.allocator, abi.lua_black_bit);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source_reg * tvalue_size);
+    try self.body.i32Load8U(self.allocator, 0, abi.lua_state_marked_offset);
+    try self.body.i32Const(self.allocator, abi.lua_white_bits);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try emitForwardBarrierTable(self, table, fresh);
+    try self.body.i32Const(self.allocator, @intCast(source_reg));
     try self.body.call(self.allocator, self.barrier_table_forward orelse return Error.UnsupportedCommand);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
 }
 
 pub noinline fn emitGeneralTableOperation(

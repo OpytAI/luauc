@@ -34,34 +34,43 @@ fn immediateNumber(self: anytype, operand: snapshot_v1.IrOperand) Error!?f64 {
 }
 
 pub noinline fn supportsArithmeticFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
-    if (block.kind != .fallback or block.isEmpty() or block.finish - block.start != 2)
+    if (block.kind != .fallback or block.isEmpty())
         return false;
-    const marker = try self.instruction(block.start);
-    const arithmetic = try self.instruction(block.start + 1);
-    const jump = try self.instruction(block.start + 2);
-    if (marker.command != .set_savedpc or arithmetic.command != .do_arith or jump.command != .jump or
-        marker.operand_count != 1 or arithmetic.operand_count != 4 or jump.operand_count != 1)
+    // One step is SET_SAVEDPC, DO_ARITH, JUMP (finish - start == 2). A straight-line chain
+    // repeats the pair and keeps a single jump, so the span stays even.
+    const span = block.finish - block.start;
+    if (span < 2 or span % 2 != 0)
         return false;
-
-    const marker_operand = try self.operand(marker, 0);
-    const destination = try self.operand(arithmetic, 0);
-    const lhs = try self.operand(arithmetic, 1);
-    const rhs = try self.operand(arithmetic, 2);
-    const operation = try self.operand(arithmetic, 3);
+    var cursor = block.start;
+    while (cursor < block.finish) : (cursor += 2) {
+        const marker = try self.instruction(cursor);
+        const arithmetic = try self.instruction(cursor + 1);
+        if (marker.command != .set_savedpc or arithmetic.command != .do_arith or
+            marker.operand_count != 1 or arithmetic.operand_count != 4)
+            return false;
+        const marker_operand = try self.operand(marker, 0);
+        const destination = try self.operand(arithmetic, 0);
+        const lhs = try self.operand(arithmetic, 1);
+        const rhs = try self.operand(arithmetic, 2);
+        const operation = try self.operand(arithmetic, 3);
+        if (marker_operand.kind != .constant or destination.kind != .vm_reg or operation.kind != .constant)
+            return false;
+        if ((try self.constant(marker_operand.value)).uintValue() == null)
+            return false;
+        const upstream_operation = (try self.constant(operation.value)).intValue() orelse return false;
+        if (aotArithmeticOperation(upstream_operation) == null)
+            return false;
+        if (destination.value >= self.proto.max_stack_size)
+            return false;
+        _ = self.valueOperandEncoding(lhs) catch return false;
+        _ = self.valueOperandEncoding(rhs) catch return false;
+    }
+    const jump = try self.instruction(block.finish);
+    if (jump.command != .jump or jump.operand_count != 1)
+        return false;
     const jump_target = try self.operand(jump, 0);
-    if (marker_operand.kind != .constant or destination.kind != .vm_reg or
-        operation.kind != .constant or jump_target.kind != .block)
+    if (jump_target.kind != .block)
         return false;
-    if ((try self.constant(marker_operand.value)).uintValue() == null)
-        return false;
-    const upstream_operation = (try self.constant(operation.value)).intValue() orelse return false;
-    if (aotArithmeticOperation(upstream_operation) == null)
-        return false;
-    if (destination.value >= self.proto.max_stack_size)
-        return false;
-    _ = self.valueOperandEncoding(lhs) catch return false;
-    _ = self.valueOperandEncoding(rhs) catch return false;
-
     const target = try self.snapshot.irBlock(self.function, jump_target.value);
     return target.kind.isCompilable() and !target.isEmpty();
 }
@@ -551,4 +560,250 @@ pub noinline fn supportsStringKeyFallback(self: anytype, block: snapshot_v1.IrBl
 }
 
 pub const isRequireImportInstruction = model.isRequireImportInstruction;
+
+// Shorter runs stay on the existing per-instruction emitter.
+pub const uniform_numeric_run_minimum: u32 = 32;
+const uniform_numeric_run_step_limit: u32 = 28000;
+
+pub const UniformNumericRun = struct {
+    start: u32,
+    finish: u32,
+    count: u32,
+    register: u32,
+    constant_bits: u64,
+    wasm_opcode: u8,
+    // Last arithmetic instruction. It keeps an f64 local so a later user can read it.
+    accumulator: u32,
+};
+
+fn uniformNumericOpcode(command: snapshot_v1.IrCommand) ?u8 {
+    return switch (command) {
+        .add_num => 0xa0,
+        .sub_num => 0xa1,
+        .mul_num => 0xa2,
+        .div_num => 0xa3,
+        else => null,
+    };
+}
+
+fn skipNops(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    cursor: u32,
+    end: u32,
+) Error!u32 {
+    var next = cursor;
+    while (next < end) {
+        const instruction = try snapshot.irInstruction(function, next);
+        if (instruction.command != .nop)
+            break;
+        next += 1;
+    }
+    return next;
+}
+
+const NumericStep = struct {
+    arith: u32,
+    store: u32,
+    next: u32,
+    lhs: u32,
+    register: u32,
+    constant_bits: u64,
+    wasm_opcode: u8,
+};
+
+fn numericStepAt(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    cursor: u32,
+    end: u32,
+) Error!?NumericStep {
+    if (cursor >= end)
+        return null;
+    const arithmetic = try snapshot.irInstruction(function, cursor);
+    const wasm_opcode = uniformNumericOpcode(arithmetic.command) orelse return null;
+    if (arithmetic.operand_count != 2)
+        return null;
+    const lhs = try snapshot.irOperand(arithmetic, 0);
+    const rhs = try snapshot.irOperand(arithmetic, 1);
+    if (lhs.kind != .instruction or rhs.kind != .constant)
+        return null;
+    const constant = try snapshot.irConstant(function, rhs.value);
+    if (constant.kind != .double)
+        return null;
+    const store_at = try skipNops(snapshot, function, cursor + 1, end);
+    if (store_at >= end)
+        return null;
+    const store = try snapshot.irInstruction(function, store_at);
+    if (store.command != .store_double or store.operand_count != 2)
+        return null;
+    const destination = try snapshot.irOperand(store, 0);
+    const stored = try snapshot.irOperand(store, 1);
+    if (destination.kind != .vm_reg or destination.value >= proto.max_stack_size or
+        stored.kind != .instruction or stored.value != cursor)
+        return null;
+    return .{
+        .arith = cursor,
+        .store = store_at,
+        .next = try skipNops(snapshot, function, store_at + 1, end),
+        .lhs = lhs.value,
+        .register = destination.value,
+        .constant_bits = constant.bits,
+        .wasm_opcode = wasm_opcode,
+    };
+}
+
+/// The register still holds `value_id` at `at` when the last store of that register wrote it,
+/// or when `value_id` itself loaded that register and nothing stored over it.
+fn memoryHoldsInstruction(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    value_id: u32,
+    register: u32,
+    at: u32,
+) Error!bool {
+    if (value_id >= at or at > function.instruction_count)
+        return false;
+    const value = try snapshot.irInstruction(function, value_id);
+    if (value.command == .load_double and value.operand_count == 1) {
+        const source = try snapshot.irOperand(value, 0);
+        if (source.kind == .vm_reg and source.value == register) {
+            var cursor = value_id + 1;
+            while (cursor < at) : (cursor += 1) {
+                const instruction = try snapshot.irInstruction(function, cursor);
+                if (instruction.command != .store_double or instruction.operand_count != 2)
+                    continue;
+                const destination = try snapshot.irOperand(instruction, 0);
+                if (destination.kind == .vm_reg and destination.value == register)
+                    return false;
+            }
+            return true;
+        }
+    }
+    var holds = false;
+    var cursor = value_id + 1;
+    while (cursor < at) : (cursor += 1) {
+        const instruction = try snapshot.irInstruction(function, cursor);
+        if (instruction.command != .store_double or instruction.operand_count != 2)
+            continue;
+        const destination = try snapshot.irOperand(instruction, 0);
+        if (destination.kind != .vm_reg or destination.value != register)
+            continue;
+        const stored = try snapshot.irOperand(instruction, 1);
+        holds = stored.kind == .instruction and stored.value == value_id;
+    }
+    return holds;
+}
+
+/// One register updated by the same add, sub, mul, or div of one double, at least 32 times.
+/// Const-prop forwards each add into the next and leaves the reloads as NOPs. A counted loop
+/// reloads the register, applies the constant once per step, and stores it back.
+/// `end` is exclusive and is the block boundary, so a run cannot cross a jump.
+pub fn uniformNumericRun(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    uses: []const u32,
+    start: u32,
+    end: u32,
+) Error!?UniformNumericRun {
+    if (start >= end or end > function.instruction_count or start >= uses.len)
+        return null;
+    var cursor = start;
+    const head = try snapshot.irInstruction(function, cursor);
+    var expected_lhs: ?u32 = null;
+    if (head.command == .load_double) {
+        if (head.operand_count != 1 or uses[cursor] != 1)
+            return null;
+        const source = try snapshot.irOperand(head, 0);
+        if (source.kind != .vm_reg or source.value >= proto.max_stack_size)
+            return null;
+        expected_lhs = cursor;
+        cursor = try skipNops(snapshot, function, cursor + 1, end);
+    } else if (uniformNumericOpcode(head.command) == null) {
+        return null;
+    }
+
+    var count: u32 = 0;
+    var register: u32 = 0;
+    var bits: u64 = 0;
+    var opcode: u8 = 0;
+    var first_arith: u32 = 0;
+    var last_arith: u32 = 0;
+    var last_store: u32 = 0;
+    const seeded = expected_lhs != null;
+
+    while (count < uniform_numeric_run_step_limit and cursor < end) {
+        const step = (try numericStepAt(snapshot, function, proto, cursor, end)) orelse
+            break;
+        if (expected_lhs) |lhs| {
+            if (step.lhs != lhs)
+                break;
+        }
+        if (count == 0) {
+            if (!seeded and !try memoryHoldsInstruction(
+                snapshot,
+                function,
+                step.lhs,
+                step.register,
+                step.arith,
+            ))
+                break;
+            if (seeded) {
+                const load = try snapshot.irInstruction(function, expected_lhs.?);
+                const source = try snapshot.irOperand(load, 0);
+                if (source.value != step.register)
+                    break;
+            }
+            register = step.register;
+            bits = step.constant_bits;
+            opcode = step.wasm_opcode;
+            first_arith = step.arith;
+        } else {
+            if (step.register != register or step.constant_bits != bits or step.wasm_opcode != opcode)
+                break;
+            if (last_arith >= uses.len)
+                return null;
+            const expected_uses: u32 = if (step.lhs == last_arith) 2 else 1;
+            if (uses[last_arith] != expected_uses)
+                break;
+        }
+        count += 1;
+        last_arith = step.arith;
+        last_store = step.store;
+        expected_lhs = step.arith;
+        cursor = step.next;
+        if (cursor < end and cursor < uses.len and uses[cursor] == 1) {
+            const maybe_load = try snapshot.irInstruction(function, cursor);
+            if (maybe_load.command == .load_double and maybe_load.operand_count == 1) {
+                const source = try snapshot.irOperand(maybe_load, 0);
+                if (source.kind == .vm_reg and source.value == register) {
+                    const after = try skipNops(snapshot, function, cursor + 1, end);
+                    if (after < end) {
+                        const peeked = try snapshot.irInstruction(function, after);
+                        if (uniformNumericOpcode(peeked.command) != null and peeked.operand_count == 2) {
+                            const peeked_lhs = try snapshot.irOperand(peeked, 0);
+                            if (peeked_lhs.kind == .instruction and peeked_lhs.value == cursor) {
+                                expected_lhs = cursor;
+                                cursor = after;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (count < uniform_numeric_run_minimum)
+        return null;
+    return .{
+        .start = if (seeded) start else first_arith,
+        .finish = last_store,
+        .count = count,
+        .register = register,
+        .constant_bits = bits,
+        .wasm_opcode = opcode,
+        .accumulator = last_arith,
+    };
+}
 

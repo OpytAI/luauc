@@ -168,6 +168,10 @@ pub const Body = struct {
         try self.memoryOp(allocator, 0x36, alignment_log2, offset);
     }
 
+    pub fn i32Store8(self: *Body, allocator: std.mem.Allocator, alignment_log2: u32, offset: u32) !void {
+        try self.memoryOp(allocator, 0x3a, alignment_log2, offset);
+    }
+
     pub fn i64Store(self: *Body, allocator: std.mem.Allocator, alignment_log2: u32, offset: u32) !void {
         try self.memoryOp(allocator, 0x37, alignment_log2, offset);
     }
@@ -234,6 +238,11 @@ pub const Body = struct {
     pub fn ifI32(self: *Body, allocator: std.mem.Allocator) !void {
         try self.bytes.append(allocator, 0x04);
         try self.bytes.append(allocator, 0x7f);
+    }
+
+    pub fn ifF64(self: *Body, allocator: std.mem.Allocator) !void {
+        try self.bytes.append(allocator, 0x04);
+        try self.bytes.append(allocator, 0x7c);
     }
 
     pub fn else_(self: *Body, allocator: std.mem.Allocator) !void {

@@ -171,12 +171,57 @@ pub noinline fn constantLoadPatternAt(self: anytype, start: u32) Error!?Constant
         .constant_id = constant_operand.value,
     };
 }
-pub noinline fn emitConstantLoad(self: anytype, pattern: ConstantLoadPattern) Error!void {
+fn emitConstantLoadHelper(self: anytype, destination: u32, constant_id: u32) Error!void {
     try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-    try self.body.i32Const(self.allocator, @intCast(pattern.constant_id));
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(constant_id));
     try self.body.call(self.allocator, self.load_constant orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+}
+fn emitConstantLoadValue(self: anytype, destination: u32, constant_id: u32) Error!void {
+    // LOP_LOADK copies one Proto.k slot. The active thread is never black, so this
+    // path does not barrier. A zero constant cache, or a destination at L->top, uses the helper.
+    const dest_offset: i32 = std.math.cast(i32, destination * tvalue_size) orelse return Error.ResourceLimit;
+    const const_offset: i32 = std.math.cast(i32, constant_id * tvalue_size) orelse return Error.ResourceLimit;
+    try self.body.localGet(self.allocator, self.constant_array_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, dest_offset);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_top_offset);
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.constant_array_local);
+    try self.body.i32Const(self.allocator, const_offset);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, 0);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, 8);
+    try self.body.else_(self.allocator);
+    try emitConstantLoadHelper(self, destination, constant_id);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitConstantLoadHelper(self, destination, constant_id);
+    try self.body.end(self.allocator);
+}
+pub noinline fn emitConstantLoad(self: anytype, pattern: ConstantLoadPattern) Error!void {
+    try emitConstantLoadValue(self, pattern.destination, pattern.constant_id);
+    // The register is published either by the copy or by the helper. Vector math reads the
+    // load instruction's slot, which this cluster replaced, so the same bytes have to land there too.
+    if (pattern.start >= self.slots.len or self.slots[pattern.start].shape != .tvalue)
+        return Error.InvalidInstructionResult;
+    const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };
+    try self.emitTValuePart(published, false);
+    try self.body.localSet(self.allocator, self.slots[pattern.start].first);
+    try self.emitTValuePart(published, true);
+    try self.body.localSet(self.allocator, self.slots[pattern.start].second);
 }
 pub noinline fn constantTruthyFallbackPatternAt(self: anytype, start: u32) Error!?ConstantTruthyFallbackPattern {
     const commands = [_]snapshot_v1.IrCommand{ .load_tvalue, .select_if_truthy, .store_tvalue };
@@ -218,11 +263,7 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
     try self.body.ifVoid(self.allocator);
     try self.emitStoreTValueOperand(pattern.destination, pattern.true_value);
     try self.body.else_(self.allocator);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-    try self.body.i32Const(self.allocator, @intCast(pattern.constant_id));
-    try self.body.call(self.allocator, self.load_constant orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
+    try emitConstantLoadValue(self, pattern.destination, pattern.constant_id);
     try self.body.end(self.allocator);
 
     const result_id = pattern.start + 1;
@@ -591,6 +632,7 @@ pub noinline fn guardedLiteralFieldSetPatternAt(self: anytype, start: u32) Error
     return pattern;
 }
 pub noinline fn emitLiteralFieldSet(self: anytype, pattern: LiteralFieldSetPattern) Error!void {
+    try self.publishEscapedSlotNodes(pattern.start, pattern.finish);
     try self.emitPcLocation(pattern.pc);
     if (pattern.materialized_tag) |tag| {
         try self.body.localGet(self.allocator, self.base_local);

@@ -583,6 +583,25 @@ pub const FastcallPattern = struct {
             return self.argument_three == abi.lbf_operand_none;
         return self.parameter_count == 3 and self.argument_three < 0x8000_0000;
     }
+
+    // Taken numeric fastcalls. Register operands and number constants both qualify.
+    // result_count stays 1 so the open multret form remains on the helper.
+    pub fn isInlineNumericFastcall(self: FastcallPattern) bool {
+        if (self.result_count != 1)
+            return false;
+        const two = self.parameter_count == 2 and self.argument_three == abi.lbf_operand_none and
+            self.argument_two != abi.lbf_operand_none;
+        const three = self.parameter_count == 3 and self.argument_two != abi.lbf_operand_none and
+            self.argument_three != abi.lbf_operand_none;
+        return switch (self.builtin_id) {
+            12 => self.parameter_count == 1 and self.argument_two == abi.lbf_operand_none and
+                self.argument_three == abi.lbf_operand_none,
+            15, 21 => two,
+            34, 59 => two or three,
+            46, 89 => three,
+            else => false,
+        };
+    }
 };
 
 pub const TypeNamePattern = struct {
@@ -665,17 +684,24 @@ pub fn markerCapture(
         return Error.InvalidOperandCount;
     const source = try snapshot.irOperand(marker, 0);
     const kind_operand = try snapshot.irOperand(marker, 1);
-    if (kind_operand.kind != .constant)
+    if (kind_operand.kind != .constant) {
+        diagnostics.trace("mark kind");
         return Error.InvalidOperandType;
-    const marker_kind = (try snapshot.irConstant(function, kind_operand.value)).uintValue() orelse
+    }
+    const marker_kind = (try snapshot.irConstant(function, kind_operand.value)).uintValue() orelse {
+        diagnostics.trace("mark uint");
         return Error.InvalidOperandType;
+    };
     if (source.kind == .vm_reg) {
-        if (source.value >= proto.max_stack_size or marker_kind > 1 or (!allow_reference and marker_kind != 0))
+        if (source.value >= proto.max_stack_size or marker_kind > 1 or (!allow_reference and marker_kind != 0)) {
+            diagnostics.trace("mark reg");
             return Error.InvalidOperandType;
+        }
         return .{ .kind = if (marker_kind == 0) .value else .reference, .source = source.value };
     }
     if (source.kind == .vm_upvalue and source.value < proto.nups and marker_kind == 0)
         return .{ .kind = .upvalue, .source = source.value };
+    diagnostics.trace("mark src");
     return Error.InvalidOperandType;
 }
 
@@ -882,12 +908,6 @@ pub fn scanImportNeedsFor(
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
         const instruction_value = try snapshot.irInstruction(function, instruction_id);
-        var detail: [64]u8 = undefined;
-        const text = std.fmt.bufPrint(&detail, "scan insn {d} cmd {d}", .{
-            instruction_id,
-            @intFromEnum(instruction_value.command),
-        }) catch "scan";
-        diagnostics.trace(text);
         switch (instruction_value.command) {
             .coverage => needs.coverage_hit = true,
             .load_pointer => {
@@ -1021,7 +1041,10 @@ pub fn scanImportNeedsFor(
             },
             ir_cmd_get_arr_addr => needs.array_get = true,
             ir_cmd_table_len => needs.table_len = true,
-            ir_cmd_do_len => needs.do_len = true,
+            ir_cmd_do_len => {
+                needs.do_len = true;
+                needs.table_len = true;
+            },
             ir_cmd_concat => needs.concat = true,
             ir_cmd_fallback_forgprep => {
                 needs.forg_prep = true;
@@ -1093,16 +1116,12 @@ pub fn scanImportNeedsFor(
             },
             .check_tag => if (instruction_value.operand_count == 3) {
                 const failure = try snapshot.irOperand(instruction_value, 2);
-                if (failure.kind == .vm_exit) {
-                    if (failure.value < proto.code_count) {
-                        const word = try snapshot.bytecodeWord(proto, failure.value);
-                        if (@as(u8, @truncate(word)) == abi.lop_fornprep)
-                            needs.forn_prepare = true
-                        else
-                            needs.builtin_type_error = true;
-                    } else {
+                if (failure.kind == .vm_exit and failure.value < proto.code_count) {
+                    const word = try snapshot.bytecodeWord(proto, failure.value);
+                    if (@as(u8, @truncate(word)) == abi.lop_fornprep)
+                        needs.forn_prepare = true
+                    else
                         needs.builtin_type_error = true;
-                    }
                     needs.set_location = true;
                 }
             },

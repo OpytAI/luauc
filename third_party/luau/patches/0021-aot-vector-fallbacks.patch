@@ -1,0 +1,91 @@
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -609,8 +609,9 @@
+     if (bcTypes.a == LBC_TYPE_VECTOR && bcTypes.b == LBC_TYPE_VECTOR &&
+         (tm == TM_ADD || tm == TM_SUB || tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV))
+     {
+-        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)), build.constTag(LUA_TVECTOR), build.vmExit(pcpos));
+-        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rc)), build.constTag(LUA_TVECTOR), build.vmExit(pcpos));
++        fallback = build.fallbackBlock(pcpos);
++        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)), build.constTag(LUA_TVECTOR), fallback);
++        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rc)), build.constTag(LUA_TVECTOR), fallback);
+ 
+         IrOp vb = build.inst(IrCmd::LOAD_TVALUE, opb);
+         IrOp vc = build.inst(IrCmd::LOAD_TVALUE, opc);
+@@ -640,6 +641,7 @@
+         result = build.inst(IrCmd::TAG_VECTOR, result);
+ 
+         build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
++        translateBinaryNumericFallbackIfRequired(build, fallback, ra, opb, opc, tm, pcpos);
+         return;
+     }
+     else if (!isUserdataBytecodeType(bcTypes.a) && bcTypes.b == LBC_TYPE_VECTOR && (tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV))
+@@ -654,7 +656,7 @@
+             );
+         }
+ 
+-        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rc)), build.constTag(LUA_TVECTOR), build.vmExit(pcpos));
++        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rc)), build.constTag(LUA_TVECTOR), getInitializedFallback(build, fallback, pcpos));
+ 
+         IrOp vb = build.inst(IrCmd::FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, loadDoubleOrConstant(build, opb)));
+         IrOp vc = build.inst(IrCmd::LOAD_TVALUE, opc);
+@@ -684,7 +686,7 @@
+     }
+     else if (bcTypes.a == LBC_TYPE_VECTOR && !isUserdataBytecodeType(bcTypes.b) && (tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV))
+     {
+-        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)), build.constTag(LUA_TVECTOR), build.vmExit(pcpos));
++        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)), build.constTag(LUA_TVECTOR), getInitializedFallback(build, fallback, pcpos));
+ 
+         if (rc != -1)
+         {
+@@ -867,12 +869,19 @@
+ 
+     if (bcTypes.a == LBC_TYPE_VECTOR)
+     {
+-        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)), build.constTag(LUA_TVECTOR), build.vmExit(pcpos));
++        IrOp fallback = build.fallbackBlock(pcpos);
++        build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(rb)), build.constTag(LUA_TVECTOR), fallback);
+ 
+         IrOp vb = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb));
+         IrOp va = build.inst(IrCmd::UNM_VEC, vb);
+         va = build.inst(IrCmd::TAG_VECTOR, va);
+         build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), va);
++
++        IrOp next = build.blockAtInst(pcpos + 1);
++        FallbackStreamScope scope(build, fallback, next);
++        build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
++        build.inst(IrCmd::DO_ARITH, build.vmReg(ra), build.vmReg(rb), build.vmReg(rb), build.constInt(TM_UNM));
++        build.inst(IrCmd::JUMP, next);
+         return;
+     }
+ 
+@@ -1573,7 +1582,8 @@
+ 
+     if (bcTypes.a == LBC_TYPE_VECTOR)
+     {
+-        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TVECTOR), build.vmExit(pcpos));
++        IrOp fallback = build.fallbackBlock(pcpos);
++        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TVECTOR), fallback);
+ 
+         TString* str = gco2ts(build.function.proto->k[aux].value.gc);
+         const char* field = getstr(str);
+@@ -1607,12 +1617,14 @@
+         }
+         else
+         {
+-            if (build.hostHooks.vectorAccess && build.hostHooks.vectorAccess(build, field, str->len, ra, rb, pcpos))
+-                return;
+-
+-            build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
++            if (!(build.hostHooks.vectorAccess && build.hostHooks.vectorAccess(build, field, str->len, ra, rb, pcpos)))
++                build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+         }
+ 
++        IrOp next = build.blockAtInst(pcpos + 2);
++        FallbackStreamScope scope(build, fallback, next);
++        build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
++        build.inst(IrCmd::JUMP, next);
+         return;
+     }
+ 

@@ -940,7 +940,7 @@ export function parseRuntimeProfile(bytes) {
 
 export const PIN = "luau-0.725+luauc-patches";
 export const LUAU_PIN_DIGEST = "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676";
-export const FRONTEND_CONTRACT_DIGEST = "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f";
+export const FRONTEND_CONTRACT_DIGEST = "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5";
 
 export function finishDocument(document) {
   const withoutHash = { ...document };

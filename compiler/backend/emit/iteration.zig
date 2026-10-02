@@ -634,6 +634,7 @@ pub noinline fn emitArrayOperation(
             try self.body.i32Const(self.allocator, @intCast(pattern.table));
             try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
             try self.emitReloadBase();
+            try self.publishLengthSlot(pattern.start + 5, pattern.destination);
         },
     }
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
@@ -656,6 +657,7 @@ pub noinline fn emitStringTableOperationBlock(self: anytype, block_id: u32, bloc
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
     }
+    try self.publishEscapedSlotNodes(pattern.start, block.finish);
     try self.emitStringTableOperation(pattern);
 }
 pub noinline fn emitStringTableOperation(self: anytype, pattern: StringTablePattern) Error!void {
@@ -678,6 +680,7 @@ pub noinline fn emitGlobalOperationBlock(self: anytype, block_id: u32, block: sn
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
     }
+    try self.publishEscapedSlotNodes(pattern.start, block.finish);
     try self.emitGlobalOperation(pattern);
     if (!self.rejoin_fallthrough)
         try self.body.branch(self.allocator, self.loop_branch_depth);

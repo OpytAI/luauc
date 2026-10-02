@@ -110,61 +110,21 @@ fn emitStringGetHelper(self: anytype, destination: u32, table: u32, key: []const
 // The constant is already interned in Proto.k. The array pointer is stable for this
 // activation, so the call-frame walk runs once. A miss, including a collision, stays on the helper.
 fn emitProtoConstantString(self: anytype, index: u32) Error!void {
+    // call_func receives the interned TString*, or stays zero so the caller uses the helper.
+    // Entry already checked the function id and sizek, and this index is a string constant.
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_func_local);
-    const index_i32 = std.math.cast(i32, index) orelse return;
+    if (index >= self.proto.vm_constant_count)
+        return;
     const slot_addend = std.math.cast(i32, std.math.mul(u32, index, tvalue_size) catch return) orelse return;
-
-    try self.body.localGet(self.allocator, self.constant_array_local);
-    try self.body.opcode(self.allocator, 0x45); // i32.eqz
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
-    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
-    try self.body.i32Load(self.allocator, 2, 0);
-    try self.body.localTee(self.allocator, self.call_meta_local);
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, self.call_meta_local);
-    try self.body.i32Load8U(self.allocator, 0, abi.closure_is_c_offset);
-    try self.body.i32Eqz(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, self.call_meta_local);
-    try self.body.i32Load(self.allocator, 2, abi.closure_l_proto_offset);
-    try self.body.localTee(self.allocator, self.call_meta_local);
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, self.call_meta_local);
-    try self.body.i32Load(self.allocator, 2, abi.proto_sizek_offset);
-    try self.body.i32Const(self.allocator, 0);
-    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
-    try self.body.i32Const(self.allocator, index_i32);
-    try self.body.localGet(self.allocator, self.call_meta_local);
-    try self.body.i32Load(self.allocator, 2, abi.proto_sizek_offset);
-    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
-    try self.body.opcode(self.allocator, 0x71); // i32.and
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, self.call_meta_local);
-    try self.body.i32Load(self.allocator, 2, abi.proto_constants_offset);
-    try self.body.localSet(self.allocator, self.constant_array_local);
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
 
     try self.body.localGet(self.allocator, self.constant_array_local);
     try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, self.constant_array_local);
     try self.body.i32Const(self.allocator, slot_addend);
     try self.body.opcode(self.allocator, 0x6a); // i32.add
-    try self.body.localTee(self.allocator, self.call_meta_local);
-    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
-    try self.body.i32Const(self.allocator, lua_tag_string);
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.i32Load(self.allocator, 2, 0);
     try self.body.localSet(self.allocator, self.call_func_local);
-    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
 
@@ -482,10 +442,6 @@ fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []co
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
     if (key_constant) |index| {
-        try emitRegisterBelowTop(self, table);
-        try emitRegisterBelowTop(self, destination);
-        try self.body.opcode(self.allocator, 0x71); // i32.and
-        try self.body.ifVoid(self.allocator);
         try self.body.localGet(self.allocator, self.base_local);
         try self.body.i32Load(self.allocator, 2, table * tvalue_size + tvalue_tag_offset);
         try self.body.i32Const(self.allocator, lua_tag_table);
@@ -513,7 +469,6 @@ fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []co
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
-        try self.body.end(self.allocator);
     }
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
@@ -533,6 +488,14 @@ fn emitStringSetHelper(self: anytype, table: u32, value: u32, key: []const u8) E
     try self.emitReloadBase();
 }
 
+fn emitClearTableTmcache(self: anytype) Error!void {
+    // A fresh table caches every tag method as absent. luaH_setslot clears that
+    // byte. An inline string write has to do the same or __iter stays missing.
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.i32Store8(self.allocator, 0, abi.table_tmcache_offset);
+}
+
 fn emitCopyRegisterToNode(self: anytype, register: u32) Error!void {
     const offset = register * tvalue_size;
     try self.body.localGet(self.allocator, self.call_closure_local);
@@ -547,18 +510,32 @@ fn emitCopyRegisterToNode(self: anytype, register: u32) Error!void {
 
 fn emitCollectableValueBarrier(self: anytype, register: u32) Error!void {
     // A module with no collectable table store does not import the barrier.
-    // Number writes are the common case and do not need one.
+    // Number writes are the common case and do not need one. A collectable write
+    // calls only when the table is black and the value is white, matching luaC_barriert.
     const barrier = self.barrier_table_forward orelse return;
     const slot = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
     try self.emitTValueTag(slot);
     try self.body.i32Const(self.allocator, lua_tag_string);
     try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
     try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.lua_state_marked_offset);
+    try self.body.i32Const(self.allocator, abi.lua_black_bit);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+    try self.body.i32Load8U(self.allocator, 0, abi.lua_state_marked_offset);
+    try self.body.i32Const(self.allocator, abi.lua_white_bits);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, 0);
     try self.body.localGet(self.allocator, self.call_aux_local);
     try self.body.i32Const(self.allocator, @intCast(register));
     try self.body.call(self.allocator, barrier);
     try self.emitReloadBase();
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
 
@@ -611,10 +588,6 @@ pub fn emitStringSlotSetOrHelper(
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
     if (key_constant) |index| {
-        try emitRegisterBelowTop(self, table);
-        try emitRegisterBelowTop(self, value);
-        try self.body.opcode(self.allocator, 0x71); // i32.and
-        try self.body.ifVoid(self.allocator);
         try self.body.localGet(self.allocator, self.base_local);
         try self.body.i32Load(self.allocator, 2, table * tvalue_size + tvalue_tag_offset);
         try self.body.i32Const(self.allocator, lua_tag_table);
@@ -637,6 +610,7 @@ pub fn emitStringSlotSetOrHelper(
         try emitNodeKeyMatch(self);
         try self.body.ifVoid(self.allocator);
         try emitCopyRegisterToNode(self, value);
+        try emitClearTableTmcache(self);
         try emitCollectableValueBarrier(self, value);
         try self.body.i32Const(self.allocator, 1);
         try self.body.localSet(self.allocator, self.call_proto_local);
@@ -657,10 +631,10 @@ pub fn emitStringSlotSetOrHelper(
         try self.body.ifVoid(self.allocator);
         try emitWriteStringKey(self);
         try emitCopyRegisterToNode(self, value);
+        try emitClearTableTmcache(self);
         try emitCollectableValueBarrier(self, value);
         try self.body.i32Const(self.allocator, 1);
         try self.body.localSet(self.allocator, self.call_proto_local);
-        try self.body.end(self.allocator);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
@@ -676,6 +650,213 @@ pub fn emitStringSlotSetOrHelper(
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
     try emitStringSetHelper(self, table, value, key);
+    try self.body.end(self.allocator);
+}
+
+// call_aux is the metatable. call_meta is 1 when the tag method value is non-nil.
+// 0 means absent. 2 means the metatable has no node array, so the caller uses the helper.
+fn emitLookupTagMethod(self: anytype, comptime event: u32) Error!void {
+    const mask: i32 = @as(i32, 1) << @intCast(event);
+    const name_offset: u32 = abi.global_tmname_offset + event * 4;
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_tmcache_offset);
+    try self.body.i32Const(self.allocator, mask);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_global_offset);
+    try self.body.i32Load(self.allocator, 2, name_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+    try emitMainPositionNode(self);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    // A nil value at this key is absent. A different key follows gnext, the same rule as luaH_getstr.
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try emitKeyPointerMatch(self);
+    try self.body.ifVoid(self.allocator);
+    try emitValueNonNil(self);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.branch(self.allocator, 3);
+    try self.body.else_(self.allocator);
+    try self.body.branch(self.allocator, 3);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try emitNextIsZero(self);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try emitFollowNext(self);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    // luaT_gettm records a nil result. The next lookup of this event is the tmcache test above.
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_tmcache_offset);
+    try self.body.i32Const(self.allocator, mask);
+    try self.body.opcode(self.allocator, 0x72); // i32.or
+    try self.body.i32Store8(self.allocator, 0, abi.table_tmcache_offset);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+fn emitLoadTypeMetatable(self: anytype, source: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source * tvalue_size + tvalue_tag_offset);
+    try self.body.localTee(self.allocator, self.call_cached_closure_local);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_cached_closure_local);
+    try self.body.i32Const(self.allocator, abi.lua_tag_userdata);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, source * tvalue_size);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.userdata_metatable_offset);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_cached_closure_local);
+    try self.body.i32Const(self.allocator, @intCast(abi.lua_type_count));
+    try self.body.opcode(self.allocator, 0x49); // i32.lt_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_global_offset);
+    try self.body.localGet(self.allocator, self.call_cached_closure_local);
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.opcode(self.allocator, 0x74); // i32.shl
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, abi.global_mt_offset);
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+fn emitPublishNamecallHit(self: anytype, destination: u32, source: u32, key_index: u32, set_atom: bool) Error!void {
+    if (set_atom) {
+        try emitProtoConstantString(self, key_index);
+        try self.body.localGet(self.allocator, self.call_func_local);
+        try self.body.ifVoid(self.allocator);
+    }
+    try self.emitCopyTValueRegisters(destination + 1, source);
+    try emitCopyNodeToRegister(self, destination);
+    if (set_atom) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.localGet(self.allocator, self.call_func_local);
+        try self.body.i32Store(self.allocator, 2, abi.lua_state_namecall_offset);
+    }
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    if (set_atom)
+        try self.body.end(self.allocator);
+}
+
+fn emitIndexMethodHit(self: anytype, destination: u32, source: u32, key_index: u32) Error!void {
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+    try emitProtoConstantString(self, key_index);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+    try emitMainPositionNode(self);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try emitKeyPointerMatch(self);
+    try self.body.ifVoid(self.allocator);
+    try emitValueNonNil(self);
+    try self.body.ifVoid(self.allocator);
+    try emitPublishNamecallHit(self, destination, source, key_index, false);
+    try self.body.branch(self.allocator, 3);
+    try self.body.else_(self.allocator);
+    try self.body.branch(self.allocator, 3);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try emitNextIsZero(self);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try emitFollowNext(self);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+// Non-table NAMECALL. __namecall, or a method in an __index table, copies the target.
+// A table receiver and a callable __index stay on namecall_plain.
+pub fn emitInlineNonTableNamecall(self: anytype, destination: u32, source: u32, key_index: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    if (destination + 1 >= self.proto.max_stack_size)
+        return;
+    try emitRegisterBelowTop(self, source);
+    try emitRegisterBelowTop(self, destination);
+    try emitRegisterBelowTop(self, destination + 1);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.ifVoid(self.allocator);
+    try emitLoadTypeMetatable(self, source);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+    try emitLookupTagMethod(self, abi.upstream_tm_namecall);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitPublishNamecallHit(self, destination, source, key_index, true);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.i32Eq(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitLookupTagMethod(self, abi.upstream_tm_index);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitIndexMethodHit(self, destination, source, key_index);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
 
@@ -2171,6 +2352,16 @@ pub noinline fn dynamicLengthPattern(self: anytype, block: snapshot_v1.IrBlock) 
         .marker = marker,
     };
 }
+/// A length helper writes the VM register. Consumers of the skipped convert read the wasm
+/// local, so copy that register into the convert slot when the local exists.
+pub fn publishLengthSlot(self: anytype, convert_id: u32, dest_reg: u32) Error!void {
+    if (convert_id >= self.slots.len or self.slots[convert_id].shape != .f64)
+        return;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, dest_reg * tvalue_size);
+    try self.emitInstructionResultSet(convert_id);
+}
+
 pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(dest_reg));
@@ -2494,11 +2685,32 @@ pub noinline fn emitGeneralTableLen(self: anytype, instruction_id: u32, instruct
         ((try self.rootedTablePointerRegister(pointer)) orelse return Error.UnsupportedControlFlow);
     const dest_reg = (try tableLenDestination(self, instruction_id, table_reg)) orelse
         return Error.UnsupportedControlFlow;
+    // TABLE_LEN has no wasm slot. The helper writes the lua number into dest_reg.
+    // The following INT_TO_NUM reloads that number.
     try self.emitPlainTableLen(dest_reg, table_reg);
-    try self.body.localGet(self.allocator, self.base_local);
-    try self.body.f64Load(self.allocator, 3, dest_reg * tvalue_size);
-    try self.body.opcode(self.allocator, 0xaa); // i32.trunc_f64_s
-    try self.emitInstructionResultSet(instruction_id);
+}
+
+/// INT_TO_NUM of a table length has no i32 slot. The length helper already stored the lua number.
+pub noinline fn emitIntToNum(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 1);
+    const operand = try self.operand(instruction_value, 0);
+    if (operand.kind == .instruction and operand.value < self.slots.len and
+        self.slots[operand.value].shape == .none)
+    {
+        const produced = try self.instruction(operand.value);
+        if (produced.command == ir_cmd_table_len and produced.operand_count == 1) {
+            const pointer = try self.operand(produced, 0);
+            const table_reg = (try self.loadedPointerRegister(pointer)) orelse
+                ((try self.rootedTablePointerRegister(pointer)) orelse return Error.UnsupportedControlFlow);
+            const dest_reg = (try tableLenDestination(self, operand.value, table_reg)) orelse
+                return Error.UnsupportedControlFlow;
+            try self.body.localGet(self.allocator, self.base_local);
+            try self.body.f64Load(self.allocator, 3, dest_reg * tvalue_size);
+            try self.emitInstructionResultSet(instruction_id);
+            return;
+        }
+    }
+    try self.emitUnaryI32(instruction_id, instruction_value, 0xb7); // f64.convert_i32_s
 }
 
 fn storedLenRegister(self: anytype, store: snapshot_v1.IrInstruction, convert_id: u32) Error!?u32 {

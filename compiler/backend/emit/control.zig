@@ -3,6 +3,7 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
+const admission = @import("luauc_backend_admission");
 
 const aotArithmeticOperation = model.aotArithmeticOperation;
 const Error = model.Error;
@@ -13,6 +14,7 @@ const status_internal_error = abi.status_internal_error;
 const status_yielded = abi.status_yielded;
 const status_prepared = abi.status_prepared;
 const proto_function_id_offset = abi.proto_function_id_offset;
+const metadata_entry_offset = abi.metadata_entry_offset;
 const prepared_call_status_offset = abi.prepared_call_status_offset;
 const prepared_call_table_index_offset = abi.prepared_call_table_index_offset;
 const prepared_call_metadata_offset = abi.prepared_call_metadata_offset;
@@ -94,6 +96,51 @@ pub noinline fn emitDoLen(self: anytype, instruction_id: u32, instruction_value:
     try self.body.i32Const(self.allocator, @intCast(source));
     try self.body.call(self.allocator, self.do_len orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    if (try fallbackLengthConvert(self, instruction_id, destination)) |convert_id|
+        try self.publishLengthSlot(convert_id, destination);
+}
+
+fn fallbackLengthConvert(self: anytype, do_len_id: u32, destination: u32) Error!?u32 {
+    const window: u32 = 12;
+    var cursor = do_len_id;
+    const begin = if (do_len_id > window) do_len_id - window else 0;
+    while (cursor > begin) {
+        cursor -= 1;
+        const convert = try self.instruction(cursor);
+        if (convert.command != .int_to_num or convert.operand_count != 1)
+            continue;
+        const produced = try self.operand(convert, 0);
+        if (produced.kind != .instruction or produced.value >= cursor)
+            continue;
+        const producer = try self.instruction(produced.value);
+        if (producer.command != abi.ir_cmd_table_len and producer.command != abi.ir_cmd_string_len)
+            continue;
+        if (cursor + 1 >= self.function.instruction_count)
+            continue;
+        const store = try self.instruction(cursor + 1);
+        if (store.command != .store_double or store.operand_count != 2)
+            continue;
+        const dest = try self.operand(store, 0);
+        const stored = try self.operand(store, 1);
+        if (dest.kind == .vm_reg and dest.value == destination and
+            stored.kind == .instruction and stored.value == cursor)
+            return cursor;
+    }
+    return null;
+}
+
+/// `#` in a compilable block is the userdata form of length. A string length is a
+/// load. A plain table uses the table-length helper. Every other value uses `do_len`.
+pub noinline fn emitCompilableDoLen(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    try self.requireOperandCount(instruction_value, 2);
+    if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
+        return Error.UnsupportedControlFlow;
+    _ = try self.savedPc(try self.instruction(instruction_id - 1));
+    const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 0));
+    const source = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
+    try self.emitRegisterLength(destination, source);
+    if (try fallbackLengthConvert(self, instruction_id, destination)) |convert_id|
+        try self.publishLengthSlot(convert_id, destination);
 }
 pub noinline fn emitGeneralConcat(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 2);
@@ -197,12 +244,27 @@ pub noinline fn emitStringEqualityBlock(self: anytype, block_id: u32, block: sna
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
     }
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.lhs));
-    try self.body.i32Const(self.allocator, @bitCast(pattern.rhs));
+    // Luau interns every string, so TString* identity is equality. A non-string tag is the false edge.
+    // Strings have no __eq, and this load does not allocate.
+    if ((pattern.rhs & 0x8000_0000) == 0)
+        return Error.InvalidOperandType;
+    const value_offset = pattern.lhs * abi.tvalue_size;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, value_offset + abi.tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_string);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifI32(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, value_offset);
+    try self.emitVmConstantAddress(.{
+        .kind = .vm_const,
+        .value = pattern.rhs & 0x7fff_ffff,
+    });
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.i32Eq(self.allocator);
+    try self.body.else_(self.allocator);
     try self.body.i32Const(self.allocator, 0);
-    try self.body.call(self.allocator, self.compare_any orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
+    try self.body.end(self.allocator);
     try self.emitConditionalDispatch(pattern.true_target, pattern.false_target);
 }
 pub noinline fn emitInterrupt(
@@ -235,15 +297,10 @@ fn emitNullInterruptCallback(self: anytype) Error!void {
     try self.body.i32Eqz(self.allocator);
 }
 fn emitQuietInterrupt(self: anytype, line: u32) Error!void {
-    // Continuation bits already set: abort without rewriting the line or the id.
-    // The slow path exchanges first and then returns the same internal error.
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
-    try self.body.i32Load(self.allocator, 2, abi.callinfo_aotstate_offset);
-    try self.body.i32Const(self.allocator, @intCast(abi.aot_continuation_shift));
-    try self.body.opcode(self.allocator, 0x76); // i32.shr_u
-    try self.body.i32Const(self.allocator, @intCast(abi.aot_continuation_mask));
-    try self.body.opcode(self.allocator, 0x71); // i32.and
+    // The live id is the continuation last exchanged on this activation. Resume clears it
+    // before a continuation body runs, so a set id here is the same internal error as a
+    // non-zero aotstate field. A null callback cannot have stored a new id.
+    try self.body.localGet(self.allocator, self.live_continuation_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
     try emitQuietLineUpdate(self, line);
@@ -252,6 +309,22 @@ fn emitQuietInterrupt(self: anytype, line: u32) Error!void {
     try self.body.end(self.allocator);
 }
 fn emitQuietLineUpdate(self: anytype, line: u32) Error!void {
+    // Same line as the last store: the low bits already match and continuation bits stay put.
+    if (line != 0) {
+        try self.body.localGet(self.allocator, self.last_line_local);
+        try self.body.i32Const(self.allocator, @intCast(line));
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try writeQuietLine(self, line);
+        try self.body.i32Const(self.allocator, @intCast(line));
+        try self.body.localSet(self.allocator, self.last_line_local);
+        try self.body.end(self.allocator);
+        return;
+    }
+    try writeQuietLine(self, line);
+}
+fn writeQuietLine(self: anytype, line: u32) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
     try self.body.localGet(self.allocator, 0);
@@ -560,6 +633,8 @@ pub noinline fn emitExchangeContinuation(self: anytype, next_id: u32) Error!void
     try self.body.i32Const(self.allocator, next_bits);
     try self.body.opcode(self.allocator, i32_or);
     try self.body.i32Store(self.allocator, 2, abi.callinfo_aotstate_offset);
+    try self.body.i32Const(self.allocator, @intCast(next_id));
+    try self.body.localSet(self.allocator, self.live_continuation_local);
 }
 pub noinline fn emitUnexpectedContinuationReturn(self: anytype) Error!void {
     try self.body.i32Const(self.allocator, status_internal_error);
@@ -726,6 +801,10 @@ fn emitFastLuaGuard(self: anytype, function_register: u32, arg_bytes: i32) Error
     try self.body.localTee(self.allocator, self.call_closure_local);
     try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_is_c_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
     try self.body.i32Load(self.allocator, 2, abi.closure_l_proto_offset);
     try self.body.localTee(self.allocator, self.call_proto_local);
     try self.body.ifVoid(self.allocator);
@@ -747,6 +826,7 @@ fn emitFastLuaGuard(self: anytype, function_register: u32, arg_bytes: i32) Error
     try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, self.call_closure_local);
     try self.body.localSet(self.allocator, self.call_cached_closure_local);
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
@@ -843,7 +923,12 @@ fn emitFastInstallFrame(self: anytype, arg_bytes: i32, result_count: i32, frame_
     try self.body.i32Load(self.allocator, 2, abi.callinfo_top_offset);
     try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
 }
-const max_direct_siblings: usize = 64;
+/// An id chain of this length stays at the call site. One compare plus a direct
+/// call is cheaper than a shared dispatch when the package only has a few functions.
+pub const max_inline_direct_siblings: usize = 8;
+/// One br_table covers a larger package. Past this, the existing self-or-indirect
+/// transfer stays smaller than a deep dispatch function.
+pub const max_direct_dispatch_arms: usize = 256;
 
 fn emitCountedDirectCall(self: anytype, function: wasm.FunctionRef) Error!void {
     try self.body.call(self.allocator, self.count_direct_call orelse return Error.UnsupportedCommand);
@@ -875,10 +960,75 @@ fn emitSiblingDispatch(self: anytype, index: u32) Error!void {
     try emitSiblingDispatch(self, index + 1);
     try self.body.end(self.allocator);
 }
+
+/// One function for the package. Function id `k` is br_table depth `k`.
+/// The default arm is the indirect call used for a closure outside this package.
+pub fn emitDirectDispatchTrampoline(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    generated_type: u32,
+    count_direct_call: wasm.FunctionRef,
+    count_indirect_call: wasm.FunctionRef,
+    siblings: []const wasm.FunctionRef,
+) Error!wasm.FunctionRef {
+    const arm_count: u32 = @intCast(siblings.len);
+    const labels = try allocator.alloc(u32, siblings.len);
+    defer allocator.free(labels);
+    for (labels, 0..) |*label, index|
+        label.* = @intCast(index);
+
+    const locals = [_]wasm.Local{.{ .count = 1, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+
+    // done, default, then function ids from last to first. Id 0 is the innermost block.
+    var opened: u32 = 0;
+    while (opened < arm_count + 2) : (opened += 1)
+        try body.block(allocator);
+    try body.localGet(allocator, 1);
+    try body.i32Load(allocator, 2, proto_function_id_offset);
+    try body.brTable(allocator, labels, arm_count);
+
+    for (siblings, 0..) |function, index| {
+        const id: u32 = @intCast(index);
+        try body.end(allocator);
+        try body.call(allocator, count_direct_call);
+        try body.localGet(allocator, 0);
+        try body.localGet(allocator, 1);
+        try body.call(allocator, function);
+        try body.localSet(allocator, 2);
+        try body.branch(allocator, arm_count - id);
+    }
+    try body.end(allocator);
+    try body.call(allocator, count_indirect_call);
+    try body.localGet(allocator, 0);
+    try body.localGet(allocator, 1);
+    try body.localGet(allocator, 1);
+    try body.i32Load(allocator, 2, metadata_entry_offset);
+    try body.callIndirect(allocator, generated_type, 0);
+    try body.localSet(allocator, 2);
+    try body.branch(allocator, 0);
+    try body.end(allocator);
+    try body.localGet(allocator, 2);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_direct_dispatch",
+        generated_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
 fn emitFastLuaTransfer(self: anytype) Error!void {
     // Metadata function ids in one package are dense. A direct call avoids the table lookup.
-    // A larger package keeps the self-or-indirect transfer so one call site stays small.
-    if (self.sibling_functions.len > 0 and self.sibling_functions.len <= max_direct_siblings)
+    if (self.sibling_trampoline) |trampoline| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.localGet(self.allocator, self.call_meta_local);
+        try self.body.call(self.allocator, trampoline);
+        try self.body.localSet(self.allocator, self.status_local);
+        return;
+    }
+    if (self.sibling_functions.len > 0 and self.sibling_functions.len <= max_inline_direct_siblings)
         return emitSiblingDispatch(self, 0);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.i32Load(self.allocator, 2, proto_function_id_offset);
@@ -1345,4 +1495,152 @@ pub noinline fn emitGenericForProtocol(self: anytype, pattern: model.GenericIter
     try self.body.else_(self.allocator);
     try emitGenericForHelper(self, pattern, continuation);
     try self.body.end(self.allocator);
+}
+
+pub noinline fn emitUniformNumericRun(self: anytype, run: admission.UniformNumericRun) Error!void {
+    if (run.accumulator >= self.slots.len or self.slots[run.accumulator].shape != .f64)
+        return Error.InvalidInstructionResult;
+    const accumulator = self.slots[run.accumulator].first;
+    const offset = std.math.mul(u32, run.register, abi.tvalue_size) catch return Error.ResourceLimit;
+    const count = std.math.cast(i32, run.count) orelse return Error.ResourceLimit;
+    // Each iteration loads the register, applies the constant, and stores it.
+    // The last result stays in the accumulator local for a later reader.
+    try self.body.i32Const(self.allocator, count);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, offset);
+    try self.body.f64Const(self.allocator, @bitCast(run.constant_bits));
+    try self.body.opcode(self.allocator, run.wasm_opcode);
+    try self.body.localTee(self.allocator, accumulator);
+    try self.body.f64Store(self.allocator, 3, offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.branchIf(self.allocator, 0);
+    try self.body.end(self.allocator);
+}
+
+const UniformArithmeticFallback = struct {
+    count: u32,
+    destination: u32,
+    lhs: u32,
+    rhs: u32,
+    operation: i32,
+    line0: u32,
+    stride: i32,
+};
+
+fn uniformArithmeticFallback(self: anytype, block: snapshot_v1.IrBlock) Error!?UniformArithmeticFallback {
+    if (!try admission.supportsArithmeticFallback(self, block))
+        return null;
+    const count = (block.finish - block.start) / 2;
+    if (count < admission.uniform_numeric_run_minimum)
+        return null;
+    var destination: u32 = 0;
+    var lhs: u32 = 0;
+    var rhs: u32 = 0;
+    var operation: i32 = 0;
+    var line0: u32 = 0;
+    var stride: i64 = 0;
+    var index: u32 = 0;
+    var cursor = block.start;
+    while (cursor < block.finish) : ({
+        cursor += 2;
+        index += 1;
+    }) {
+        const marker = try self.instruction(cursor);
+        const arithmetic = try self.instruction(cursor + 1);
+        const saved = try self.savedPc(marker);
+        if (saved == 0)
+            return null;
+        const line = try self.sourceLine(saved - 1);
+        const step_destination = (try self.operand(arithmetic, 0)).value;
+        const step_lhs = try self.valueOperandEncoding(try self.operand(arithmetic, 1));
+        const step_rhs = try self.valueOperandEncoding(try self.operand(arithmetic, 2));
+        const operation_operand = try self.operand(arithmetic, 3);
+        if (operation_operand.kind != .constant)
+            return null;
+        const upstream = (try self.constant(operation_operand.value)).intValue() orelse return null;
+        const step_operation = aotArithmeticOperation(upstream) orelse return null;
+        if (index == 0) {
+            destination = step_destination;
+            lhs = step_lhs;
+            rhs = step_rhs;
+            operation = step_operation;
+            line0 = line;
+            continue;
+        }
+        if (step_destination != destination or step_lhs != lhs or step_rhs != rhs or
+            step_operation != operation)
+            return null;
+        if (index == 1)
+            stride = @as(i64, line) - @as(i64, line0);
+        const expected = @as(i64, line0) + stride * @as(i64, index);
+        if (expected != @as(i64, line))
+            return null;
+    }
+    if (stride > std.math.maxInt(i32) or stride < std.math.minInt(i32))
+        return null;
+    const last = @as(i64, line0) + stride * (@as(i64, count) - 1);
+    if (last < 0 or last > 0xfffff)
+        return null;
+    return .{
+        .count = count,
+        .destination = destination,
+        .lhs = lhs,
+        .rhs = rhs,
+        .operation = operation,
+        .line0 = line0,
+        .stride = @intCast(stride),
+    };
+}
+
+fn emitQuietLineFromLocal(self: anytype, line_local: u32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_aotstate_offset);
+    try self.body.i32Const(self.allocator, @bitCast(abi.aot_line_preserved_mask));
+    try self.body.opcode(self.allocator, i32_and);
+    try self.body.localGet(self.allocator, line_local);
+    try self.body.opcode(self.allocator, i32_or);
+    try self.body.i32Store(self.allocator, 2, abi.callinfo_aotstate_offset);
+}
+
+pub noinline fn emitUniformArithmeticFallback(self: anytype, block: snapshot_v1.IrBlock) Error!bool {
+    const uniform = (try uniformArithmeticFallback(self, block)) orelse return false;
+    const count = std.math.cast(i32, uniform.count) orelse return false;
+    if (self.do_arith == null)
+        return Error.UnsupportedCommand;
+    try self.body.i32Const(self.allocator, count);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(uniform.line0));
+    try self.body.localSet(self.allocator, self.call_closure_local);
+    try self.body.loop(self.allocator);
+    try emitQuietLineFromLocal(self, self.call_closure_local);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(uniform.destination));
+    try self.body.i32Const(self.allocator, @bitCast(uniform.lhs));
+    try self.body.i32Const(self.allocator, @bitCast(uniform.rhs));
+    try self.body.i32Const(self.allocator, uniform.operation);
+    try self.body.call(self.allocator, self.do_arith.?);
+    try self.emitReloadBase();
+    if (uniform.stride != 0) {
+        try self.body.localGet(self.allocator, self.call_closure_local);
+        try self.body.i32Const(self.allocator, uniform.stride);
+        try self.body.opcode(self.allocator, i32_add);
+        try self.body.localSet(self.allocator, self.call_closure_local);
+    }
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, i32_sub);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.branchIf(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.emitJump(try self.instruction(block.finish));
+    return true;
 }

@@ -28,6 +28,11 @@ fn publishObject(result: *api.Result, object_result: lower.Error![]u8) u32 {
     result.data = @intCast(@intFromPtr(object.ptr));
     result.size = @intCast(object.len);
     result.status = api.status_ok;
+    const dump = lower.irDumpText();
+    if (dump.len > 0 and dump.len <= std.math.maxInt(u32)) {
+        result.diagnostic = @intCast(@intFromPtr(dump.ptr));
+        result.diagnostic_size = @intCast(dump.len);
+    }
     return api.status_ok;
 }
 

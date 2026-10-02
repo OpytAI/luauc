@@ -524,6 +524,7 @@ pub noinline fn emitDynamicLength(self: anytype, pattern: DynamicLengthPattern) 
     try self.body.i32Const(self.allocator, @intCast(pattern.source));
     try self.body.call(self.allocator, self.do_len orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    try self.publishLengthSlot(pattern.start + 5, pattern.destination);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }
