@@ -61,14 +61,33 @@ fn emitGeneralGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction
     try self.requireOperandCount(instruction_value, 3);
     const pc = try self.uintConstant(try self.operand(instruction_value, 0));
     const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
-    const key = (try self.stringKey(try self.operand(instruction_value, 2))) orelse
-        return Error.UnsupportedControlFlow;
+    const key_operand = try self.operand(instruction_value, 2);
+    const key = (try self.stringKey(key_operand)) orelse return Error.UnsupportedControlFlow;
     const interned = try self.string_keys.intern(self.allocator, key);
     try self.emitPcLocation(pc);
+    if (operation == .get and key_operand.kind == .vm_const) {
+        try emitInlineEnvGet(self, value, key_operand.value);
+        try self.body.localGet(self.allocator, self.call_proto_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitGeneralGlobalCall(self, operation, value, interned.offset, interned.length);
+        try self.body.end(self.allocator);
+    } else {
+        try emitGeneralGlobalCall(self, operation, value, interned.offset, interned.length);
+    }
+}
+
+fn emitGeneralGlobalCall(
+    self: anytype,
+    operation: GlobalOperation,
+    value: u32,
+    key_offset: u32,
+    key_length: u32,
+) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(value));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
-    try self.body.i32Const(self.allocator, @intCast(interned.length));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key_offset));
+    try self.body.i32Const(self.allocator, @intCast(key_length));
     try self.body.call(self.allocator, switch (operation) {
         .get => self.get_global orelse return Error.UnsupportedCommand,
         .set => self.set_global orelse return Error.UnsupportedCommand,
@@ -309,6 +328,8 @@ fn emitChainWalk(self: anytype, destination: u32, publish_nil: bool, chain_end: 
     // A match sits inside two ifs, so leaving that arm is br 3.
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
+    if (self.count_chain) |probe|
+        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -344,6 +365,8 @@ fn emitFieldWalk(self: anytype, destination: u32, publish_nil: bool) Error!void 
 fn emitIndexKeyWalk(self: anytype, destination: u32, publish_nil: bool) Error!void {
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
+    if (self.count_chain) |probe|
+        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -477,6 +500,126 @@ fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []co
     try self.body.end(self.allocator);
 }
 
+// Main position did not hold this key. Follow gnext and update the first live match.
+// Absence leaves call_proto at 0.
+fn emitUpdateChainedStringKey(self: anytype, value: u32) Error!void {
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    if (self.count_chain) |probe|
+        try self.body.call(self.allocator, probe);
+    try emitNextIsZero(self);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try emitFollowNext(self);
+    try emitKeyPointerMatch(self);
+    try self.body.ifVoid(self.allocator);
+    try emitValueNonNil(self);
+    try self.body.ifVoid(self.allocator);
+    try emitCopyRegisterToNode(self, value);
+    try emitClearTableTmcache(self);
+    try emitCollectableValueBarrier(self, value);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.branch(self.allocator, 3);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+// Register key is a string. Same lookup as a constant string key, using that register's
+// TString*. call_proto is 1 when the value was published, including a raw nil.
+pub fn emitInlineRegisterStringGet(self: anytype, destination: u32, table: u32, key: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, key * tvalue_size);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table * tvalue_size);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+
+    try emitMainPositionNode(self);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+
+    try emitNodeKeyMatch(self);
+    try self.body.ifVoid(self.allocator);
+    try emitCopyNodeToRegister(self, destination);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.else_(self.allocator);
+    try emitAfterMainPositionMiss(self, destination, true);
+    try self.body.end(self.allocator);
+
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+// A global read is a string-key lookup in the active closure environment.
+// The key is already interned in Proto.k. A main-position hit, a hash chain,
+// and a table __index copy the value here. A function __index, or any failed
+// guard, leaves call_proto at 0 so the caller uses get_global.
+pub fn emitInlineEnvGet(self: anytype, destination: u32, key_constant: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.closure_env_offset);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, 0);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try emitProtoConstantString(self, key_constant);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+
+    try emitMainPositionNode(self);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+
+    try emitNodeKeyMatch(self);
+    try self.body.ifVoid(self.allocator);
+    try emitCopyNodeToRegister(self, destination);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.else_(self.allocator);
+    try emitAfterMainPositionMiss(self, destination, true);
+    try self.body.end(self.allocator);
+
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
 fn emitStringSetHelper(self: anytype, table: u32, value: u32, key: []const u8) Error!void {
     const interned = try self.string_keys.intern(self.allocator, key);
     try self.body.localGet(self.allocator, 0);
@@ -575,9 +718,9 @@ fn emitKeyBarrierRequired(self: anytype) Error!void {
     try self.body.opcode(self.allocator, 0x71); // i32.and
 }
 
-// An existing main-position key is two stores. An empty main position of a plain table
-// takes the same stores plus the key write. Collisions, metamethods, and a live barrier
-// stay on table_set_string.
+// An existing key, at the main position or further along the chain, is updated in place.
+// An empty main position of a plain table takes the key write. A missing key, a
+// metamethod, and a live key barrier stay on table_set_string.
 pub fn emitStringSlotSetOrHelper(
     self: anytype,
     table: u32,
@@ -636,6 +779,10 @@ pub fn emitStringSlotSetOrHelper(
         try self.body.i32Const(self.allocator, 1);
         try self.body.localSet(self.allocator, self.call_proto_local);
         try self.body.end(self.allocator);
+        try self.body.else_(self.allocator);
+        // The main slot holds a different key. An existing key further down the
+        // chain is updated in place. A missing key stays on table_set_string.
+        try emitUpdateChainedStringKey(self, value);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
@@ -650,6 +797,86 @@ pub fn emitStringSlotSetOrHelper(
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
     try emitStringSetHelper(self, table, value, key);
+    try self.body.end(self.allocator);
+}
+
+// Register key is already an interned string. An existing slot is updated in place.
+// An empty main position of a plain table takes the key. Growth and metamethods stay on table_set.
+// call_proto is 1 when the write happened.
+pub fn emitInlineRegisterStringSet(self: anytype, table: u32, value: u32, key: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, key * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_string);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, key * tvalue_size);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table * tvalue_size);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_readonly_offset);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.ifVoid(self.allocator);
+
+    try emitMainPositionNode(self);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    try emitNodeKeyMatch(self);
+    try self.body.ifVoid(self.allocator);
+    try emitCopyRegisterToNode(self, value);
+    try emitClearTableTmcache(self);
+    try emitCollectableValueBarrier(self, value);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, table_metatable_offset);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_lsizenode_offset);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.ifVoid(self.allocator);
+    try emitKeyBarrierRequired(self);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.ifVoid(self.allocator);
+    try emitWriteStringKey(self);
+    try emitCopyRegisterToNode(self, value);
+    try emitClearTableTmcache(self);
+    try emitCollectableValueBarrier(self, value);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.end(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitUpdateChainedStringKey(self, value);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
 
@@ -677,6 +904,8 @@ fn emitLookupTagMethod(self: anytype, comptime event: u32) Error!void {
     // A nil value at this key is absent. A different key follows gnext, the same rule as luaH_getstr.
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
+    if (self.count_chain) |probe|
+        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -795,6 +1024,8 @@ fn emitIndexMethodHit(self: anytype, destination: u32, source: u32, key_index: u
     try self.body.ifVoid(self.allocator);
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
+    if (self.count_chain) |probe|
+        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -1099,6 +1330,7 @@ pub noinline fn globalPatternFor(self: anytype, block: snapshot_v1.IrBlock, oper
         .start = start,
         .value = value,
         .key = key,
+        .key_constant = key_operand.value,
         .pc = pc,
         .fast_target = try self.requireCompiledTarget(fast_target),
         .rejoin = rejoin,
@@ -1152,6 +1384,7 @@ pub noinline fn globalHeadPatternAt(self: anytype, start: u32, block: snapshot_v
         .start = start,
         .value = value.value,
         .key = key,
+        .key_constant = key_operand.value,
         .pc = pc,
         .fast_target = fallback.value,
         .rejoin = try self.requireCompiledTarget(rejoin),
@@ -2362,12 +2595,430 @@ pub fn publishLengthSlot(self: anytype, convert_id: u32, dest_reg: u32) Error!vo
     try self.emitInstructionResultSet(convert_id);
 }
 
+// getaboundary: a negative aboundary is the cached length. Otherwise the hint is sizearray.
+// luaH_getn returns that hint when it still names a real boundary. No store to aboundary.
+fn emitCachedArrayBoundary(self: anytype, dest_reg: u32) Error!void {
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_aboundary_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+
+    // boundary * sizeof(TValue) must stay inside a signed 32-bit byte offset.
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0x07ffffff);
+    try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+    try self.body.f64Store(self.allocator, 3, dest_reg * tvalue_size);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, dest_reg * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+fn emitMaybeSetAboundary(self: anytype, value_local: u32) Error!void {
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_aboundary_offset);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localGet(self.allocator, value_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Store(self.allocator, 2, abi.table_aboundary_offset);
+    try self.body.end(self.allocator);
+}
+
+fn emitStoreLengthNumber(self: anytype, dest_reg: u32, value_local: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, value_local);
+    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+    try self.body.f64Store(self.allocator, 3, dest_reg * tvalue_size);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, dest_reg * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+}
+
+// updateaboundary. call_func is the hint, call_closure is the array.
+// call_meta becomes the adjusted length, or 0 when the hint cannot move by one.
+fn emitUpdateAboundary(self: anytype) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try emitMaybeSetAboundary(self, self.call_meta_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try emitMaybeSetAboundary(self, self.call_meta_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+// Nil tail of luaH_getn. The search writes aboundary the same way the pin does.
+fn emitBinarySearchLength(self: anytype, dest_reg: u32) Error!void {
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localSet(self.allocator, self.call_cached_closure_local);
+
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.call_cached_closure_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x76); // i32.shr_u
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_cached_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.localSet(self.allocator, self.call_cached_closure_local);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, 4);
+    try self.body.opcode(self.allocator, 0x76); // i32.shr_u
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try emitMaybeSetAboundary(self, self.call_func_local);
+    try emitStoreLengthNumber(self, dest_reg, self.call_func_local);
+}
+
+// The two side-effect-free hits missed. Finish luaH_getn: move the hint by one
+// slot, binary-search a nil tail, or return sizearray when the tail is occupied.
+fn emitTableLenSearch(self: anytype, dest_reg: u32) Error!void {
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_aboundary_offset);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0x07fffffe);
+    try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    try emitUpdateAboundary(self);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
+    try self.body.ifVoid(self.allocator);
+    try emitStoreLengthNumber(self, dest_reg, self.call_meta_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitStoreLengthNumber(self, dest_reg, self.call_func_local);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0x07ffffff);
+    try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitBinarySearchLength(self, dest_reg);
+    try self.body.else_(self.allocator);
+    try emitStoreLengthNumber(self, dest_reg, self.call_func_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+// luaH_getn for a table with no metatable. The full-array hit and the cached
+// boundary hit do not write. The remaining search writes aboundary the same
+// way the pin does. A metatable, a null array, or an array past the offset
+// limit stays on table_len.
 pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) Error!void {
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table_reg * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_table);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table_reg * tvalue_size);
+    try self.body.localTee(self.allocator, self.call_aux_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, table_metatable_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    // lsizenode == 0 is the empty node vector. luaH_new points that vector at dummynode.
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_lsizenode_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4a); // i32.gt_s
+    try self.body.ifVoid(self.allocator);
+
+    // (sizearray - 1) * sizeof(TValue) must stay inside a signed 32-bit byte offset.
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 0x07ffffff);
+    try self.body.opcode(self.allocator, 0x4c); // i32.le_s
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+    try self.body.f64Store(self.allocator, 3, dest_reg * tvalue_size);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lua_tag_number);
+    try self.body.i32Store(self.allocator, 2, dest_reg * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitCachedArrayBoundary(self, dest_reg);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitTableLenSearch(self, dest_reg);
+    try self.body.end(self.allocator);
+
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(dest_reg));
     try self.body.i32Const(self.allocator, @intCast(table_reg));
     try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
+    try self.body.end(self.allocator);
 }
 
 fn plainLenResultEscapes(self: anytype, convert_id: u32, finish: u32) Error!bool {

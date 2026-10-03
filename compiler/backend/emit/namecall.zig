@@ -219,8 +219,70 @@ pub noinline fn emitPlainTableNamecallBlock(
     if (!self.rejoin_fallthrough)
         try self.body.branch(self.allocator, self.loop_branch_depth);
 }
+fn followingStringMethod(self: anytype, after_id: u32, destination: u32) Error!bool {
+    var cursor = after_id;
+    const limit = @min(self.function.instruction_count, after_id + 48);
+    while (cursor < limit) : (cursor += 1) {
+        const instruction = try self.instruction(cursor);
+        if (instruction.command != .call or instruction.operand_count != 3)
+            continue;
+        const target = try self.operand(instruction, 0);
+        if (target.kind != .vm_reg or target.value != destination)
+            return false;
+        const parameter_operand = try self.operand(instruction, 1);
+        const result_operand = try self.operand(instruction, 2);
+        if (parameter_operand.kind != .constant or result_operand.kind != .constant)
+            return false;
+        const parameter_count = (try self.constant(parameter_operand.value)).intValue() orelse return false;
+        const result_count = (try self.constant(result_operand.value)).intValue() orelse return false;
+        return (try self.stringMethodShape(cursor, destination, parameter_count, result_count)) != null;
+    }
+    return false;
+}
+
+// The fused find/sub/match reads the receiver and does not use the method closure.
+// A miss sees a nil method slot and resolves it before prepare_compiled_call.
+fn emitDeferredStringReceiver(self: anytype, destination: u32, source: u32) Error!void {
+    try self.emitReloadBase();
+    if (source != destination + 1)
+        try self.emitCopyTValueRegisters(destination + 1, source);
+    const slot = destination * abi.tvalue_size;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Const(self.allocator, 0);
+    try self.body.i64Store(self.allocator, 3, slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Const(self.allocator, 0);
+    try self.body.i64Store(self.allocator, 3, slot + 8);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+}
+
+pub fn emitResolveDeferredNamecall(
+    self: anytype,
+    destination: u32,
+    source: u32,
+    key_constant: u32,
+) Error!void {
+    try self.emitInlineNonTableNamecall(destination, source, key_constant);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    const key_operand = snapshot_v1.IrOperand{ .kind = .vm_const, .value = key_constant };
+    const key_bytes = (try self.stringKey(key_operand)) orelse return Error.UnsupportedCommand;
+    const key = try self.string_keys.intern(self.allocator, key_bytes);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
+    try self.body.i32Const(self.allocator, @intCast(key.length));
+    try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    try self.body.end(self.allocator);
+}
+
 pub noinline fn emitFallbackNamecall(
     self: anytype,
+    instruction_id: u32,
     instruction_value: snapshot_v1.IrInstruction,
 ) Error!void {
     try self.requireOperandCount(instruction_value, 4);
@@ -236,7 +298,10 @@ pub noinline fn emitFallbackNamecall(
     const key = try self.string_keys.intern(self.allocator, key_bytes);
     try self.emitPcLocation(pc);
     // Strings and other non-tables hit __index in the type metatable. A miss keeps this helper.
-    try self.emitInlineNonTableNamecall(destination, source, key_operand.value);
+    if (try followingStringMethod(self, instruction_id + 1, destination))
+        try emitDeferredStringReceiver(self, destination, source)
+    else
+        try self.emitInlineNonTableNamecall(destination, source, key_operand.value);
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
@@ -258,7 +323,11 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try self.emitInlineNonTableNamecall(pattern.destination, pattern.source, pattern.key_constant);
+    const fallback_block = try self.snapshot.irBlock(self.function, pattern.fallback);
+    if (try followingStringMethod(self, fallback_block.start + 1, pattern.destination))
+        try emitDeferredStringReceiver(self, pattern.destination, pattern.source)
+    else
+        try self.emitInlineNonTableNamecall(pattern.destination, pattern.source, pattern.key_constant);
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
@@ -409,6 +478,15 @@ pub noinline fn emitConcat(self: anytype, pattern: ConcatPattern) Error!void {
     try self.body.i32Const(self.allocator, @intCast(pattern.source));
     try self.body.i32Const(self.allocator, @intCast(pattern.count));
     try self.body.call(self.allocator, self.concat orelse return Error.UnsupportedCommand);
-    // Concatenation publishes the result and runs its ordinary GC boundary in the runtime helper.
+    // The helper writes the destination register and does not fill the load's wasm slot.
+    // A later store of that load copies the slot, so publish the register into it.
     try self.emitReloadBase();
+    const load_id = pattern.start + 2;
+    if (load_id >= self.slots.len or self.slots[load_id].shape != .tvalue)
+        return Error.InvalidInstructionResult;
+    const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };
+    try self.emitTValuePart(published, false);
+    try self.body.localSet(self.allocator, self.slots[load_id].first);
+    try self.emitTValuePart(published, true);
+    try self.body.localSet(self.allocator, self.slots[load_id].second);
 }

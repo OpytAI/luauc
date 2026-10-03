@@ -64,6 +64,7 @@ backend_emit_library(
     name = "scalar",
     deps = ["//compiler/model:diagnostics"],
 )
+backend_emit_library(name = "string_method")
 backend_emit_library(name = "tables")
 backend_emit_library(
     name = "table_values",

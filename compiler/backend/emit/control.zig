@@ -176,19 +176,119 @@ pub noinline fn emitCompareAny(self: anytype, instruction_id: u32, instruction_v
         return Error.UnsupportedControlFlow;
     _ = try self.savedPc(try self.instruction(instruction_id - 1));
 
-    const lhs = try self.valueOperandEncoding(try self.operand(instruction_value, 0));
-    const rhs = try self.valueOperandEncoding(try self.operand(instruction_value, 1));
+    const lhs_operand = try self.operand(instruction_value, 0);
+    const rhs_operand = try self.operand(instruction_value, 1);
+    const lhs = try self.valueOperandEncoding(lhs_operand);
+    const rhs = try self.valueOperandEncoding(rhs_operand);
     const operation = try self.comparisonOperation(try self.conditionOperand(instruction_value, 2));
 
+    if (lhs_operand.kind == .vm_reg and rhs_operand.kind == .vm_reg)
+        try emitPrimitiveCompare(self, lhs_operand.value, rhs_operand.value, lhs, rhs, operation)
+    else
+        try emitCompareHelper(self, lhs, rhs, operation);
+    try self.emitInstructionResultSet(instruction_id);
+    // The helper can invoke a metamethod and relocate the active stack. A primitive hit does not.
+    try self.emitReloadBase();
+}
+
+fn emitCompareHelper(self: anytype, lhs: u32, rhs: u32, operation: i32) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @bitCast(lhs));
     try self.body.i32Const(self.allocator, @bitCast(rhs));
     try self.body.i32Const(self.allocator, operation);
     try self.body.call(self.allocator, self.compare_any orelse return Error.UnsupportedCommand);
-    try self.emitInstructionResultSet(instruction_id);
-    // Generic comparison can invoke a metamethod and relocate the active stack.
-    try self.emitReloadBase();
 }
+
+fn emitRegisterF64(self: anytype, register: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, try registerByteOffset(register, 0));
+}
+
+fn emitRegisterI32(self: anytype, register: u32) Error!void {
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, try registerByteOffset(register, 0));
+}
+
+fn registerByteOffset(register: u32, extra: u32) Error!u32 {
+    const base = std.math.mul(u32, register, abi.tvalue_size) catch return Error.ResourceLimit;
+    return std.math.add(u32, base, extra) catch return Error.ResourceLimit;
+}
+
+fn emitTagIs(self: anytype, register: u32, tag: i32) Error!void {
+    const operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
+    try self.emitTValueTag(operand);
+    try self.body.i32Const(self.allocator, tag);
+    try self.body.i32Eq(self.allocator);
+}
+
+// Same-type primitives have no metamethod. Different tags are not equal.
+// Tables, userdata, and mixed values stay on compare_any.
+fn emitSameTypeEqual(self: anytype, lhs: u32, rhs: u32, lhs_encoded: u32, rhs_encoded: u32) Error!void {
+    try emitTagIs(self, lhs, @intCast(abi.lua_tag_number));
+    try self.body.ifI32(self.allocator);
+    try emitRegisterF64(self, lhs);
+    try emitRegisterF64(self, rhs);
+    try self.body.f64Eq(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitTagIs(self, lhs, @intCast(abi.lua_tag_string));
+    try self.body.ifI32(self.allocator);
+    try emitRegisterI32(self, lhs);
+    try emitRegisterI32(self, rhs);
+    try self.body.i32Eq(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitTagIs(self, lhs, abi.lua_tag_boolean);
+    try self.body.ifI32(self.allocator);
+    try emitRegisterI32(self, lhs);
+    try emitRegisterI32(self, rhs);
+    try self.body.i32Eq(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitTagIs(self, lhs, abi.lua_tag_nil);
+    try self.body.ifI32(self.allocator);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.else_(self.allocator);
+    try emitCompareHelper(self, lhs_encoded, rhs_encoded, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+
+fn emitPrimitiveCompare(
+    self: anytype,
+    lhs: u32,
+    rhs: u32,
+    lhs_encoded: u32,
+    rhs_encoded: u32,
+    operation: i32,
+) Error!void {
+    if (operation == 0) {
+        const lhs_operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = lhs };
+        const rhs_operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = rhs };
+        try self.emitTValueTag(lhs_operand);
+        try self.emitTValueTag(rhs_operand);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifI32(self.allocator);
+        try emitSameTypeEqual(self, lhs, rhs, lhs_encoded, rhs_encoded);
+        try self.body.else_(self.allocator);
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.end(self.allocator);
+        return;
+    }
+    try emitTagIs(self, lhs, @intCast(abi.lua_tag_number));
+    try emitTagIs(self, rhs, @intCast(abi.lua_tag_number));
+    try self.body.opcode(self.allocator, i32_and);
+    try self.body.ifI32(self.allocator);
+    try emitRegisterF64(self, lhs);
+    try emitRegisterF64(self, rhs);
+    if (operation == 1)
+        try self.body.f64Lt(self.allocator)
+    else
+        try self.body.f64Le(self.allocator);
+    try self.body.else_(self.allocator);
+    try emitCompareHelper(self, lhs_encoded, rhs_encoded, operation);
+    try self.body.end(self.allocator);
+}
+
 pub noinline fn stringEqualityPattern(self: anytype, block: snapshot_v1.IrBlock) Error!?StringEqualityPattern {
     if (!block.kind.isCompilable() or block.isEmpty() or block.finish < block.start + 1)
         return null;
@@ -243,6 +343,10 @@ pub noinline fn emitStringEqualityBlock(self: anytype, block_id: u32, block: sna
     if (pattern.start > block.start) {
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
+    }
+    if (try self.tryEmitElidedSubCondition(pattern.start, pattern.rhs)) {
+        try self.emitConditionalDispatch(pattern.true_target, pattern.false_target);
+        return;
     }
     // Luau interns every string, so TString* identity is equality. A non-string tag is the false edge.
     // Strings have no __eq, and this load does not allocate.
@@ -992,14 +1096,22 @@ pub fn emitDirectDispatchTrampoline(
     for (siblings, 0..) |function, index| {
         const id: u32 = @intCast(index);
         try body.end(allocator);
+        // Same wasmi loop-fuel rule as the bytecode dispatcher. This function
+        // has no loop, but its entry fuel still covers every block arm. local 0
+        // is the lua_State* and is never null.
+        try body.localGet(allocator, 0);
+        try body.ifVoid(allocator);
         try body.call(allocator, count_direct_call);
         try body.localGet(allocator, 0);
         try body.localGet(allocator, 1);
         try body.call(allocator, function);
         try body.localSet(allocator, 2);
-        try body.branch(allocator, arm_count - id);
+        try body.branch(allocator, arm_count - id + 1);
+        try body.end(allocator);
     }
     try body.end(allocator);
+    try body.localGet(allocator, 0);
+    try body.ifVoid(allocator);
     try body.call(allocator, count_indirect_call);
     try body.localGet(allocator, 0);
     try body.localGet(allocator, 1);
@@ -1007,7 +1119,8 @@ pub fn emitDirectDispatchTrampoline(
     try body.i32Load(allocator, 2, metadata_entry_offset);
     try body.callIndirect(allocator, generated_type, 0);
     try body.localSet(allocator, 2);
-    try body.branch(allocator, 0);
+    try body.branch(allocator, 1);
+    try body.end(allocator);
     try body.end(allocator);
     try body.localGet(allocator, 2);
     try body.finish(allocator);
@@ -1135,6 +1248,23 @@ fn emitFastPoscall(self: anytype) Error!void {
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.i32Load(self.allocator, 2, abi.callinfo_top_offset);
     try self.body.i32Store(self.allocator, 2, abi.lua_state_top_offset);
+}
+/// `luaC_checkGC` is a threshold compare. The collector runs only when
+/// `totalbytes >= GCthreshold`. A live state has a global. The base is refreshed
+/// only after that call, because only the collector moves the stack.
+pub noinline fn emitGuardedCheckGc(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_global_offset);
+    try self.body.i32Load(self.allocator, 2, abi.global_totalbytes_offset);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_global_offset);
+    try self.body.i32Load(self.allocator, 2, abi.global_gc_threshold_offset);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    try self.body.end(self.allocator);
 }
 fn emitFastGcAssist(self: anytype) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -1265,6 +1395,157 @@ fn emitPreparedCompiledCall(
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
+fn ipairsImportId(self: anytype) Error!?u32 {
+    var index: u32 = 0;
+    while (index < self.proto.vm_constant_count) : (index += 1) {
+        const value = try self.snapshot.vmConstant(self.proto, index);
+        if (value.kind != .import or value.payload1 != 1)
+            continue;
+        const name_item = try self.snapshot.vmConstantItem(value.payload0);
+        if (name_item.value != snapshot_v1.no_id)
+            continue;
+        const name_constant = try self.snapshot.vmConstant(self.proto, name_item.key);
+        if (name_constant.kind != .string)
+            continue;
+        const name = try self.snapshot.string(name_constant.payload0);
+        if (std.mem.eql(u8, name, "ipairs"))
+            return index;
+    }
+    return null;
+}
+
+// ipairs(table) pushes its C upvalue (inext), the table, and integer 0.
+// The callee must be the closure stored for that import. Any other call uses prepare.
+fn emitSyntheticIpairs(
+    self: anytype,
+    function_register: u32,
+    parameter_count: i32,
+    result_count: i32,
+    continuation: ?CallContinuation,
+) Error!bool {
+    if (parameter_count != 1 or result_count != 3)
+        return false;
+    const import_id = (try ipairsImportId(self)) orelse return false;
+    if (function_register + 2 >= self.proto.max_stack_size)
+        return false;
+    const import_i32 = std.math.cast(i32, import_id) orelse return false;
+    const slot_addend = std.math.cast(i32, std.math.mul(u32, import_id, abi.tvalue_size) catch return false) orelse return false;
+    const upval = abi.closure_c_upvals_offset;
+    const result = function_register * abi.tvalue_size;
+    const control = (function_register + 2) * abi.tvalue_size;
+
+    // call_proto is the hit flag. status stays 0: 1 is status_unsupported_type.
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+    if (self.count_block) |probe|
+        try self.body.call(self.allocator, probe);
+
+    try emitTagIs(self, function_register, @intCast(abi.lua_tag_function));
+    try self.body.ifVoid(self.allocator);
+    try emitRegisterI32(self, function_register);
+    try self.body.localTee(self.allocator, self.call_closure_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_is_c_offset);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_nupvalues_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, i32_ge_u);
+    try self.body.ifVoid(self.allocator);
+    if (self.count_chain) |probe|
+        try self.body.call(self.allocator, probe);
+    // The entry cache stays zero when the frame-id check misses. GETIMPORT still
+    // copies this Proto.k slot, so the proof reads the caller proto directly.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
+    try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.closure_is_c_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.closure_l_proto_offset);
+    try self.body.localTee(self.allocator, self.call_meta_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, import_i32);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_sizek_offset);
+    try self.body.opcode(self.allocator, i32_lt_u);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.i32Load(self.allocator, 2, abi.proto_constants_offset);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, slot_addend);
+    try self.body.opcode(self.allocator, i32_add);
+    try self.body.localTee(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, abi.tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, @intCast(abi.lua_tag_function));
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    if (self.count_scan) |probe|
+        try self.body.call(self.allocator, probe);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Load(self.allocator, 2, 0);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    if (self.count_loop) |probe|
+        try self.body.call(self.allocator, probe);
+    try emitTagIs(self, function_register + 1, @intCast(abi.lua_tag_table));
+    try self.body.ifVoid(self.allocator);
+
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, upval);
+    try self.body.i64Store(self.allocator, 3, result);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, upval + 8);
+    try self.body.i64Store(self.allocator, 3, result + 8);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Const(self.allocator, 0);
+    try self.body.f64Store(self.allocator, 3, control);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(abi.lua_tag_number));
+    try self.body.i32Store(self.allocator, 2, control + abi.tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+    // The call prologue already installed this continuation. A synchronous hit must
+    // clear it, the same way prepare does, or the next resumable instruction returns 2.
+    if (continuation) |resumable|
+        try self.emitClearContinuation(resumable.continuation_id);
+
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+    try self.body.end(self.allocator);
+    return true;
+}
+
 pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     const continuation = self.callContinuation(instruction_id);
     try self.requireOperandCount(instruction_value, 3);
@@ -1310,7 +1591,26 @@ pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: 
         try self.body.ifVoid(self.allocator);
         try emitFastLuaInvoke(self, arg_bytes, result_count, continuation, abi.lua_callinfo_native, false);
         try self.body.else_(self.allocator);
-        try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+        if (try emitSyntheticIpairs(self, function_register, parameter_count, result_count, continuation)) {
+            // The miss arm calls prepare. A hit already published inext, the table, and 0.
+        } else if (try self.stringMethodShape(instruction_id, function_register, parameter_count, result_count)) |shape| {
+            try self.emitStringMethodGuards(shape);
+            try self.body.localGet(self.allocator, self.status_local);
+            try self.body.ifVoid(self.allocator);
+            try self.emitStringMethodOperation(shape, continuation);
+            try self.body.else_(self.allocator);
+            // The fused namecall left the method nil. A table fast path stored a function and must be kept.
+            try self.body.localGet(self.allocator, self.base_local);
+            try self.body.i32Load(self.allocator, 2, function_register * abi.tvalue_size + tvalue_tag_offset);
+            try self.body.i32Const(self.allocator, lua_tag_function);
+            try self.body.i32Eq(self.allocator);
+            try self.body.i32Eqz(self.allocator);
+            try self.body.ifVoid(self.allocator);
+            try self.emitResolveDeferredNamecall(function_register, shape.receiver, shape.key_constant);
+            try self.body.end(self.allocator);
+            try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+            try self.body.end(self.allocator);
+        } else try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
         try self.body.end(self.allocator);
     } else {
         try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);

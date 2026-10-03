@@ -40,6 +40,7 @@ zig_library(
         "//compiler/backend/emit:namecall",
         "//compiler/backend/emit:operators",
         "//compiler/backend/emit:scalar",
+        "//compiler/backend/emit:string_method",
         "//compiler/backend/emit:tables",
         "//compiler/backend/emit:table_values",
         "//compiler/backend/plan:plan",

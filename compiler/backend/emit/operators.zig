@@ -519,11 +519,9 @@ pub noinline fn emitDynamicLengthBlock(self: anytype, block_id: u32, block: snap
 }
 pub noinline fn emitDynamicLength(self: anytype, pattern: DynamicLengthPattern) Error!void {
     try self.emitSavedPcLocation(pattern.marker);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-    try self.body.i32Const(self.allocator, @intCast(pattern.source));
-    try self.body.call(self.allocator, self.do_len orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
+    // The cluster already proved the table fast path and kept DO_LEN as the other arm.
+    // A string length is a load. A plain table uses the table-length helper. __len stays on do_len.
+    try self.emitRegisterLength(pattern.destination, pattern.source);
     try self.publishLengthSlot(pattern.start + 5, pattern.destination);
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);

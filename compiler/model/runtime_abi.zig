@@ -17,8 +17,12 @@ pub const close_upvalues_symbol = "luauc_runtime_v1_close_upvalues";
 pub const call_symbol = "luauc_runtime_v1_call";
 pub const prepare_compiled_call_symbol = "luauc_runtime_v1_prepare_compiled_call";
 pub const finish_compiled_call_symbol = "luauc_runtime_v1_finish_compiled_call";
+pub const count_block_symbol = "luauc_runtime_v1_count_block";
+pub const count_chain_symbol = "luauc_runtime_v1_count_chain";
 pub const count_direct_call_symbol = "luauc_runtime_v1_count_direct_call";
 pub const count_indirect_call_symbol = "luauc_runtime_v1_count_indirect_call";
+pub const count_loop_symbol = "luauc_runtime_v1_count_loop";
+pub const count_scan_symbol = "luauc_runtime_v1_count_scan";
 pub const exchange_continuation_symbol = "luauc_runtime_v1_exchange_continuation";
 pub const set_location_symbol = "luauc_runtime_v1_set_location";
 pub const new_table_symbol = "luauc_runtime_v1_new_table";
@@ -33,6 +37,7 @@ pub const array_set_symbol = "luauc_runtime_v1_array_set";
 pub const array_get_symbol = "luauc_runtime_v1_array_get";
 pub const table_len_symbol = "luauc_runtime_v1_table_len";
 pub const concat_symbol = "luauc_runtime_v1_concat";
+pub const slice_string_symbol = "luauc_runtime_v1_slice_string";
 pub const do_len_symbol = "luauc_runtime_v1_do_len";
 pub const forg_prep_symbol = "luauc_runtime_v1_forg_prep";
 pub const forg_loop_symbol = "luauc_runtime_v1_forg_loop";
@@ -192,6 +197,8 @@ pub const closure_env_offset: u32 = 20;
 pub const closure_l_proto_offset: u32 = 24;
 // Closure.l.uprefs. The proto pointer ends at 28 and TValue is aligned to 8.
 pub const closure_l_uprefs_offset: u32 = 32;
+// Closure.c.upvals. f, cont, and debugname occupy 12 bytes, then TValue aligns to 8.
+pub const closure_c_upvals_offset: u32 = 40;
 pub const lua_tag_upval: i32 = 16;
 pub const proto_nups_offset: u32 = 3;
 pub const proto_numparams_offset: u32 = 4;
@@ -240,6 +247,8 @@ pub const upstream_tm_namecall: u32 = 3;
 pub const table_tmcache_offset: u32 = 3;
 pub const table_readonly_offset: u32 = 4;
 pub const table_sizearray_offset: u32 = 8;
+// LuaTable.aboundary shares the lastfree word. A negative value is a cached array length.
+pub const table_aboundary_offset: u32 = 12;
 pub const table_metatable_offset: u32 = 16;
 pub const table_array_offset: u32 = 20;
 // CallInfo::aotstate keeps the continuation id in the high 12 bits and the source line in the low 20.

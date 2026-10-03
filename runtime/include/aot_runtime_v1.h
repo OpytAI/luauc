@@ -246,6 +246,8 @@ void luauc_runtime_v1_table_len(lua_State *state, uint32_t destination_register,
                               uint32_t table_register);
 void luauc_runtime_v1_concat(lua_State *state, uint32_t destination_register, uint32_t source_start,
                            uint32_t count);
+void luauc_runtime_v1_slice_string(lua_State *state, uint32_t destination_register,
+                                 uint32_t source_register, uint32_t offset, uint32_t length);
 void luauc_runtime_v1_do_len(lua_State *state, uint32_t destination_register,
                            uint32_t source_register);
 void luauc_runtime_v1_forg_prep(lua_State *state, uint32_t base_register);
@@ -310,8 +312,12 @@ void luauc_runtime_v1_get_upvalue(lua_State *state, uint32_t destination_registe
 void luauc_runtime_v1_set_upvalue(lua_State *state, uint32_t upvalue_index, uint32_t source_register);
 void luauc_runtime_v1_close_upvalues(lua_State *state, uint32_t first_register);
 void luauc_runtime_v1_reset_counts(void);
+void luauc_runtime_v1_count_block(void);
+void luauc_runtime_v1_count_chain(void);
 void luauc_runtime_v1_count_direct_call(void);
 void luauc_runtime_v1_count_indirect_call(void);
+void luauc_runtime_v1_count_loop(void);
+void luauc_runtime_v1_count_scan(void);
 uint32_t luauc_runtime_v1_helper_calls(void);
 uint32_t luauc_runtime_v1_trampoline_calls(void);
 uint32_t luauc_runtime_v1_direct_calls(void);

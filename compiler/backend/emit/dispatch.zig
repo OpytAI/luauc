@@ -324,11 +324,8 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         .check_cmp_int => try self.emitCheckCompareInteger(instruction_value),
         .check_cmp_int64 => try self.emitCheckCompareInt64(instruction_value),
         .check_gc => {
-            if (self.plan.closureContaining(instruction_id) == null) {
-                try self.body.localGet(self.allocator, 0);
-                try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
-                try self.emitReloadBase();
-            }
+            if (self.plan.closureContaining(instruction_id) == null)
+                try self.emitGuardedCheckGc();
         },
         ir_cmd_barrier_object => try self.emitBarrierObject(instruction_value),
         ir_cmd_barrier_table_back => try self.emitBarrierTableBack(instruction_value),
@@ -520,7 +517,7 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
             try self.emitGenericIterationPrep(instruction_id, instruction_value);
             return true;
         },
-        ir_cmd_fallback_namecall => try self.emitFallbackNamecall(instruction_value),
+        ir_cmd_fallback_namecall => try self.emitFallbackNamecall(instruction_id, instruction_value),
         .fallback_prepvarargs => try self.emitPrepVarargs(instruction_value),
         .fallback_getvarargs => try self.emitGetVarargs(instruction_value),
         .newclosure => try self.emitNewClosure(instruction_id),
@@ -732,6 +729,8 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
     return terminated;
 }
 pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
+    if (self.count_block) |probe|
+        try self.body.call(self.allocator, probe);
     var detail: [32]u8 = undefined;
     const phase = std.fmt.bufPrint(&detail, "block {d}", .{block_id}) catch "block";
     diagnostics.trace(phase);
@@ -1191,6 +1190,8 @@ fn lowerGenericForLoop(self: anytype, block_id: u32, pattern: model.GenericItera
     // One wasm loop for a straight generic-for body. Repeat falls through.
     // Stop, and every resumable exit, still leave through the outer dispatcher.
     try self.body.loop(self.allocator);
+    if (self.count_loop) |probe|
+        try self.body.call(self.allocator, probe);
     const saved_depth = self.loop_branch_depth;
     self.loop_branch_depth = saved_depth + 1;
     defer self.loop_branch_depth = saved_depth;
@@ -1340,6 +1341,8 @@ fn emitLoopPredecessor(self: anytype, block_id: u32) Error!void {
 
 fn lowerDirectLoop(self: anytype, loop: DirectLoop) Error!void {
     try self.body.loop(self.allocator);
+    if (self.count_loop) |probe|
+        try self.body.call(self.allocator, probe);
     const saved_depth = self.loop_branch_depth;
     self.loop_branch_depth = saved_depth + 1;
     defer self.loop_branch_depth = saved_depth;

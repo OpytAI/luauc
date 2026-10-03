@@ -16,6 +16,7 @@ const operators = @import("luauc_backend_emit_operators");
 const iteration = @import("luauc_backend_emit_iteration");
 const closures = @import("luauc_backend_emit_closures");
 const control = @import("luauc_backend_emit_control");
+const string_method = @import("luauc_backend_emit_string_method");
 const calls = @import("luauc_backend_emit_calls");
 const dispatch = @import("luauc_backend_emit_dispatch");
 const admission = @import("luauc_backend_admission");
@@ -52,8 +53,12 @@ pub const Context = struct {
     close_upvalues: ?wasm.FunctionRef,
     prepare_compiled_call: ?wasm.FunctionRef,
     finish_compiled_call: ?wasm.FunctionRef,
+    count_block: ?wasm.FunctionRef,
+    count_chain: ?wasm.FunctionRef,
     count_direct_call: ?wasm.FunctionRef,
     count_indirect_call: ?wasm.FunctionRef,
+    count_loop: ?wasm.FunctionRef,
+    count_scan: ?wasm.FunctionRef,
     generated_type: u32,
     self_function: wasm.FunctionRef,
     sibling_functions: []const wasm.FunctionRef = &.{},
@@ -73,6 +78,7 @@ pub const Context = struct {
     array_get: ?wasm.FunctionRef,
     table_len: ?wasm.FunctionRef,
     concat: ?wasm.FunctionRef,
+    slice_string: ?wasm.FunctionRef,
     do_len: ?wasm.FunctionRef,
     forg_prep: ?wasm.FunctionRef,
     forg_loop: ?wasm.FunctionRef,
@@ -144,6 +150,10 @@ pub const Context = struct {
     call_continuations: []const CallContinuation,
     continuation_indices: []const u32,
     string_keys: *StringKeyPool,
+    // Multi-compare string.sub sites. The call stores a marked slice; each
+    // equality block byte-compares that slice instead of allocating.
+    elided_subs: [48]string_method.ElidedSubSite = [_]string_method.ElidedSubSite{.{}} ** 48,
+    elided_sub_count: u32 = 0,
 
     // core
     pub const instruction = core.instruction;
@@ -362,6 +372,7 @@ pub const Context = struct {
     pub const isBypassedPlainTableNamecallBlock = admission.isBypassedPlainTableNamecallBlock;
     pub const emitPlainTableNamecallBlock = namecall.emitPlainTableNamecallBlock;
     pub const emitFallbackNamecall = namecall.emitFallbackNamecall;
+    pub const emitResolveDeferredNamecall = namecall.emitResolveDeferredNamecall;
     pub const emitPlainTableNamecallOperation = namecall.emitPlainTableNamecallOperation;
 
     pub const emitTableAllocation = namecall.emitTableAllocation;
@@ -425,6 +436,7 @@ pub const Context = struct {
     pub const emitGeneralGetTableKs = tables.emitGeneralGetTableKs;
     pub const emitGeneralSetTableKs = tables.emitGeneralSetTableKs;
     pub const emitStringSlotSetOrHelper = tables.emitStringSlotSetOrHelper;
+    pub const emitInlineEnvGet = tables.emitInlineEnvGet;
     pub const emitInlineNonTableNamecall = tables.emitInlineNonTableNamecall;
     pub const emitInlineNamecallProbe = tables.emitInlineNamecallProbe;
     pub const emitSlotNodeFromTable = tables.emitSlotNodeFromTable;
@@ -526,6 +538,7 @@ pub const Context = struct {
     pub const isBypassedXnextFastPreparationBlock = admission.isBypassedXnextFastPreparationBlock;
     pub const isFastcallFallbackBlock = admission.isFastcallFallbackBlock;
     pub const emitInterrupt = control.emitInterrupt;
+    pub const emitGuardedCheckGc = control.emitGuardedCheckGc;
     pub const emitCoverage = control.emitCoverage;
     pub const emitJump = control.emitJump;
     pub const emitDispatchRejoin = control.emitDispatchRejoin;
@@ -545,6 +558,11 @@ pub const Context = struct {
     pub const emitUnexpectedContinuationReturn = control.emitUnexpectedContinuationReturn;
     pub const emitClearContinuation = control.emitClearContinuation;
     pub const emitCall = control.emitCall;
+    pub const stringMethodShape = string_method.stringMethodShape;
+    pub const noteElidedStringSubs = string_method.noteElidedStringSubs;
+    pub const tryEmitElidedSubCondition = string_method.tryEmitElidedSubCondition;
+    pub const emitStringMethodGuards = string_method.emitStringMethodGuards;
+    pub const emitStringMethodOperation = string_method.emitStringMethodOperation;
     pub const emitGenericForProtocol = control.emitGenericForProtocol;
 
     // calls

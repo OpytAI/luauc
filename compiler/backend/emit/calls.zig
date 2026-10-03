@@ -401,6 +401,7 @@ pub noinline fn emitDecodedGlobalImport(
     if (import.kind != .import or import.payload1 == 0 or import.payload1 > 3)
         return Error.UnsupportedControlFlow;
     var keys = [_]StringKeyPool.Entry{undefined} ** 3;
+    var key_ids = [_]u32{0} ** 3;
     var expected = import.payload1 << 30;
     var index: u32 = 0;
     while (index < import.payload1) : (index += 1) {
@@ -409,6 +410,7 @@ pub noinline fn emitDecodedGlobalImport(
             return Error.UnsupportedControlFlow;
         const shift: u5 = @intCast(20 - index * 10);
         expected |= item.key << shift;
+        key_ids[index] = item.key;
         keys[index] = try self.string_keys.intern(
             self.allocator,
             try self.vmString(.{ .kind = .vm_const, .value = item.key }),
@@ -420,6 +422,13 @@ pub noinline fn emitDecodedGlobalImport(
     // Nil and unsafe environments keep the semantic lookup.
     try self.emitPcLocation(pc);
     try emitCachedImportHit(self, destination, import_id);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    // One-level imports are an environment string-key read. The constant is already
+    // interned. A chain still uses get_global so a nil head keeps luaV_gettable's error.
+    if (import.payload1 == 1)
+        try self.emitInlineEnvGet(destination, key_ids[0]);
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
@@ -439,6 +448,7 @@ pub noinline fn emitDecodedGlobalImport(
         try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
         try self.emitReloadBase();
     }
+    try self.body.end(self.allocator);
     try self.body.end(self.allocator);
 }
 

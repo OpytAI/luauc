@@ -34,6 +34,7 @@ const array_set_symbol = abi.array_set_symbol;
 const array_get_symbol = abi.array_get_symbol;
 const table_len_symbol = abi.table_len_symbol;
 const concat_symbol = abi.concat_symbol;
+const slice_string_symbol = abi.slice_string_symbol;
 const do_len_symbol = abi.do_len_symbol;
 const forg_prep_symbol = abi.forg_prep_symbol;
 const forg_loop_symbol = abi.forg_loop_symbol;
@@ -148,8 +149,12 @@ pub const RuntimeImports = struct {
     close_upvalues: ?wasm.FunctionRef,
     prepare_compiled_call: ?wasm.FunctionRef,
     finish_compiled_call: ?wasm.FunctionRef,
+    count_block: ?wasm.FunctionRef,
+    count_chain: ?wasm.FunctionRef,
     count_direct_call: ?wasm.FunctionRef,
     count_indirect_call: ?wasm.FunctionRef,
+    count_loop: ?wasm.FunctionRef,
+    count_scan: ?wasm.FunctionRef,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
     new_table: ?wasm.FunctionRef,
@@ -179,6 +184,7 @@ pub const RuntimeImports = struct {
     array_get: ?wasm.FunctionRef,
     table_len: ?wasm.FunctionRef,
     concat: ?wasm.FunctionRef,
+    slice_string: ?wasm.FunctionRef,
     do_len: ?wasm.FunctionRef,
     forg_prep: ?wasm.FunctionRef,
     forg_loop: ?wasm.FunctionRef,
@@ -244,6 +250,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const array_operation_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const table_len_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const concat_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
+    const slice_string_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32 };
     const do_len_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const forg_prep_params = [_]wasm.ValueType{ .i32, .i32 };
     const forg_loop_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
@@ -322,7 +329,11 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &finish_compiled_call_params, .results = &no_results });
         break :blk try object.importFunction("env", finish_compiled_call_symbol, helper_type);
     } else null;
-    // Measurement counters. Every wasm Lua transfer, including an iterator call, reports one.
+    // Miss-bucket probes stay unlinked. The call sites compile only when these are set.
+    const count_block: ?wasm.FunctionRef = null;
+    const count_chain: ?wasm.FunctionRef = null;
+    const count_loop: ?wasm.FunctionRef = null;
+    const count_scan: ?wasm.FunctionRef = null;
     const count_direct_call = if (fast_lua_frame) blk: {
         const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
         break :blk try object.importFunction("env", count_direct_call_symbol, helper_type);
@@ -446,6 +457,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const concat = if (needs.concat) blk: {
         const helper_type = try object.addType(.{ .params = &concat_params, .results = &no_results });
         break :blk try object.importFunction("env", concat_symbol, helper_type);
+    } else null;
+    const slice_string = if (needs.slice_string) blk: {
+        const helper_type = try object.addType(.{ .params = &slice_string_params, .results = &no_results });
+        break :blk try object.importFunction("env", slice_string_symbol, helper_type);
     } else null;
     const do_len = if (needs.do_len) blk: {
         const helper_type = try object.addType(.{ .params = &do_len_params, .results = &no_results });
@@ -574,8 +589,12 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .close_upvalues = close_upvalues,
         .prepare_compiled_call = prepare_compiled_call,
         .finish_compiled_call = finish_compiled_call,
+        .count_block = count_block,
+        .count_chain = count_chain,
         .count_direct_call = count_direct_call,
         .count_indirect_call = count_indirect_call,
+        .count_loop = count_loop,
+        .count_scan = count_scan,
         .exchange_continuation = exchange_continuation,
         .set_location = set_location,
         .new_table = new_table,
@@ -605,6 +624,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .array_get = array_get,
         .table_len = table_len,
         .concat = concat,
+        .slice_string = slice_string,
         .do_len = do_len,
         .forg_prep = forg_prep,
         .forg_loop = forg_loop,

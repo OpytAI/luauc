@@ -121,6 +121,7 @@ pub const ImportNeeds = struct {
     array_get: bool = false,
     table_len: bool = false,
     concat: bool = false,
+    slice_string: bool = false,
     do_len: bool = false,
     forg_prep: bool = false,
     forg_loop: bool = false,
@@ -191,6 +192,7 @@ pub const ImportNeeds = struct {
         self.array_get = self.array_get or other.array_get;
         self.table_len = self.table_len or other.table_len;
         self.concat = self.concat or other.concat;
+        self.slice_string = self.slice_string or other.slice_string;
         self.do_len = self.do_len or other.do_len;
         self.forg_prep = self.forg_prep or other.forg_prep;
         self.forg_loop = self.forg_loop or other.forg_loop;
@@ -547,6 +549,7 @@ pub const GlobalPattern = struct {
     start: u32,
     value: u32,
     key: []const u8,
+    key_constant: u32,
     pc: u32,
     fast_target: u32,
     rejoin: u32,
@@ -1013,6 +1016,9 @@ pub fn scanImportNeedsFor(
             ir_cmd_fallback_namecall => {
                 needs.namecall_plain = true;
                 needs.set_location = true;
+                // find stores its results in wasm and then assists. sub publishes through slice_string.
+                needs.check_gc = true;
+                needs.slice_string = true;
             },
             ir_cmd_setlist => needs.set_list = true,
             ir_cmd_set_table => {

@@ -413,18 +413,133 @@ pub noinline fn emitGeneralForgLoopFallback(
 }
 
 pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIterationPattern) Error!void {
+    // ipairs (aux 0x80000002) stops at the first hole. The array step is a few loads.
+    // A cursor that is not the builtin iterator still enters the pinned helper.
+    if (pattern.aux == 0x8000_0002) {
+        try emitIpairsIteratorOk(self, pattern.base);
+        try self.body.ifVoid(self.allocator);
+        try emitIpairsArrayStep(self, pattern);
+        try self.body.else_(self.allocator);
+        try emitForgLoopHelper(self, pattern);
+        try self.body.end(self.allocator);
+        return;
+    }
+    try emitForgLoopHelper(self, pattern);
+}
+fn emitForgLoopHelper(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.base));
     try self.body.i32Const(self.allocator, @bitCast(pattern.aux));
     try self.body.call(self.allocator, self.forg_loop orelse return Error.UnsupportedCommand);
     try self.body.localSet(self.allocator, self.status_local);
     try self.emitReloadBase();
+    try emitIterationSelect(self, pattern);
+}
+fn emitIterationSelect(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.i32Const(self.allocator, @intCast(pattern.repeat_target));
     try self.body.i32Const(self.allocator, @intCast(pattern.exit_target));
     try self.body.localGet(self.allocator, self.status_local);
-    // The helper returns one when it published the next key/value tuple and zero at exhaustion.
+    // One means the next key/value tuple was published. Zero means the loop is done.
     try self.body.select(self.allocator);
     try self.body.localSet(self.allocator, self.dispatch_local);
+}
+fn slotField(base: u32, register: u32, field: u32) u32 {
+    return (base + register) * tvalue_size + field;
+}
+fn emitIpairsIteratorOk(self: anytype, base: u32) Error!void {
+    const table_slot = slotField(base, 1, 0);
+    const cursor_slot = slotField(base, 2, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table_slot + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_table));
+    try self.body.i32Eq(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, cursor_slot + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_lightuserdata));
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, cursor_slot + abi.tvalue_extra_offset);
+    try self.body.i32Const(self.allocator, lu_tag_iterator);
+    try self.body.i32Eq(self.allocator);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, cursor_slot);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x4e); // i32.ge_s
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, table_slot);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+}
+fn emitIpairsArrayStep(self: anytype, pattern: GenericIterationPattern) Error!void {
+    const base = pattern.base;
+    const cursor_slot = slotField(base, 2, 0);
+    const key_slot = slotField(base, 3, 0);
+    const value_slot = slotField(base, 4, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, slotField(base, 1, 0));
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, cursor_slot);
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.opcode(self.allocator, 0x4f); // i32.ge_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.opcode(self.allocator, 0x45); // i32.eqz
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.else_(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Store(self.allocator, 2, cursor_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lu_tag_iterator);
+    try self.body.i32Store(self.allocator, 2, cursor_slot + abi.tvalue_extra_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_lightuserdata));
+    try self.body.i32Store(self.allocator, 2, cursor_slot + tvalue_tag_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+    try self.body.f64Store(self.allocator, 3, key_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_number));
+    try self.body.i32Store(self.allocator, 2, key_slot + tvalue_tag_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, value_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, value_slot + 8);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+    try emitIterationSelect(self, pattern);
 }
 pub noinline fn emitGenericIterationFinish(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -629,11 +744,7 @@ pub noinline fn emitArrayOperation(
             try emitArrayMissEnd(self);
         },
         .len => {
-            try self.body.localGet(self.allocator, 0);
-            try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
-            try self.emitReloadBase();
+            try self.emitPlainTableLen(pattern.destination, pattern.table);
             try self.publishLengthSlot(pattern.start + 5, pattern.destination);
         },
     }
@@ -690,17 +801,35 @@ pub noinline fn emitGlobalOperation(self: anytype, pattern: GlobalPattern) Error
     // The fallback's bytecode pc is consumed here solely to publish the decoded source line.
     // The runtime ABI receives only the already-decoded register and literal key bytes.
     try self.emitPcLocation(pattern.pc);
+    if (pattern.operation == .get) {
+        try tables.emitInlineEnvGet(self, pattern.value, pattern.key_constant);
+        try self.body.localGet(self.allocator, self.call_proto_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitGlobalLookup(self, pattern, key.offset, key.length);
+        try self.body.end(self.allocator);
+    } else {
+        try emitGlobalLookup(self, pattern, key.offset, key.length);
+    }
+    try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+}
+
+fn emitGlobalLookup(
+    self: anytype,
+    pattern: GlobalPattern,
+    key_offset: u32,
+    key_length: u32,
+) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(pattern.value));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
-    try self.body.i32Const(self.allocator, @intCast(key.length));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key_offset));
+    try self.body.i32Const(self.allocator, @intCast(key_length));
     try self.body.call(self.allocator, switch (pattern.operation) {
         .get => self.get_global orelse return Error.UnsupportedCommand,
         .set => self.set_global orelse return Error.UnsupportedCommand,
     });
     try self.emitReloadBase();
-    try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
-    try self.body.localSet(self.allocator, self.dispatch_local);
 }
 pub noinline fn emitGenericTableFallbackCall(self: anytype, pattern: GenericTablePattern) Error!void {
     try self.emitSavedPcLocation(pattern.marker);
@@ -762,6 +891,33 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
     try emitInlineArrayHit(self, pattern.operation, pattern.table, pattern.value);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
+    if (pattern.operation == .get) {
+        try self.emitTValueTag(key);
+        try self.body.i32Const(self.allocator, lua_tag_string);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try tables.emitInlineRegisterStringGet(self, pattern.value, pattern.table, register_key);
+        try self.body.localGet(self.allocator, self.call_proto_local);
+        try self.body.ifVoid(self.allocator);
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+    }
+    if (pattern.operation == .set) {
+        // Existing string keys update in place. A missing key or a hash growth stays on table_set.
+        try self.emitTValueTag(key);
+        try self.body.i32Const(self.allocator, lua_tag_string);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try tables.emitInlineRegisterStringSet(self, pattern.table, pattern.value, register_key);
+        try self.body.localGet(self.allocator, self.call_proto_local);
+        try self.body.ifVoid(self.allocator);
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+    }
 }
 fn emitAddressBelowTop(self: anytype, register_offset: u32) Error!void {
     try self.body.localGet(self.allocator, self.base_local);

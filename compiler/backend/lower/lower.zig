@@ -35,6 +35,7 @@ pub const array_set_symbol = abi.array_set_symbol;
 pub const array_get_symbol = abi.array_get_symbol;
 pub const table_len_symbol = abi.table_len_symbol;
 pub const concat_symbol = abi.concat_symbol;
+pub const slice_string_symbol = abi.slice_string_symbol;
 pub const do_len_symbol = abi.do_len_symbol;
 pub const forg_prep_symbol = abi.forg_prep_symbol;
 pub const forg_loop_symbol = abi.forg_loop_symbol;

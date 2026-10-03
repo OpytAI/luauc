@@ -46,6 +46,7 @@ static_assert(offsetof(LuaTable, tmcache) == 3, "LuaTable.tmcache");
 static_assert(offsetof(LuaTable, readonly) == 4, "LuaTable.readonly");
 static_assert(offsetof(LuaTable, safeenv) == 5, "LuaTable.safeenv");
 static_assert(offsetof(LuaTable, sizearray) == 8, "LuaTable.sizearray");
+static_assert(offsetof(LuaTable, aboundary) == 12, "LuaTable.aboundary");
 static_assert(offsetof(LuaTable, metatable) == 16, "LuaTable.metatable");
 static_assert(offsetof(LuaTable, array) == 20, "LuaTable.array");
 static_assert(LUA_CALLINFO_AOT_LINE_MASK == 0x000fffffu, "aot line mask");
@@ -82,6 +83,8 @@ static_assert(offsetof(Closure, nupvalues) == 4, "Closure.nupvalues");
 static_assert(offsetof(Closure, stacksize) == 5, "Closure.stacksize");
 static_assert(offsetof(Closure, l.p) == 24, "Closure.proto");
 static_assert(offsetof(Closure, l.uprefs) == 32, "Closure.uprefs");
+static_assert(offsetof(Closure, c.f) == 24, "Closure.c.f");
+static_assert(offsetof(Closure, c.upvals) == 40, "Closure.c.upvals");
 static_assert(offsetof(UpVal, v) == 4, "UpVal.v");
 static_assert(LUA_TUPVAL == 16, "upval tag");
 static_assert(offsetof(Proto, nups) == 3, "Proto.nups");
@@ -120,6 +123,33 @@ static uint32_t gHelperCalls;
 static uint32_t gTrampolineCalls;
 static uint32_t gDirectCalls;
 static uint32_t gIndirectCalls;
+static uint32_t gProbeForg;
+static uint32_t gProbeLoadk;
+static uint32_t gProbeTgen;
+static uint32_t gProbeNtab;
+static uint32_t gProbeLen;
+static const char *gFrameName[48];
+static uint32_t gFrameCount[48];
+static uint32_t gFrameOther;
+static uint32_t gSliceLen0;
+static uint32_t gSliceLen1;
+static uint32_t gSliceShort;
+static uint32_t gSliceLong;
+
+static void noteFrameOp(const char *operation) {
+    for (uint32_t index = 0; index < 48; ++index) {
+        if (gFrameName[index] == operation) {
+            gFrameCount[index] += 1;
+            return;
+        }
+        if (!gFrameName[index]) {
+            gFrameName[index] = operation;
+            gFrameCount[index] = 1;
+            return;
+        }
+    }
+    gFrameOther += 1;
+}
 
 static void countRuntimeHelper() {
     gHelperCalls++;
@@ -497,7 +527,12 @@ static void configurePinnedRuntimeFlags(lua_State *L) {
     L->global->ecb.getcoveragedata = getAotCoverageData;
 }
 
+// Metadata is linker-owned and immutable. validAotProto walks every constant and the
+// layout digest, so repeating it on each helper call redoes work the interpreter never does.
+static const LuaucRuntimeProtoV1 *gValidatedAotMetadata = nullptr;
+
 static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
+    noteFrameOp(operation);
     countRuntimeHelper();
     if (!L || !L->ci || L->ci <= L->base_ci || !isLua(L->ci) ||
         !(L->ci->flags & LUA_CALLINFO_NATIVE))
@@ -507,8 +542,11 @@ static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
     Proto *proto = closure->l.p;
     const LuaucRuntimeProtoV1 *metadata =
         proto ? static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata) : nullptr;
-    if (!validAotProto(metadata))
-        luaG_runerror(L, "strict AOT %s rejected invalid frame metadata", operation);
+    if (metadata != gValidatedAotMetadata) {
+        if (!validAotProto(metadata))
+            luaG_runerror(L, "strict AOT %s rejected invalid frame metadata", operation);
+        gValidatedAotMetadata = metadata;
+    }
     if (proto->maxstacksize != metadata->max_stack_size ||
         proto->numparams != metadata->num_params || proto->nups != metadata->nups ||
         proto->is_vararg != metadata->is_vararg || closure->stacksize != proto->maxstacksize ||
@@ -579,9 +617,9 @@ static const TValue *activeAotValueOperand(lua_State *L, Proto *proto, uint32_t 
         (proto->k == nullptr) != (proto->sizek == 0) || constantId >= uint32_t(proto->sizek))
         luaG_runerror(L, "strict AOT %s rejected constant operand %u", operation, constantId);
 
-    // IMPORT/CLOSURE/CLASS_SHAPE records intentionally remain nil placeholders in this runtime,
-    // and TABLE records are templates consumed only by DUP_TABLE. Reject them by metadata kind so
-    // an unmaterialized record can never masquerade as a source-level nil operand.
+    // CLOSURE/CLASS_SHAPE records stay nil. IMPORT records are filled at load, matching the
+    // pinned loader, but this operand path still rejects that metadata kind. TABLE records are
+    // templates consumed only by DUP_TABLE. An unmaterialized record cannot masquerade as nil.
     if (!materializableScalarConstantKind(metadata->constants[constantId].kind))
         luaG_runerror(L, "strict AOT %s rejected non-scalar constant operand %u", operation,
                       constantId);
@@ -708,6 +746,7 @@ static void newAotTable(lua_State *L, uint32_t destinationRegister, uint32_t arr
     // also remains correct if a preceding GC step has blackened the active thread. luaH_new does
     // not run GC while the new table is temporarily unrooted; publication precedes the assist.
     luaC_threadbarrier(L);
+    gProbeNtab++;
     LuaTable *table = luaH_new(L, int(arrayCount), int(nodeCount));
     sethvalue(L, destination, table);
     if (assist)
@@ -727,7 +766,70 @@ extern "C" void luauc_runtime_v1_new_table_deferred(lua_State *L, uint32_t desti
     newAotTable(L, destinationRegister, arrayCount, nodeCount, false);
 }
 
+static uint32_t gProbeBlock;
+static uint32_t gProbeChain;
+static uint32_t gProbeLoop;
+static uint32_t gProbeScan;
+static uint32_t gProbeGc;
+static uint32_t gProbeStep;
+static uint32_t gProbeSlice;
+
+static void dumpProbes(const char *why) {
+    fprintf(stderr,
+            "PROBE %s block=%u chain=%u loop=%u scan=%u gc=%u step=%u slice=%u direct=%u indirect=%u helper=%u "
+            "p=%u lua=%u a=%u ts=%u tg=%u n=%u d=%u f=%u c=%u forg=%u loadk=%u tgen=%u ntab=%u len=%u",
+            why, gProbeBlock, gProbeChain, gProbeLoop, gProbeScan, gProbeGc, gProbeStep, gProbeSlice,
+            gDirectCalls, gIndirectCalls, gHelperCalls, gFuelProf.prepare, gFuelProf.lua, gFuelProf.arith,
+            gFuelProf.tset, gFuelProf.tget, gFuelProf.ncall, gFuelProf.dup, gFuelProf.fast, gFuelProf.concat,
+            gProbeForg, gProbeLoadk, gProbeTgen, gProbeNtab, gProbeLen);
+    fprintf(stderr, " sl0=%u sl1=%u sls=%u sll=%u frame", gSliceLen0, gSliceLen1, gSliceShort, gSliceLong);
+    for (uint32_t index = 0; index < 48; ++index) {
+        if (!gFrameName[index])
+            continue;
+        fprintf(stderr, " %s=%u", gFrameName[index], gFrameCount[index]);
+    }
+    if (gFrameOther)
+        fprintf(stderr, " other=%u", gFrameOther);
+    for (uint32_t index = 0; index < 16; ++index) {
+        if (!gFuelProf.name[index])
+            continue;
+        fprintf(stderr, " %s=%u", gFuelProf.name[index], gFuelProf.nameCount[index]);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+
+static bool probeMilestone(uint32_t n) {
+    return n == 1 || n == 100 || n == 1000 || n == 10000 || n == 100000 || n == 1000000 || n == 10000000 ||
+           (n & 1048575u) == 0;
+}
+
+static void noteProbe(uint32_t *slot, const char *name) {
+    const uint32_t n = ++*slot;
+    if (probeMilestone(n))
+        dumpProbes(name);
+}
+
+extern "C" void luauc_runtime_v1_count_block(void) {
+    noteProbe(&gProbeBlock, "block");
+}
+
+extern "C" void luauc_runtime_v1_count_chain(void) {
+    noteProbe(&gProbeChain, "chain");
+}
+
+extern "C" void luauc_runtime_v1_count_loop(void) {
+    noteProbe(&gProbeLoop, "loop");
+}
+
+extern "C" void luauc_runtime_v1_count_scan(void) {
+    noteProbe(&gProbeScan, "scan");
+}
+
 extern "C" void luauc_runtime_v1_check_gc(lua_State *L) {
+    gProbeGc++;
+    if (L && L->global && L->global->totalbytes >= L->global->GCthreshold)
+        gProbeStep++;
     activeAotFrameProto(L, "collector assist");
     luaC_checkGC(L);
 }
@@ -766,6 +868,7 @@ extern "C" void luauc_runtime_v1_dup_table(lua_State *L, uint32_t destinationReg
 
 extern "C" void luauc_runtime_v1_load_constant(lua_State *L, uint32_t destinationRegister,
                                              uint32_t constantId) {
+    gProbeLoadk++;
     Proto *proto = activeAotFrameProto(L, "constant load");
     const LuaucRuntimeProtoV1 *metadata = static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata);
     TValue *destination = activeAotRegister(L, proto, destinationRegister, "constant load");
@@ -1022,6 +1125,7 @@ static bool tryLiveRegisterNumericSet(lua_State *L, uint32_t tableRegister, uint
 
 extern "C" void luauc_runtime_v1_table_set(lua_State *L, uint32_t tableRegister, uint32_t keyOperand,
                                          uint32_t sourceRegister) {
+    gProbeTgen++;
     if ((keyOperand & LUAUC_AOT_OPERAND_V1_CONSTANT_FLAG) == 0 &&
         tryLiveRegisterNumericSet(L, tableRegister, keyOperand, sourceRegister)) {
         countRuntimeHelper();
@@ -1530,8 +1634,57 @@ extern "C" void luauc_runtime_v1_concat(lua_State *L, uint32_t destinationRegist
     L->top = restorestack(L, liveTop);
 }
 
+extern "C" void luauc_runtime_v1_slice_string(lua_State *L, uint32_t destinationRegister,
+                                            uint32_t sourceRegister, uint32_t offset,
+                                            uint32_t length) {
+    gProbeSlice++;
+    Proto *proto = activeAotFrameProto(L, "string slice");
+    activeAotRegister(L, proto, destinationRegister, "string slice");
+    TValue *sourceValue = activeAotRegister(L, proto, sourceRegister, "string slice");
+    if (sourceValue >= L->top || !ttisstring(sourceValue))
+        luaG_runerror(L, "strict AOT string slice requires a live string");
+    TString *text = tsvalue(sourceValue);
+    const uint32_t available = uint32_t(text->len);
+    if (length == 0) {
+        if (offset != 0)
+            luaG_runerror(L, "strict AOT string slice rejected an empty range");
+    } else if (offset > available || length > available - offset) {
+        luaG_runerror(L, "strict AOT string slice rejected a range outside the string");
+    }
+
+    // Match lua_pushlstring: assist, then gray the thread, then allocate. String bytes do not
+    // move and the source register keeps the original string alive. Re-read after the assist.
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+    sourceValue = L->base + sourceRegister;
+    if (sourceValue >= L->top || !ttisstring(sourceValue))
+        luaG_runerror(L, "strict AOT string slice requires a live string");
+    text = tsvalue(sourceValue);
+    const uint32_t availableAfter = uint32_t(text->len);
+    if (length == 0) {
+        if (offset != 0)
+            luaG_runerror(L, "strict AOT string slice rejected an empty range");
+    } else if (offset > availableAfter || length > availableAfter - offset) {
+        luaG_runerror(L, "strict AOT string slice rejected a range outside the string");
+    }
+    if (length == 0)
+        gSliceLen0++;
+    else if (length == 1)
+        gSliceLen1++;
+    else if (length <= 8)
+        gSliceShort++;
+    else
+        gSliceLong++;
+    const char *bytes = getstr(text) + offset;
+    TString *slice = luaS_newlstr(L, bytes, length);
+    setsvalue(L, L->base + destinationRegister, slice);
+    L->top = L->ci->top;
+    luaC_checkGC(L);
+}
+
 extern "C" void luauc_runtime_v1_do_len(lua_State *L, uint32_t destinationRegister,
                                       uint32_t sourceRegister) {
+    gProbeLen++;
     Proto *proto = activeAotFrameProto(L, "length");
     activeAotRegister(L, proto, destinationRegister, "length");
     activeAotRegister(L, proto, sourceRegister, "length");
@@ -1639,6 +1792,7 @@ static uint32_t forgLoopVariableCount(lua_State *L, uint32_t aux, const char *op
 }
 
 extern "C" uint32_t luauc_runtime_v1_forg_loop(lua_State *L, uint32_t baseRegister, uint32_t aux) {
+    gProbeForg++;
     Proto *proto = activeAotFrameProto(L, "generic iteration");
     const uint32_t frameSize = proto->maxstacksize;
     const uint32_t variableCount = forgLoopVariableCount(L, aux, "generic iteration");
@@ -1849,7 +2003,8 @@ static void bindAotClosureTemplateEnvs(lua_State *L, Proto *proto, LuaTable *env
 
 static Closure *findAotClosureTemplate(Proto *parent, Proto *child) {
     for (int index = 0; index < parent->sizek; ++index) {
-        if (ttisfunction(&parent->k[index]) && clvalue(&parent->k[index])->l.p == child)
+        if (ttisfunction(&parent->k[index]) && !clvalue(&parent->k[index])->isC &&
+            clvalue(&parent->k[index])->l.p == child)
             return clvalue(&parent->k[index]);
     }
     return nullptr;
@@ -3102,6 +3257,8 @@ static bool validAotModule(const LuaucRuntimeModuleV1 *module) {
                   sizeof(module->layout_sha256)) == 0;
 }
 
+static void materializeAotImportConstants(lua_State *L, Proto *proto, const LuaucRuntimeProtoV1 *metadata);
+
 static void materializeAotConstants(lua_State *L, Proto *proto, const LuaucRuntimeProtoV1 *metadata) {
     if (metadata->constant_count == 0)
         return;
@@ -3184,6 +3341,101 @@ static void materializeAotConstants(lua_State *L, Proto *proto, const LuaucRunti
         }
         sethvalue(L, &proto->k[id], table);
     }
+
+    // The pinned loader resolves LBC_CONSTANT_IMPORT into Proto.k before the first instruction.
+    // A safe environment stores the looked-up value. An unsafe environment stores nil. A failed
+    // lookup stores nil. GETIMPORT then copies the slot instead of walking the environment again.
+    materializeAotImportConstants(L, proto, metadata);
+}
+
+static uint32_t aotImportAux(const LuaucRuntimeProtoV1 *metadata, const LuaucRuntimeVmConstantV1 &constant) {
+    if (constant.payload1 == 0 || constant.payload1 > 3 ||
+        constant.payload0 > metadata->constant_item_count ||
+        constant.payload1 > metadata->constant_item_count - constant.payload0)
+        return UINT32_MAX;
+
+    uint32_t aux = constant.payload1 << 30;
+    for (uint32_t offset = 0; offset < constant.payload1; ++offset) {
+        const LuaucRuntimeVmConstantItemV1 &item =
+            metadata->constant_items[constant.payload0 + offset];
+        if (item.value != LUAUC_RUNTIME_V1_NO_ID || item.key >= 1024 ||
+            item.key >= metadata->constant_count ||
+            metadata->constants[item.key].kind != LUAUC_AOT_VM_CONSTANT_V1_STRING)
+            return UINT32_MAX;
+        aux |= item.key << (20 - offset * 10);
+    }
+    return aux;
+}
+
+// Same chain as luaV_getimport with nil propagation. That function lives in the bytecode loader,
+// which this runtime does not link. A missing middle entry stays nil instead of raising.
+static void resolveAotImport(lua_State *L, TValue *constants, StkId result, uint32_t aux) {
+    const int count = int(aux >> 30);
+    const int id0 = int(aux >> 20) & 1023;
+    const int id1 = int(aux >> 10) & 1023;
+    const int id2 = int(aux) & 1023;
+    const ptrdiff_t saved = savestack(L, result);
+
+    TValue environment;
+    sethvalue(L, &environment, L->gt);
+    luaV_gettable(L, &environment, &constants[id0], result);
+    if (count < 2)
+        return;
+
+    result = restorestack(L, saved);
+    if (!ttisnil(result))
+        luaV_gettable(L, result, &constants[id1], result);
+    if (count < 3)
+        return;
+
+    result = restorestack(L, saved);
+    if (!ttisnil(result))
+        luaV_gettable(L, result, &constants[id2], result);
+}
+
+static void materializeOneAotImport(lua_State *L, Proto *proto, uint32_t constantId, uint32_t aux) {
+    struct ResolveImport {
+        TValue *constants;
+        uint32_t aux;
+
+        static void run(lua_State *state, void *ud) {
+            ResolveImport *self = static_cast<ResolveImport *>(ud);
+            luaD_checkstack(state, 1);
+            setnilvalue(state->top);
+            state->top++;
+            resolveAotImport(state, self->constants, state->top - 1, self->aux);
+        }
+    };
+
+    if (L->gt && L->gt->safeenv) {
+        ResolveImport resolved = {proto->k, aux};
+        const int oldTop = lua_gettop(L);
+        const int status = luaD_pcall(L, &ResolveImport::run, &resolved, savestack(L, L->top), 0);
+        if (oldTop + 1 != lua_gettop(L))
+            luaG_runerror(L, "strict AOT import %u resolution left an unbalanced stack", constantId);
+        if (status != 0)
+            setnilvalue(L->top - 1);
+    } else {
+        luaD_checkstack(L, 1);
+        setnilvalue(L->top);
+        L->top++;
+    }
+    setobj(L, &proto->k[constantId], L->top - 1);
+    luaC_barrier(L, proto, L->top - 1);
+    L->top--;
+}
+
+static void materializeAotImportConstants(lua_State *L, Proto *proto, const LuaucRuntimeProtoV1 *metadata) {
+    for (uint32_t id = 0; id < metadata->constant_count; ++id) {
+        const LuaucRuntimeVmConstantV1 &constant = metadata->constants[id];
+        if (constant.kind != LUAUC_AOT_VM_CONSTANT_V1_IMPORT)
+            continue;
+        const uint32_t aux = aotImportAux(metadata, constant);
+        // A descriptor this runtime cannot encode stays nil. GETIMPORT then uses the slow path.
+        if (aux == UINT32_MAX)
+            continue;
+        materializeOneAotImport(L, proto, id, aux);
+    }
 }
 
 static void materializeAotClosureConstants(lua_State *L, Proto *parent,
@@ -3208,6 +3460,9 @@ static void bindAotClosureTemplateEnvs(lua_State *L, Proto *proto, LuaTable *env
         if (!ttisfunction(&proto->k[index]))
             continue;
         Closure *kcl = clvalue(&proto->k[index]);
+        // Import resolution stores shared library closures here. Only Lua templates own their env.
+        if (kcl->isC)
+            continue;
         kcl->env = env;
         luaC_objbarrier(L, kcl, env);
     }
@@ -3496,6 +3751,7 @@ extern "C" void luauc_runtime_v1_enter(lua_State *L) {
 
     validateActiveAotEntry(L, metadata, "runtime entry");
     uint32_t status = metadata->entry(L, metadata);
+    dumpProbes("entry");
     switch (status) {
     case LUAUC_RUNTIME_V1_OK: {
         const int resultCount = lua_gettop(L);

@@ -258,13 +258,65 @@ pub noinline fn constantTruthyFallbackPatternAt(self: anytype, start: u32) Error
         .true_value = true_value,
     };
 }
+fn currentRegisterLoad(self: anytype, pattern: ConstantTruthyFallbackPattern) Error!?snapshot_v1.IrOperand {
+    // The cluster starts at the constant load. The register load is the previous
+    // instruction, and this cluster does not write that register before the test.
+    if (pattern.true_value.kind != .instruction or pattern.start == 0 or
+        pattern.true_value.value + 1 != pattern.start)
+        return null;
+    const producer = try self.instruction(pattern.true_value.value);
+    if (producer.command != .load_tvalue or producer.operand_count != 1)
+        return null;
+    const source = try self.operand(producer, 0);
+    if (source.kind != .vm_reg)
+        return null;
+    return source;
+}
+fn publishedTruthyRegister(self: anytype, pattern: ConstantTruthyFallbackPattern) Error!?u32 {
+    if (try currentRegisterLoad(self, pattern)) |truth|
+        return try self.vmRegisterIndex(truth);
+    // A semantic reload publishes this true value into a register and does not
+    // fill the load's wasm slot. Nops may sit between that store and this cluster.
+    if (pattern.true_value.kind != .instruction or pattern.start == 0)
+        return null;
+    const block_id = self.plan.instructionBlock(pattern.start) orelse return null;
+    var cursor = pattern.start;
+    while (cursor > 0) {
+        cursor -= 1;
+        if ((self.plan.instructionBlock(cursor) orelse return null) != block_id)
+            return null;
+        const instruction = try self.instruction(cursor);
+        if (instruction.command == .nop and instruction.operand_count == 0)
+            continue;
+        if (instruction.command != .store_tvalue or instruction.operand_count != 2)
+            return null;
+        const destination = try self.operand(instruction, 0);
+        const stored = try self.operand(instruction, 1);
+        if (destination.kind != .vm_reg or stored.kind != .instruction or
+            stored.value != pattern.true_value.value)
+            return null;
+        return try self.vmRegisterIndex(destination);
+    }
+    return null;
+}
 pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruthyFallbackPattern) Error!void {
-    try self.emitTValueTruthy(pattern.true_value);
-    try self.body.ifVoid(self.allocator);
-    try self.emitStoreTValueOperand(pattern.destination, pattern.true_value);
-    try self.body.else_(self.allocator);
-    try emitConstantLoadValue(self, pattern.destination, pattern.constant_id);
-    try self.body.end(self.allocator);
+    if (try publishedTruthyRegister(self, pattern)) |register| {
+        const truth = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
+        try self.emitReloadBase();
+        try self.emitTValueTruthy(truth);
+        try self.body.ifVoid(self.allocator);
+        try self.emitStoreTValueOperand(pattern.destination, truth);
+        try self.body.else_(self.allocator);
+        try emitConstantLoadValue(self, pattern.destination, pattern.constant_id);
+        try self.body.end(self.allocator);
+    } else {
+        try self.emitTValueTruthy(pattern.true_value);
+        try self.body.ifVoid(self.allocator);
+        try self.emitStoreTValueOperand(pattern.destination, pattern.true_value);
+        try self.body.else_(self.allocator);
+        try emitConstantLoadValue(self, pattern.destination, pattern.constant_id);
+        try self.body.end(self.allocator);
+    }
 
     const result_id = pattern.start + 1;
     if (result_id >= self.slots.len or self.slots[result_id].shape != .tvalue)
@@ -283,10 +335,8 @@ pub noinline fn emitDupTable(self: anytype, pattern: DupTablePattern) Error!void
     try self.body.i32Const(self.allocator, @intCast(pattern.destination));
     try self.body.i32Const(self.allocator, @intCast(pattern.constant_id));
     try self.body.call(self.allocator, self.dup_table orelse return Error.UnsupportedCommand);
-    if (pattern.assist) {
-        try self.body.localGet(self.allocator, 0);
-        try self.body.call(self.allocator, self.check_gc orelse return Error.UnsupportedCommand);
-    }
+    if (pattern.assist)
+        try self.emitGuardedCheckGc();
     try self.emitReloadBase();
 }
 pub fn tableRegisterForPointer(self: anytype, pointer_id: u32) Error!?u32 {
