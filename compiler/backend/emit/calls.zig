@@ -1442,6 +1442,190 @@ fn emitInlineNumericBody(self: anytype, pattern: FastcallPattern) Error!void {
     }
 }
 
+// A fixed assert fastcall publishes min(results, arguments). MULTRET publishes every
+// argument and the caller adjusts top from that count. A wider result count needs nil
+// padding, and an open argument list has no proved count, so both stay on the helper.
+fn assertPublishCount(pattern: FastcallPattern) ?u32 {
+    if (pattern.builtin_id != 1 or pattern.parameter_count < 1 or pattern.parameter_count > 255)
+        return null;
+    const count: u32 = @intCast(pattern.parameter_count);
+    if (pattern.result_count == 0)
+        return 0;
+    if (pattern.result_count == -1)
+        return count;
+    if (pattern.result_count > 0 and pattern.result_count <= pattern.parameter_count)
+        return @intCast(pattern.result_count);
+    return null;
+}
+
+fn assertArgument(pattern: FastcallPattern, index: u32) ?u32 {
+    if (index == 0)
+        return pattern.source;
+    const contiguous = pattern.parameter_count >= 3 and
+        pattern.argument_three == lbf_operand_none and
+        pattern.argument_two == pattern.source + 1;
+    if (contiguous)
+        return std.math.add(u32, pattern.source, index) catch null;
+    if (index == 1 and pattern.argument_two != lbf_operand_none)
+        return pattern.argument_two;
+    if (index == 2 and pattern.argument_three != lbf_operand_none)
+        return pattern.argument_three;
+    return null;
+}
+
+fn assertCopyFits(pattern: FastcallPattern, publish: u32) bool {
+    if (publish <= 1)
+        return true;
+    const end = pattern.destination + publish;
+    var index: u32 = 0;
+    while (index < publish) : (index += 1) {
+        const encoded = assertArgument(pattern, index) orelse return false;
+        if (encoded >= 0x8000_0000)
+            continue;
+        if (encoded >= pattern.destination and encoded < end and index > encoded - pattern.destination)
+            return false;
+    }
+    return true;
+}
+
+fn assertSuccessPublish(self: anytype, pattern: FastcallPattern) Error!?u32 {
+    const publish = assertPublishCount(pattern) orelse return null;
+    if (pattern.source >= 0x8000_0000 or pattern.source >= self.proto.max_stack_size or
+        pattern.destination >= self.proto.max_stack_size)
+        return null;
+    if (publish > 0) {
+        const end = std.math.add(u32, pattern.destination, publish) catch return null;
+        if (end > self.proto.max_stack_size)
+            return null;
+    }
+    if (!assertCopyFits(pattern, publish))
+        return null;
+    var index: u32 = 0;
+    while (index < publish) : (index += 1) {
+        const encoded = assertArgument(pattern, index) orelse return null;
+        if (encoded >= 0x8000_0000) {
+            const constant_id = encoded & 0x7fff_ffff;
+            if (constant_id >= self.proto.vm_constant_count)
+                return null;
+            switch ((try self.snapshot.vmConstant(self.proto, constant_id)).kind) {
+                .nil, .boolean, .number, .integer, .vector, .string => {},
+                else => return null,
+            }
+        } else if (encoded >= self.proto.max_stack_size) {
+            return null;
+        }
+    }
+    return publish;
+}
+
+fn emitCopyAssertOperand(self: anytype, destination: u32, encoded: u32) Error!void {
+    if (encoded < 0x8000_0000) {
+        if (encoded != destination)
+            try self.emitCopyTValueRegisters(destination, encoded);
+        return;
+    }
+    const operand = snapshot_v1.IrOperand{ .kind = .vm_const, .value = encoded & 0x7fff_ffff };
+    const offset = destination * tvalue_size;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.emitVmConstantAddress(operand);
+    try self.body.i64Load(self.allocator, 3, 0);
+    try self.body.i64Store(self.allocator, 3, offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.emitVmConstantAddress(operand);
+    try self.body.i64Load(self.allocator, 3, 8);
+    try self.body.i64Store(self.allocator, 3, offset + 8);
+}
+
+// luauF_assert only succeeds when the caller discards every result. A truthy value
+// still returns its arguments from luaB_assert, so copy those registers here. False
+// and nil leave status negative and the existing CALL fallback reports the error.
+fn emitInlineAssert(self: anytype, pattern: FastcallPattern, publish: u32) Error!void {
+    const starts_at_guard = (try self.instruction(pattern.start)).command == .check_safe_env;
+    const saved_id = pattern.start + @intFromBool(starts_at_guard);
+    const guarded_before = !starts_at_guard and pattern.start > 0 and
+        (try self.instruction(pattern.start - 1)).command == .check_safe_env;
+    try self.emitSavedPcLocation(try self.instruction(saved_id));
+    try self.body.i32Const(self.allocator, -1);
+    try self.body.localSet(self.allocator, self.status_local);
+
+    if (!guarded_before) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
+        try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
+        try self.body.i32Load(self.allocator, 2, 0);
+        try self.body.i32Load(self.allocator, 2, closure_env_offset);
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.call_aux_local);
+        try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.else_(self.allocator);
+    }
+
+    try self.emitReloadBase();
+    try emitFastcallLiveGate(self, pattern);
+    var slot: u32 = 1;
+    while (slot < publish) : (slot += 1) {
+        try emitSlotBelowTop(self, pattern.destination + slot);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+    }
+    var argument: u32 = 0;
+    while (argument < publish) : (argument += 1) {
+        const encoded = assertArgument(pattern, argument) orelse return Error.UnsupportedControlFlow;
+        if (encoded >= 0x8000_0000 or encoded == pattern.source or
+            encoded == pattern.argument_two or encoded == pattern.argument_three)
+            continue;
+        try emitSlotBelowTop(self, encoded);
+        try self.body.opcode(self.allocator, 0x71); // i32.and
+    }
+    try self.body.ifVoid(self.allocator);
+    try self.emitTValueTruthy(.{ .kind = .vm_reg, .value = pattern.source });
+    try self.body.ifVoid(self.allocator);
+    var index: u32 = 0;
+    while (index < publish) : (index += 1) {
+        const encoded = assertArgument(pattern, index) orelse return Error.UnsupportedControlFlow;
+        try emitCopyAssertOperand(self, pattern.destination + index, encoded);
+    }
+    try self.body.i32Const(self.allocator, @intCast(publish));
+    try self.body.localSet(self.allocator, self.status_local);
+    if (pattern.result_count == -1)
+        try self.emitAdjustStackDynamic(pattern.destination);
+    try self.body.end(self.allocator); // truthy value
+    try self.body.end(self.allocator); // live slots
+    if (!guarded_before) {
+        try self.body.end(self.allocator); // safeenv
+        try self.body.end(self.allocator); // environment pointer
+    }
+
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+    try self.body.ifVoid(self.allocator);
+    try self.body.i32Const(self.allocator, @intCast(pattern.fallback));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.else_(self.allocator);
+    if (pattern.result_count != -1 and pattern.finish > pattern.start and
+        (try self.instruction(pattern.finish - 1)).command == ir_cmd_adjust_stack_to_top)
+        try self.emitAdjustStackToTop();
+    try self.body.i32Const(self.allocator, @intCast(pattern.fast_target));
+    try self.body.localSet(self.allocator, self.dispatch_local);
+    try self.body.end(self.allocator);
+
+    if (!self.rejoin_fallthrough) {
+        try self.body.branch(self.allocator, self.loop_branch_depth);
+    } else {
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.opcode(self.allocator, 0x48); // i32.lt_s
+        try self.body.ifVoid(self.allocator);
+        try self.body.branch(self.allocator, self.loop_branch_depth + 1);
+        try self.body.end(self.allocator);
+    }
+}
+
 fn emitInlineNumericFastcall(self: anytype, pattern: FastcallPattern) Error!void {
     const starts_at_guard = (try self.instruction(pattern.start)).command == .check_safe_env;
     const saved_id = pattern.start + @intFromBool(starts_at_guard);
@@ -1514,6 +1698,8 @@ pub noinline fn emitFastcallCluster(self: anytype, pattern: FastcallPattern) Err
         return emitInlineVectorCreate(self, pattern);
     if (pattern.isInlineNumericFastcall() and try numericFastcallCanInline(self, pattern))
         return emitInlineNumericFastcall(self, pattern);
+    if (try assertSuccessPublish(self, pattern)) |publish|
+        return emitInlineAssert(self, pattern, publish);
     const saved_id = pattern.start + @intFromBool((try self.instruction(pattern.start)).command == .check_safe_env);
     try self.emitSavedPcLocation(try self.instruction(saved_id));
     try self.body.localGet(self.allocator, 0);
