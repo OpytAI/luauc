@@ -12,8 +12,6 @@ const packageSymbols = packageFunctionSymbols(3);
 const preparedCallImports = [
   ["env", "luauc_runtime_v1_prepare_compiled_call", "function"],
   ["env", "luauc_runtime_v1_finish_compiled_call", "function"],
-  ["env", "luauc_runtime_v1_count_direct_call", "function"],
-  ["env", "luauc_runtime_v1_count_indirect_call", "function"],
 ];
 const preparedCallScratch = 20000;
 const preparedMetaScratch = 20032;
@@ -2705,8 +2703,6 @@ export async function executeCompiledCallPackage() {
         pendingCall = null;
         nestedCalls++;
       },
-      luauc_runtime_v1_count_direct_call() {},
-      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -2925,8 +2921,6 @@ export async function executeCapturedCallPackage() {
         pendingCall = null;
         nestedCalls++;
       },
-      luauc_runtime_v1_count_direct_call() {},
-      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 
@@ -3398,8 +3392,6 @@ export async function executeMultiResultCallPackage() {
         returned = [];
         nestedCalls++;
       },
-      luauc_runtime_v1_count_direct_call() {},
-      luauc_runtime_v1_count_indirect_call() {},
     },
   });
 

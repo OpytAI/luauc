@@ -1034,15 +1034,13 @@ pub const max_inline_direct_siblings: usize = 8;
 /// transfer stays smaller than a deep dispatch function.
 pub const max_direct_dispatch_arms: usize = 256;
 
-fn emitCountedDirectCall(self: anytype, function: wasm.FunctionRef) Error!void {
-    try self.body.call(self.allocator, self.count_direct_call orelse return Error.UnsupportedCommand);
+fn emitDirectCall(self: anytype, function: wasm.FunctionRef) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.call(self.allocator, function);
     try self.body.localSet(self.allocator, self.status_local);
 }
-fn emitCountedIndirectCall(self: anytype) Error!void {
-    try self.body.call(self.allocator, self.count_indirect_call orelse return Error.UnsupportedCommand);
+fn emitIndirectCall(self: anytype) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.localGet(self.allocator, self.call_meta_local);
@@ -1053,13 +1051,13 @@ fn emitCountedIndirectCall(self: anytype) Error!void {
 fn emitSiblingDispatch(self: anytype, index: u32) Error!void {
     const siblings = self.sibling_functions;
     if (index >= siblings.len)
-        return emitCountedIndirectCall(self);
+        return emitIndirectCall(self);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.i32Load(self.allocator, 2, proto_function_id_offset);
     try self.body.i32Const(self.allocator, @intCast(index));
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try emitCountedDirectCall(self, siblings[index]);
+    try emitDirectCall(self, siblings[index]);
     try self.body.else_(self.allocator);
     try emitSiblingDispatch(self, index + 1);
     try self.body.end(self.allocator);
@@ -1071,8 +1069,6 @@ pub fn emitDirectDispatchTrampoline(
     allocator: std.mem.Allocator,
     object: *wasm.Object,
     generated_type: u32,
-    count_direct_call: wasm.FunctionRef,
-    count_indirect_call: wasm.FunctionRef,
     siblings: []const wasm.FunctionRef,
 ) Error!wasm.FunctionRef {
     const arm_count: u32 = @intCast(siblings.len);
@@ -1101,7 +1097,6 @@ pub fn emitDirectDispatchTrampoline(
         // is the lua_State* and is never null.
         try body.localGet(allocator, 0);
         try body.ifVoid(allocator);
-        try body.call(allocator, count_direct_call);
         try body.localGet(allocator, 0);
         try body.localGet(allocator, 1);
         try body.call(allocator, function);
@@ -1112,7 +1107,6 @@ pub fn emitDirectDispatchTrampoline(
     try body.end(allocator);
     try body.localGet(allocator, 0);
     try body.ifVoid(allocator);
-    try body.call(allocator, count_indirect_call);
     try body.localGet(allocator, 0);
     try body.localGet(allocator, 1);
     try body.localGet(allocator, 1);
@@ -1148,9 +1142,9 @@ fn emitFastLuaTransfer(self: anytype) Error!void {
     try self.body.i32Const(self.allocator, @intCast(self.planned_function_id));
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try emitCountedDirectCall(self, self.self_function);
+    try emitDirectCall(self, self.self_function);
     try self.body.else_(self.allocator);
-    try emitCountedIndirectCall(self);
+    try emitIndirectCall(self);
     try self.body.end(self.allocator);
 }
 fn emitFastAdvanceResult(self: anytype) Error!void {
@@ -1359,14 +1353,12 @@ fn emitPreparedCompiledCall(
     try self.body.i32Const(self.allocator, @intCast(self.planned_function_id));
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try self.body.call(self.allocator, self.count_direct_call orelse return Error.UnsupportedCommand);
     try self.body.localGet(self.allocator, 0);
     try self.body.localGet(self.allocator, self.table_index_local);
     try self.body.i32Load(self.allocator, 2, prepared_call_metadata_offset);
     try self.body.call(self.allocator, self.self_function);
     try self.body.localSet(self.allocator, self.status_local);
     try self.body.else_(self.allocator);
-    try self.body.call(self.allocator, self.count_indirect_call orelse return Error.UnsupportedCommand);
     try self.body.localGet(self.allocator, 0);
     try self.body.localGet(self.allocator, self.table_index_local);
     try self.body.i32Load(self.allocator, 2, prepared_call_metadata_offset);
@@ -1439,8 +1431,6 @@ fn emitSyntheticIpairs(
     try self.body.localSet(self.allocator, self.call_proto_local);
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.status_local);
-    if (self.count_block) |probe|
-        try self.body.call(self.allocator, probe);
 
     try emitTagIs(self, function_register, @intCast(abi.lua_tag_function));
     try self.body.ifVoid(self.allocator);
@@ -1455,8 +1445,6 @@ fn emitSyntheticIpairs(
     try self.body.i32Const(self.allocator, 1);
     try self.body.opcode(self.allocator, i32_ge_u);
     try self.body.ifVoid(self.allocator);
-    if (self.count_chain) |probe|
-        try self.body.call(self.allocator, probe);
     // The entry cache stays zero when the frame-id check misses. GETIMPORT still
     // copies this Proto.k slot, so the proof reads the caller proto directly.
     try self.body.localGet(self.allocator, 0);
@@ -1490,15 +1478,11 @@ fn emitSyntheticIpairs(
     try self.body.i32Const(self.allocator, @intCast(abi.lua_tag_function));
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
-    if (self.count_scan) |probe|
-        try self.body.call(self.allocator, probe);
     try self.body.localGet(self.allocator, self.call_func_local);
     try self.body.i32Load(self.allocator, 2, 0);
     try self.body.localGet(self.allocator, self.call_closure_local);
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
-    if (self.count_loop) |probe|
-        try self.body.call(self.allocator, probe);
     try emitTagIs(self, function_register + 1, @intCast(abi.lua_tag_table));
     try self.body.ifVoid(self.allocator);
 

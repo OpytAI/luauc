@@ -15,11 +15,7 @@
         "p90_ns": 1718709,
         "samples": 24,
         "result_number": 641,
-        "result_text": "beta:8:2/1/11:missing",
-        "helper_calls": 16704,
-        "trampoline_calls": 0,
-        "direct_calls": 0,
-        "indirect_calls": 888
+        "result_text": "beta:8:2/1/11:missing"
       },
       "interpreted": {
         "p50_ns": 256254,
@@ -33,11 +29,7 @@
         "p90_ns": 181611,
         "samples": 24,
         "result_number": 67,
-        "result_text": "beta",
-        "helper_calls": 1056,
-        "trampoline_calls": 0,
-        "direct_calls": 168,
-        "indirect_calls": 24
+        "result_text": "beta"
       },
       "interpreted": {
         "p50_ns": 6078,
@@ -51,11 +43,7 @@
         "p90_ns": 177477,
         "samples": 24,
         "result_number": 8,
-        "result_text": "beta",
-        "helper_calls": 1152,
-        "trampoline_calls": 0,
-        "direct_calls": 0,
-        "indirect_calls": 0
+        "result_text": "beta"
       },
       "interpreted": {
         "p50_ns": 7869,

@@ -799,8 +799,6 @@ fn emitPlainScan(self: anytype, needle: []const u8) Error!void {
     try self.body.localSet(self.allocator, self.call_proto_local);
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_scan) |probe|
-        try self.body.call(self.allocator, probe);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.localGet(self.allocator, self.table_index_local);
     try self.body.opcode(self.allocator, i32_ge_u);
@@ -849,8 +847,6 @@ fn emitClassScan(self: anytype, bits: *const [32]u8) Error!void {
     try self.body.localSet(self.allocator, self.call_proto_local);
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_scan) |probe|
-        try self.body.call(self.allocator, probe);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.localGet(self.allocator, self.table_index_local);
     try self.body.opcode(self.allocator, i32_ge_u);
@@ -895,8 +891,6 @@ fn emitSpacesScan(self: anytype) Error!void {
     try emitExclusiveEnd(self, @intCast(abi.tstring_data_offset));
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_scan) |probe|
-        try self.body.call(self.allocator, probe);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.localGet(self.allocator, self.table_index_local);
     try self.body.opcode(self.allocator, i32_ge_u);

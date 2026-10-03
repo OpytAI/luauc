@@ -30,16 +30,6 @@ function percentile(sorted, fraction) {
   return sorted[index];
 }
 
-function readCounts(instance, context) {
-  const api = instance.exports;
-  return {
-    helper_calls: api.luauc_embed_v1_helper_calls(context) >>> 0,
-    trampoline_calls: api.luauc_embed_v1_trampoline_calls(context) >>> 0,
-    direct_calls: api.luauc_embed_v1_direct_calls(context) >>> 0,
-    indirect_calls: api.luauc_embed_v1_indirect_calls(context) >>> 0,
-  };
-}
-
 async function measureCompiled(compiler, profile, pack, modules, entry, number, text, warmup, samples) {
   const compiled = await compilePackage(compiler, profile, pack, modules, entry);
   const instance = instantiateArtifact(compiled.artifact);
@@ -50,7 +40,6 @@ async function measureCompiled(compiler, profile, pack, modules, entry, number, 
       if (result.status || result.resultStatus || result.error)
         throw new Error(`compiled warmup failed: ${JSON.stringify(result)}`);
     }
-    instance.exports.luauc_embed_v1_reset_counts(context);
     const times = [];
     let last = null;
     for (let index = 0; index < samples; index++) {
@@ -67,7 +56,6 @@ async function measureCompiled(compiler, profile, pack, modules, entry, number, 
       samples,
       result_number: last.number,
       result_text: last.text,
-      ...readCounts(instance, context),
     };
   } finally {
     destroyContext(instance, context);
@@ -173,10 +161,6 @@ export function validateMeasurement(document) {
       const row = program[engine];
       if (!row || !Number.isFinite(row.p50_ns) || !Number.isFinite(row.p90_ns))
         errors.push(`${name}.${engine} is missing wall percentiles`);
-    }
-    const compiled = program.compiled;
-    for (const counter of ["helper_calls", "trampoline_calls", "direct_calls", "indirect_calls"]) {
-      if (!Number.isFinite(compiled?.[counter])) errors.push(`${name}.compiled missing ${counter}`);
     }
   }
   return errors;

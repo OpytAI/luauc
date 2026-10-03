@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -259,8 +258,6 @@ export async function compilePackage(compilerBytes, profileBytes, packBytes, mod
         : "";
       if (compileStatus || view.getUint32(16, true))
         throw new Error(`compile failed with ${compileStatus}/${view.getUint32(16, true)}: ${diagnostic}`);
-      if (diagnostic.startsWith("FUNC line"))
-        writeFileSync("/tmp/luauc-ir83.txt", diagnostic);
       const dataPointer = view.getUint32(0, true);
       const dataSize = view.getUint32(4, true);
       const artifact = copyBytes(new Uint8Array(api.memory.buffer, dataPointer, dataSize));

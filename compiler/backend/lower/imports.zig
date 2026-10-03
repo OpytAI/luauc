@@ -18,8 +18,6 @@ const set_upvalue_symbol = abi.set_upvalue_symbol;
 const close_upvalues_symbol = abi.close_upvalues_symbol;
 const prepare_compiled_call_symbol = abi.prepare_compiled_call_symbol;
 const finish_compiled_call_symbol = abi.finish_compiled_call_symbol;
-const count_direct_call_symbol = abi.count_direct_call_symbol;
-const count_indirect_call_symbol = abi.count_indirect_call_symbol;
 const exchange_continuation_symbol = abi.exchange_continuation_symbol;
 const set_location_symbol = abi.set_location_symbol;
 const new_table_symbol = abi.new_table_symbol;
@@ -149,12 +147,6 @@ pub const RuntimeImports = struct {
     close_upvalues: ?wasm.FunctionRef,
     prepare_compiled_call: ?wasm.FunctionRef,
     finish_compiled_call: ?wasm.FunctionRef,
-    count_block: ?wasm.FunctionRef,
-    count_chain: ?wasm.FunctionRef,
-    count_direct_call: ?wasm.FunctionRef,
-    count_indirect_call: ?wasm.FunctionRef,
-    count_loop: ?wasm.FunctionRef,
-    count_scan: ?wasm.FunctionRef,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
     new_table: ?wasm.FunctionRef,
@@ -234,7 +226,6 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const close_upvalues_params = [_]wasm.ValueType{ .i32, .i32 };
     const prepare_compiled_call_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const finish_compiled_call_params = [_]wasm.ValueType{ .i32, .i32 };
-    const no_params = [_]wasm.ValueType{};
     const exchange_continuation_params = [_]wasm.ValueType{ .i32, .i32 };
     const set_location_params = [_]wasm.ValueType{ .i32, .i32 };
     const new_table_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
@@ -328,19 +319,6 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const finish_compiled_call = if (fast_lua_frame) blk: {
         const helper_type = try object.addType(.{ .params = &finish_compiled_call_params, .results = &no_results });
         break :blk try object.importFunction("env", finish_compiled_call_symbol, helper_type);
-    } else null;
-    // Miss-bucket probes stay unlinked. The call sites compile only when these are set.
-    const count_block: ?wasm.FunctionRef = null;
-    const count_chain: ?wasm.FunctionRef = null;
-    const count_loop: ?wasm.FunctionRef = null;
-    const count_scan: ?wasm.FunctionRef = null;
-    const count_direct_call = if (fast_lua_frame) blk: {
-        const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
-        break :blk try object.importFunction("env", count_direct_call_symbol, helper_type);
-    } else null;
-    const count_indirect_call = if (fast_lua_frame) blk: {
-        const helper_type = try object.addType(.{ .params = &no_params, .results = &no_results });
-        break :blk try object.importFunction("env", count_indirect_call_symbol, helper_type);
     } else null;
     const exchange_continuation = if (needs.exchange_continuation) blk: {
         const helper_type = try object.addType(.{ .params = &exchange_continuation_params, .results = &status_result });
@@ -589,12 +567,6 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .close_upvalues = close_upvalues,
         .prepare_compiled_call = prepare_compiled_call,
         .finish_compiled_call = finish_compiled_call,
-        .count_block = count_block,
-        .count_chain = count_chain,
-        .count_direct_call = count_direct_call,
-        .count_indirect_call = count_indirect_call,
-        .count_loop = count_loop,
-        .count_scan = count_scan,
         .exchange_continuation = exchange_continuation,
         .set_location = set_location,
         .new_table = new_table,

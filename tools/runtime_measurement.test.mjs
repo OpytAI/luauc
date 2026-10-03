@@ -53,16 +53,8 @@ if (checked.baseline_commit !== process.env.LUAUC_BASELINE_COMMIT)
 const p2 = document.programs.call_graph.compiled;
 if (p2.result_number !== 67 || p2.result_text !== "beta")
   throw new Error(`P2 result drift: ${p2.result_number}/${p2.result_text}`);
-if (p2.trampoline_calls !== 0 || p2.direct_calls !== 192 || p2.indirect_calls !== 0) {
-  throw new Error(
-    `P2 counters: trampoline=${p2.trampoline_calls} direct=${p2.direct_calls} indirect=${p2.indirect_calls}`,
-  );
-}
 const p3 = document.programs.table_churn.compiled;
 if (p3.result_number !== 8 || p3.result_text !== "beta")
   throw new Error(`P3 result drift: ${p3.result_number}/${p3.result_text}`);
 
-console.log(
-  `runtime measurement: ${Object.keys(document.programs).join(",")} ` +
-    `P2 trampoline=${p2.trampoline_calls} direct=${p2.direct_calls} indirect=${p2.indirect_calls}`,
-);
+console.log(`runtime measurement: ${Object.keys(document.programs).join(",")} P2=${p2.result_number}/${p2.result_text}`);

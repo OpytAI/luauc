@@ -328,8 +328,6 @@ fn emitChainWalk(self: anytype, destination: u32, publish_nil: bool, chain_end: 
     // A match sits inside two ifs, so leaving that arm is br 3.
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_chain) |probe|
-        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -365,8 +363,6 @@ fn emitFieldWalk(self: anytype, destination: u32, publish_nil: bool) Error!void 
 fn emitIndexKeyWalk(self: anytype, destination: u32, publish_nil: bool) Error!void {
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_chain) |probe|
-        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -505,8 +501,6 @@ fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []co
 fn emitUpdateChainedStringKey(self: anytype, value: u32) Error!void {
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_chain) |probe|
-        try self.body.call(self.allocator, probe);
     try emitNextIsZero(self);
     try self.body.ifVoid(self.allocator);
     try self.body.branch(self.allocator, 2);
@@ -904,8 +898,6 @@ fn emitLookupTagMethod(self: anytype, comptime event: u32) Error!void {
     // A nil value at this key is absent. A different key follows gnext, the same rule as luaH_getstr.
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_chain) |probe|
-        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);
@@ -1024,8 +1016,6 @@ fn emitIndexMethodHit(self: anytype, destination: u32, source: u32, key_index: u
     try self.body.ifVoid(self.allocator);
     try self.body.block(self.allocator);
     try self.body.loop(self.allocator);
-    if (self.count_chain) |probe|
-        try self.body.call(self.allocator, probe);
     try emitKeyPointerMatch(self);
     try self.body.ifVoid(self.allocator);
     try emitValueNonNil(self);

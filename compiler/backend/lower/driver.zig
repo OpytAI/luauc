@@ -42,203 +42,6 @@ pub const br_table_case_limit: u32 = 65536;
 pub const function_body_limit: usize = 8 * 1024 * 1024;
 pub const i32_ge_u: u8 = 0x4f;
 
-// Temporary IR dump. The compiler wasm has no imports, so the text stays in
-// memory and the host copies it after a successful compile.
-var ir_dump: []u8 = &.{};
-var ir_dump_len: usize = 0;
-var dump_function_base: u32 = 0;
-
-fn resetIrDump() void {
-    ir_dump_len = 0;
-}
-
-pub fn irDumpText() []const u8 {
-    return ir_dump[0..ir_dump_len];
-}
-
-fn dumpAppend(bytes: []const u8) void {
-    if (ir_dump.len == 0 or ir_dump_len >= ir_dump.len)
-        return;
-    const room = ir_dump.len - ir_dump_len;
-    const count = @min(room, bytes.len);
-    @memcpy(ir_dump[ir_dump_len..][0..count], bytes[0..count]);
-    ir_dump_len += count;
-}
-
-fn dumpU32(value: u32) void {
-    var buf: [10]u8 = undefined;
-    var n = value;
-    var i: usize = buf.len;
-    if (n == 0) {
-        dumpAppend("0");
-        return;
-    }
-    while (n > 0) {
-        i -= 1;
-        buf[i] = '0' + @as(u8, @intCast(n % 10));
-        n /= 10;
-    }
-    dumpAppend(buf[i..]);
-}
-
-fn dumpInteresting(command: u32) bool {
-    _ = command;
-    return true;
-}
-
-fn dumpI32(value: i32) void {
-    if (value < 0) {
-        dumpAppend("-");
-        dumpU32(@as(u32, @intCast(if (value == std.math.minInt(i32)) @as(u32, 2147483648) else @as(u32, @intCast(-value)))));
-        return;
-    }
-    dumpU32(@intCast(value));
-}
-
-fn dumpQuoted(bytes: []const u8) void {
-    dumpAppend(" \"");
-    const limit = @min(bytes.len, 48);
-    var index: usize = 0;
-    while (index < limit) : (index += 1) {
-        const byte = bytes[index];
-        if (byte >= 32 and byte < 127) {
-            dumpAppend(bytes[index .. index + 1]);
-        } else {
-            dumpAppend("?");
-        }
-    }
-    dumpAppend("\"");
-}
-
-fn dumpFunctionIr(
-    allocator: std.mem.Allocator,
-    snapshot: snapshot_v1.Snapshot,
-    function_id: u32,
-    function: snapshot_v1.IrFunction,
-    proto: snapshot_v1.Proto,
-    plan: *const FunctionPlan,
-    slots: []const ValueSlot,
-    folded: []const bool,
-) void {
-    _ = slots;
-    _ = folded;
-    if (ir_dump.len == 0) {
-        ir_dump = allocator.alloc(u8, 512 * 1024) catch return;
-        ir_dump_len = 0;
-    }
-    if (ir_dump_len + 64 >= ir_dump.len)
-        return;
-    dumpAppend("FUNC line ");
-    dumpU32(proto.line_defined);
-    dumpAppend(" id ");
-    dumpU32(function_id);
-    dumpAppend(" base ");
-    dumpU32(dump_function_base);
-    dumpAppend(" ins ");
-    dumpU32(function.instruction_count);
-    dumpAppend(" stack ");
-    dumpU32(proto.max_stack_size);
-    dumpAppend("\n");
-    // url.parse, the slide_digest call that builds the URL, and url.build.
-    const parse = proto.line_defined == 65 and function.instruction_count == 645;
-    const digest = proto.line_defined == 16 and function.instruction_count == 2504;
-    const url_build = proto.line_defined == 101 and function.instruction_count == 680;
-    if (!(parse or digest or url_build))
-        return;
-    var kept: u32 = 0;
-    var instruction_id: u32 = 0;
-    while (instruction_id < function.instruction_count) : (instruction_id += 1) {
-        const instruction = snapshot.irInstruction(function, instruction_id) catch return;
-        const command: u32 = @intFromEnum(instruction.command);
-        if (!dumpInteresting(command))
-            continue;
-        if (digest) {
-            var source_line: u32 = 0;
-            if (plan.instructionBlock(instruction_id)) |block_id| {
-                if (snapshot.irBlock(function, block_id) catch null) |block| {
-                    source_line = snapshot.sourceLine(proto, block.start_pc) catch 0;
-                }
-            }
-            if (source_line < 28 or source_line > 39)
-                continue;
-        }
-        if (kept == 1400) {
-            dumpAppend("TRUNC\n");
-            return;
-        }
-        kept += 1;
-        if (ir_dump_len + 160 >= ir_dump.len)
-            return;
-        dumpAppend("I ");
-        dumpU32(instruction_id);
-        dumpAppend(" C ");
-        dumpU32(command);
-        dumpAppend(" U ");
-        dumpU32(instruction.use_count);
-        var line: u32 = 0;
-        if (plan.instructionBlock(instruction_id)) |block_id| {
-            if (snapshot.irBlock(function, block_id) catch null) |block| {
-                line = snapshot.sourceLine(proto, block.start_pc) catch 0;
-                dumpAppend(" B ");
-                dumpU32(block_id);
-                dumpAppend(" ");
-                dumpU32(block.start);
-                dumpAppend("-");
-                dumpU32(block.finish);
-                dumpAppend(" k ");
-                dumpU32(@intFromEnum(block.kind));
-            }
-        }
-        if (plan.clusterAt(instruction_id)) |cluster| {
-            dumpAppend(" CL ");
-            dumpU32(@intFromEnum(cluster.kind));
-            dumpAppend("@");
-            dumpU32(cluster.start);
-        }
-        dumpAppend(" L ");
-        dumpU32(line);
-        dumpAppend(" n ");
-        dumpU32(instruction.operand_count);
-        var operand_index: u32 = 0;
-        const operand_limit = @min(instruction.operand_count, 4);
-        while (operand_index < operand_limit) : (operand_index += 1) {
-            const operand = snapshot.irOperand(instruction, operand_index) catch return;
-            dumpAppend(" k ");
-            dumpU32(@intFromEnum(operand.kind));
-            dumpAppend(" v ");
-            dumpU32(operand.value);
-            if (operand.kind == .constant) {
-                if (snapshot.irConstant(function, operand.value) catch null) |constant| {
-                    if (constant.intValue()) |ivalue| {
-                        dumpAppend(" i ");
-                        dumpI32(ivalue);
-                    } else if (constant.uintValue()) |uvalue| {
-                        dumpAppend(" u ");
-                        dumpU32(uvalue);
-                    } else if (constant.doubleValue()) |dvalue| {
-                        dumpAppend(" d ");
-                        var bits: u64 = 0;
-                        @memcpy(std.mem.asBytes(&bits), std.mem.asBytes(&dvalue));
-                        dumpU32(@truncate(bits));
-                        dumpAppend(":");
-                        dumpU32(@truncate(bits >> 32));
-                    } else if (constant.tagValue()) |tag| {
-                        dumpAppend(" t ");
-                        dumpU32(@as(u32, tag));
-                    }
-                }
-            } else if (operand.kind == .vm_const and operand.value < proto.vm_constant_count) {
-                if (snapshot.vmConstant(proto, operand.value) catch null) |vm_constant| {
-                    if (vm_constant.kind == .string) {
-                        if (snapshot.string(vm_constant.payload0) catch null) |text|
-                            dumpQuoted(text);
-                    }
-                }
-            }
-        }
-        dumpAppend("\n");
-    }
-}
 
 pub const DispatchMode = enum { flat, paged };
 
@@ -356,7 +159,6 @@ fn lowerFunction(
     siblings: []const wasm.FunctionRef,
     sibling_trampoline: ?wasm.FunctionRef,
 ) Error!wasm.FunctionRef {
-    dump_function_base = function_id_base;
     diagnostics.enterFunction(function_id);
     diagnostics.trace("lower");
     const function = try snapshot.irFunction(function_id);
@@ -497,12 +299,6 @@ fn lowerFunction(
         .close_upvalues = imports.close_upvalues,
         .prepare_compiled_call = imports.prepare_compiled_call,
         .finish_compiled_call = imports.finish_compiled_call,
-        .count_block = imports.count_block,
-        .count_chain = imports.count_chain,
-        .count_direct_call = imports.count_direct_call,
-        .count_indirect_call = imports.count_indirect_call,
-        .count_loop = imports.count_loop,
-        .count_scan = imports.count_scan,
         .generated_type = imports.generated_type,
         .self_function = if (reserved) |ref| ref else try object.pendingFunctionRef(imports.generated_type),
         .sibling_functions = siblings,
@@ -605,8 +401,6 @@ fn lowerFunction(
         diagnostics.recordPhase(@errorName(err), "block index");
         return err;
     };
-    dump_function_base = function_id_base;
-    dumpFunctionIr(allocator, snapshot, function_id, function, proto, &plan, slots, numeric_folded);
     continuation_plan.planContinuations(allocator, snapshot, function, proto, &plan) catch |err| {
         diagnostics.recordPhase(@errorName(err), "continuation plan");
         return err;
@@ -814,14 +608,10 @@ fn directDispatchTrampoline(
     const count = siblings.len;
     if (count <= backend_context.max_inline_direct_siblings or count > backend_context.max_direct_dispatch_arms)
         return null;
-    const direct = imports.count_direct_call orelse return null;
-    const indirect = imports.count_indirect_call orelse return null;
     return try backend_context.emitDirectDispatchTrampoline(
         allocator,
         object,
         imports.generated_type,
-        direct,
-        indirect,
         siblings,
     );
 }
@@ -858,7 +648,6 @@ fn buildProtoIdentityMap(allocator: std.mem.Allocator, snapshot: snapshot_v1.Sna
 }
 
 pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_id: u32) Error![]u8 {
-    resetIrDump();
     diagnostics.reset();
     diagnostics.enterFunction(function_id);
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
@@ -887,7 +676,6 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
 }
 
 pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Error![]u8 {
-    resetIrDump();
     diagnostics.reset();
     const snapshot = try snapshot_v1.parse(snapshot_bytes, snapshot_v1.production_identity);
     try snapshot_v1.validateModel(snapshot);
@@ -1351,7 +1139,6 @@ fn emitStaticPackageMetadata(
 }
 
 pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u8) Error![]u8 {
-    resetIrDump();
     diagnostics.reset();
     const package = try static_package_v1.parse(package_bytes);
     const function_bases = try allocator.alloc(u32, @intCast(package.module_count));
