@@ -181,6 +181,7 @@ pub const Context = struct {
     pub const emitCopyTValueRegisters = core.emitCopyTValueRegisters;
     pub const emitStoreTValueOperand = core.emitStoreTValueOperand;
     pub const emitCopyTValueRegisterToAddress = core.emitCopyTValueRegisterToAddress;
+    pub const rejectUnprovenCrossBlockTableStore = core.rejectUnprovenCrossBlockTableStore;
     pub const emitStoreSplitTValue = core.emitStoreSplitTValue;
     pub const emitLoadEnv = core.emitLoadEnv;
     pub const emitVmConstantAddress = core.emitVmConstantAddress;

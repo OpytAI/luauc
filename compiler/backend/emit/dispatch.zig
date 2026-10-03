@@ -199,8 +199,11 @@ fn emitInstructionInner(self: anytype, instruction_id: u32, block_kind: snapshot
         },
         .store_tag => try self.emitStoreTag(instruction_id, instruction_value),
         .store_extra => try self.emitStoreI32(instruction_value, tvalue_extra_offset),
-        .store_split_tvalue => if (self.plan.closureContaining(instruction_id) == null)
-            try self.emitStoreSplitTValue(instruction_id, instruction_value),
+        .store_split_tvalue => {
+            try self.rejectUnprovenCrossBlockTableStore(instruction_id, instruction_value);
+            if (self.plan.closureContaining(instruction_id) == null)
+                try self.emitStoreSplitTValue(instruction_id, instruction_value);
+        },
         .store_double => try self.emitStoreDouble(instruction_value),
         .store_int => try self.emitStoreI32(instruction_value, 0),
         .store_int64 => try self.emitStoreI64(instruction_value),

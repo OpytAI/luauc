@@ -871,11 +871,8 @@ fn attachDeferredGc(
         if ((try snapshot.irInstruction(function, cursor)).command == .check_gc)
             return;
     }
-    // A linearized clone drops the NOP that tableAllocationAt folds into the
-    // allocation. That NOP form is already accepted and also has no later
-    // CHECK_GC. A bare NEW_TABLE still needs a collector assist after its stores.
-    if (alloc.dest_reg != snapshot_v1.no_id)
-        return;
+    // The immediate NOP form is not deferred. A deferred allocation already
+    // stored into a register and still needs a later CHECK_GC.
     var followed: [48]u8 = undefined;
     var next_commands: [3]u32 = .{ 0, 0, 0 };
     var index: u32 = 0;

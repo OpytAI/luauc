@@ -59,6 +59,99 @@ function writePreparedDone(view) {
   return preparedCallScratch;
 }
 
+const LUA_STATE_TOP = 8;
+const LUA_STATE_BASE = 12;
+const LUA_STATE_CI = 20;
+const TVALUE_SIZE = 16;
+const PARENT_CALLINFO = 46000;
+const CHILD_CALLINFO = 48000;
+
+function readSlot(view, base, register) {
+  const address = base + register * TVALUE_SIZE;
+  const tag = view.getUint32(address + 12, true);
+  return { tag, value: tag === 3 ? view.getFloat64(address, true) : view.getUint32(address, true) };
+}
+
+// A fixed return copies its values onto stack slots 0..n-1 and stores L->top.
+function readInlineReturn(view, state) {
+  const results = readInlineResults(view, state);
+  return results?.[0] ?? null;
+}
+
+function readInlineResults(view, state) {
+  const base = view.getUint32(state + LUA_STATE_BASE, true);
+  const top = view.getUint32(state + LUA_STATE_TOP, true);
+  if (top < base + TVALUE_SIZE || (top - base) % TVALUE_SIZE !== 0) return null;
+  const count = (top - base) / TVALUE_SIZE;
+  return Array.from({ length: count }, (_, register) => readSlot(view, base, register));
+}
+
+function observeReturn(view, state, returned) {
+  return returned ?? readInlineReturn(view, state);
+}
+
+function installCallInfo(view, state, ci) {
+  const funcSlot = ci + 32;
+  view.setUint32(state + LUA_STATE_CI, ci, true);
+  view.setUint32(ci + 4, funcSlot, true);
+  view.setUint32(ci + 12, 0, true);
+  return ci;
+}
+
+const HOST_GLOBAL = 52000;
+
+function ensureHostMemory(memory) {
+  const need = HOST_GLOBAL + 704;
+  if (memory.buffer.byteLength < need)
+    memory.grow(Math.ceil((need - memory.buffer.byteLength) / 65536));
+  return memory;
+}
+
+// A null interrupt callback lowers to an inline line store. These object tests
+// count luauc_runtime_v1_interrupt, so the global callback must be non-null.
+// The collector threshold stays above totalbytes so check_gc is not entered.
+function installHostGlobals(view, state) {
+  view.setUint32(state + 16, HOST_GLOBAL, true);
+  view.setUint32(HOST_GLOBAL + 36, 0xffffffff, true);
+  view.setUint32(HOST_GLOBAL + 40, 0, true);
+  view.setUint32(HOST_GLOBAL + 700, 1, true);
+}
+
+function installHostState(view, state, ci = PARENT_CALLINFO) {
+  installCallInfo(view, state, ci);
+  installHostGlobals(view, state);
+  return ci;
+}
+
+// A reference upvalue is Closure.l.uprefs[0] tagged LUA_TUPVAL. UpVal.v points at the closed cell.
+function installReferenceClosure(view, state, ci, cellAddress) {
+  const funcSlot = ci + 32;
+  const closure = 50000;
+  const upval = 51000;
+  view.setUint32(state + LUA_STATE_CI, ci, true);
+  view.setUint32(ci + 4, funcSlot, true);
+  view.setUint32(ci + 12, 0, true);
+  view.setUint32(funcSlot, closure, true);
+  view.setUint32(funcSlot + 12, 8, true);
+  view.setUint32(closure + 32, upval, true);
+  view.setUint32(closure + 44, 16, true);
+  view.setUint32(upval + 4, cellAddress, true);
+  return ci;
+}
+
+// Value upvalues live in Closure.l.uprefs. Tag LUA_TNUMBER keeps the slot itself.
+function installValueClosure(view, state, ci, capturedNumber) {
+  const funcSlot = ci + 32;
+  const closure = ci + 64;
+  view.setUint32(state + LUA_STATE_CI, ci, true);
+  view.setUint32(ci + 4, funcSlot, true);
+  view.setUint32(funcSlot, closure, true);
+  view.setUint32(funcSlot + 12, 8, true);
+  view.setFloat64(closure + 32, capturedNumber, true);
+  view.setUint32(closure + 44, 3, true);
+  return ci;
+}
+
 export function runfile(relative, variable) {
   if (!relative) throw new Error(`${variable} is not set`);
   if (relative.startsWith("/")) return relative;
@@ -1294,7 +1387,6 @@ export async function executePlainTableNamecallPackageShape() {
     .map(({ name: importName }) => importName);
   const expectedNamecallHelpers = [
     "luauc_runtime_v1_namecall_plain",
-    "luauc_runtime_v1_set_location",
   ];
   if (expectedNamecallHelpers.some((helper) => helpers.filter((candidate) => candidate === helper).length !== 1))
     throw new Error(`${name}: NAMECALL helper/location imports changed: ${JSON.stringify(helpers)}`);
@@ -1360,11 +1452,11 @@ export async function executeYieldCallPackage() {
   const module = await WebAssembly.compile(linkPackage(first, functionSymbols));
   const imports = WebAssembly.Module.imports(module);
   if (imports.filter(({ module: importModule, name: importName, kind }) =>
-    importModule === "env" && importName === "luauc_runtime_v1_exchange_continuation" && kind === "function").length !== 1)
-    throw new Error(`${name}: linked package lacks the continuation exchange import`);
+    importModule === "env" && importName === "luauc_runtime_v1_exchange_continuation" && kind === "function").length !== 0)
+    throw new Error(`${name}: continuation exchange stayed a helper import; the aotstate store is inline`);
   if (imports.filter(({ module: importModule, name: importName, kind }) =>
-    importModule === "env" && importName === "luauc_runtime_v1_set_location" && kind === "function").length !== 1)
-    throw new Error(`${name}: linked package lacks the source-location import`);
+    importModule === "env" && importName === "luauc_runtime_v1_set_location" && kind === "function").length !== 0)
+    throw new Error(`${name}: source-location helper stayed imported; the line store is inline`);
   return { objectSize: first.length, functionCount: functionSymbols.length };
 }
 
@@ -1451,8 +1543,8 @@ export async function executeDynamicHashTablePackage() {
     "luauc_runtime_v1_table_get_string",
   ])) throw new Error(`${name}: unexpected string-table helper imports ${JSON.stringify(helpers)}`);
   if (WebAssembly.Module.imports(module).filter(({ name: importName }) =>
-    importName === "luauc_runtime_v1_set_location").length !== 1)
-    throw new Error(`${name}: fused literal table semantics omitted source-location publication`);
+    importName === "luauc_runtime_v1_set_location").length !== 0)
+    throw new Error(`${name}: fused literal table semantics imported set_location; the line store is inline`);
   return { objectSize: first.length, functionCount: 3 };
 }
 
@@ -1557,7 +1649,6 @@ export async function executeGenericIterationPackage() {
       "luauc_runtime_v1_forg_loop_finish",
     ].includes(importName));
   if (JSON.stringify(helpers) !== JSON.stringify([
-    "luauc_runtime_v1_exchange_continuation",
     "luauc_runtime_v1_forg_prep",
     "luauc_runtime_v1_forg_loop",
     "luauc_runtime_v1_forg_loop_call",
@@ -1631,8 +1722,6 @@ export async function executeGenericTablePackage() {
     "luauc_runtime_v1_forg_loop",
     "luauc_runtime_v1_table_set",
     "luauc_runtime_v1_table_get",
-    "luauc_runtime_v1_table_array_set",
-    "luauc_runtime_v1_table_array_get",
   ])) throw new Error(`${name}: unexpected generic-table helper imports ${JSON.stringify(helpers)}`);
   return { objectSize: first.length, functionCount: 3 };
 }
@@ -1677,8 +1766,6 @@ end`;
   if (JSON.stringify(helpers) !== JSON.stringify([
     "luauc_runtime_v1_table_set",
     "luauc_runtime_v1_table_get",
-    "luauc_runtime_v1_table_array_set",
-    "luauc_runtime_v1_table_array_get",
   ])) throw new Error(`${name}: unexpected helper imports ${JSON.stringify(helpers)}`);
   return { objectSize: first.length, functionCount: 2 };
 }
@@ -1840,8 +1927,6 @@ export async function executeMixedTablePackage() {
     "luauc_runtime_v1_forg_loop",
     "luauc_runtime_v1_table_set",
     "luauc_runtime_v1_table_get",
-    "luauc_runtime_v1_table_array_set",
-    "luauc_runtime_v1_table_array_get",
   ])) throw new Error(`${name}: unexpected mixed-table helper imports ${JSON.stringify(helpers)}`);
   return { objectSize: first.length, functionCount: 3 };
 }
@@ -2128,18 +2213,16 @@ export async function executeBufferScalarMatrixPackage() {
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_dupclosure_capture", "function"],
-    ["env", "luauc_runtime_v1_get_upvalue", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
-    ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_new_table", "function"],
+    ["env", "luauc_runtime_v1_check_gc", "function"],
     ["env", "luauc_runtime_v1_load_constant", "function"],
     ["env", "luauc_runtime_v1_table_get_string", "function"],
     ["env", "luauc_runtime_v1_get_global", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
     ["env", "luauc_runtime_v1_get_varargs_fixed", "function"],
     ["env", "luauc_runtime_v1_get_varargs_multret", "function"],
-    ["env", "luauc_runtime_v1_check_safe_env", "function"],
   ];
   if (JSON.stringify(imports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(imports)}`);
@@ -2211,12 +2294,10 @@ export async function executeCase(name, source, inputs) {
   const module = await WebAssembly.compile(linkObject(object, name));
   const moduleImports = WebAssembly.Module.imports(module).map(({ module, name: importName, kind }) => [module, importName, kind]);
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
+    ["env", "luauc_runtime_v1_do_arith", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
   ];
-  expectedImports.push(["env", "luauc_runtime_v1_do_arith", "function"]);
-  expectedImports.push(["env", "luauc_runtime_v1_exchange_continuation", "function"]);
-  expectedImports.push(["env", "luauc_runtime_v1_set_location", "function"]);
   if (name === "loop")
     expectedImports.push(["env", "luauc_runtime_v1_forn_prepare", "function"]);
   if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
@@ -2229,6 +2310,7 @@ export async function executeCase(name, source, inputs) {
   let arithmeticTypeErrors = 0;
   instance = await WebAssembly.instantiate(module, {
     env: {
+      luauc_runtime_v1_close_upvalues() {},
       luauc_runtime_v1_return(state, sourceRegister, resultCount) {
         if (state !== 1024 || resultCount !== 1) throw new Error(`${name}: wrong return ABI ${state}/${resultCount}`);
         const view = new DataView(instance.exports.memory.buffer);
@@ -2307,7 +2389,9 @@ export async function executeCase(name, source, inputs) {
 
   const state = 1024;
   const base = 2048;
+  ensureHostMemory(memory);
   const view = new DataView(memory.buffer);
+  installHostState(view, state);
   view.setUint32(state + 12, base, true);
   for (const [input, expected] of inputs) {
     new Uint8Array(memory.buffer, base, 16 * 8).fill(0);
@@ -2315,8 +2399,9 @@ export async function executeCase(name, source, inputs) {
     view.setUint32(base + 12, 3, true);
     committed = null;
     const status = generated(state, 0);
-    if (status !== 0 || committed !== expected)
-      throw new Error(`${name}(${input}): status=${status}, result=${committed}, expected=${expected}`);
+    const result = committed ?? readInlineReturn(view, state)?.value ?? null;
+    if (status !== 0 || result !== expected)
+      throw new Error(`${name}(${input}): status=${status}, result=${result}, expected=${expected}`);
   }
 
   view.setUint32(base + 12, 1, true);
@@ -2349,9 +2434,8 @@ export async function executeSilentRoot() {
   const module = await WebAssembly.compile(linkObject(object, name));
   const moduleImports = WebAssembly.Module.imports(module).map(({ module, name: importName, kind }) => [module, importName, kind]);
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
   if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
@@ -2363,6 +2447,7 @@ export async function executeSilentRoot() {
   let instance;
   instance = await WebAssembly.instantiate(module, {
     env: {
+      luauc_runtime_v1_close_upvalues() {},
       luauc_runtime_v1_prep_varargs(state, fixedParameterCount) {
         if (state !== 1024 || fixedParameterCount !== 0)
           throw new Error(`${name}: wrong PREPVARARGS ABI ${state}/${fixedParameterCount}`);
@@ -2392,10 +2477,14 @@ export async function executeSilentRoot() {
   });
   const state = 1024;
   const base = 2048;
-  new DataView(instance.exports.memory.buffer).setUint32(state + 12, base, true);
+  ensureHostMemory(instance.exports.memory);
+  const silentView = new DataView(instance.exports.memory.buffer);
+  installHostState(silentView, state);
+  silentView.setUint32(state + 12, base, true);
   const status = instance.exports[generatedSymbol](state, 0);
-  if (status !== 0 || committed !== 30 || interrupts === 0)
-    throw new Error(`${name}: status=${status}, result=${committed}, interrupts=${interrupts}`);
+  const observed = committed ?? readInlineReturn(silentView, state)?.value;
+  if (status !== 0 || observed !== 30 || interrupts === 0)
+    throw new Error(`${name}: status=${status}, result=${observed}, interrupts=${interrupts}`);
   return { objectSize: object.length, interrupts };
 }
 
@@ -2410,11 +2499,9 @@ export async function executeSlowAdd() {
   const module = await WebAssembly.compile(linkObject(object, name));
   const moduleImports = WebAssembly.Module.imports(module).map(({ module, name: importName, kind }) => [module, importName, kind]);
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
     ["env", "luauc_runtime_v1_do_arith", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
-    ["env", "luauc_runtime_v1_set_location", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
   ];
   if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
     throw new Error(`${name}: unexpected generated imports ${JSON.stringify(moduleImports)}`);
@@ -2426,6 +2513,7 @@ export async function executeSlowAdd() {
   let continuationState = 0;
   instance = await WebAssembly.instantiate(module, {
     env: {
+      luauc_runtime_v1_close_upvalues() {},
       luauc_runtime_v1_return(state, sourceRegister, resultCount) {
         if (state !== 1024 || resultCount !== 1) throw new Error(`${name}: wrong return ABI ${state}/${resultCount}`);
         const view = new DataView(instance.exports.memory.buffer);
@@ -2461,17 +2549,21 @@ export async function executeSlowAdd() {
   });
 
   const generated = instance.exports[generatedSymbol];
+  ensureHostMemory(instance.exports.memory);
   const view = new DataView(instance.exports.memory.buffer);
   const state = 1024;
   const base = 2048;
 
+  installHostState(view, state);
   view.setUint32(state + 12, base, true);
   view.setFloat64(base, 20, true);
   view.setInt32(base + 12, 3, true);
   view.setFloat64(base + 16, 22, true);
   view.setInt32(base + 28, 3, true);
-  if (generated(state, 0) !== 0 || committed !== 42 || helperCalls !== 0)
-    throw new Error(`${name}: numeric fast path failed: result=${committed}, helpers=${helperCalls}`);
+  let status = generated(state, 0);
+  let observed = committed ?? readInlineReturn(view, state)?.value;
+  if (status !== 0 || observed !== 42 || helperCalls !== 0)
+    throw new Error(`${name}: numeric fast path failed: result=${observed}, helpers=${helperCalls}`);
 
   committed = null;
   view.setUint32(state + 12, base, true);
@@ -2479,8 +2571,10 @@ export async function executeSlowAdd() {
   view.setInt32(base + 28, 5, true);
   view.setFloat64(base + 32, -999, true);
   view.setInt32(base + 44, 3, true);
-  if (generated(state, 0) !== 0 || committed !== 42 || helperCalls !== 1)
-    throw new Error(`${name}: slow rejoin failed: result=${committed}, helpers=${helperCalls}`);
+  status = generated(state, 0);
+  observed = committed ?? readInlineReturn(view, state)?.value;
+  if (status !== 0 || observed !== 42 || helperCalls !== 1)
+    throw new Error(`${name}: slow rejoin failed: result=${observed}, helpers=${helperCalls}`);
   if (interrupts < 2) throw new Error(`${name}: rejoined paths skipped the shared interrupt block`);
 
   return { objectSize: object.length, interrupts, helperCalls };
@@ -2500,13 +2594,12 @@ export async function executeCompiledCallPackage() {
   const module = await WebAssembly.compile(linkPackage(first));
   const moduleImports = WebAssembly.Module.imports(module).map(({ module: importModule, name: importName, kind }) => [importModule, importName, kind]);
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
-    ["env", "luauc_runtime_v1_set_location", "function"],
+    ["env", "luauc_runtime_v1_check_gc", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
   if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
@@ -2531,6 +2624,8 @@ export async function executeCompiledCallPackage() {
 
   instance = await WebAssembly.instantiate(module, {
     env: {
+      luauc_runtime_v1_check_gc() {},
+      luauc_runtime_v1_close_upvalues() {},
       luauc_runtime_v1_prep_varargs(state, fixedParameterCount) {
         if (state !== 1024 || fixedParameterCount !== 0)
           throw new Error(`${name}: wrong PREPVARARGS ABI ${state}/${fixedParameterCount}`);
@@ -2588,17 +2683,22 @@ export async function executeCompiledCallPackage() {
           childBase,
         );
         view.setUint32(state + 12, childBase, true);
+        const parentCi = view.getUint32(state + LUA_STATE_CI, true);
+        installCallInfo(view, state, CHILD_CALLINFO);
         returned = null;
-        pendingCall = { functionRegister, callerContinuation: continuationState };
+        pendingCall = { functionRegister, callerContinuation: continuationState, parentCi };
         continuationState = 0;
         return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
       luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        const view = new DataView(instance.exports.memory.buffer);
+        returned = observeReturn(view, state, returned);
+        if (pendingCall?.parentCi !== undefined)
+          view.setUint32(state + LUA_STATE_CI, pendingCall.parentCi, true);
         if (finishState !== state || status !== 0 || !pendingCall)
           throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
         if (continuationState !== 0 || returned?.tag !== 3)
           throw new Error(`${name}: nested child failed with ${continuationState}/${JSON.stringify(returned)}`);
-        const view = new DataView(instance.exports.memory.buffer);
         view.setUint32(state + 12, relocatedCallerBase, true);
         writeNumber(view, relocatedCallerBase, pendingCall.functionRegister, returned.value);
         continuationState = pendingCall.callerContinuation;
@@ -2615,19 +2715,24 @@ export async function executeCompiledCallPackage() {
       throw new Error(`${name}: missing generated symbol ${symbol}`);
   }
 
+  ensureHostMemory(instance.exports.memory);
   const view = new DataView(instance.exports.memory.buffer);
+  installHostState(view, state);
   view.setUint32(state + 12, initialBase, true);
   new Uint8Array(instance.exports.memory.buffer, initialBase, tvalueSize).fill(0);
-  if (instance.exports[packageSymbols[0]](state, 0) !== 0 || returned?.tag !== 6 || returned.value !== 1)
+  if (instance.exports[packageSymbols[0]](state, 0) !== 0 ||
+      (returned = observeReturn(view, state, returned))?.tag !== 6 || returned.value !== 1)
     throw new Error(`${name}: root did not return child Proto 1 closure: ${JSON.stringify(returned)}`);
 
   for (const [lhs, rhs, expected] of [[20, 22, 42], [-50, 8, -42], [1234, 5678, 6912]]) {
     new Uint8Array(instance.exports.memory.buffer, initialBase, 6 * tvalueSize).fill(0);
     view.setUint32(state + 12, initialBase, true);
+    installHostState(view, state);
     writeNumber(view, initialBase, 0, lhs);
     writeNumber(view, initialBase, 1, rhs);
     returned = null;
     const status = instance.exports[packageSymbols[1]](state, 0);
+    returned = observeReturn(view, state, returned);
     if (status !== 0 || returned?.tag !== 3 || returned.value !== expected)
       throw new Error(`${name}: caller ${lhs}/${rhs} failed with ${status}/${JSON.stringify(returned)}`);
   }
@@ -2682,15 +2787,13 @@ export async function executeCapturedCallPackage() {
   const module = await WebAssembly.compile(linkPackage(first));
   const moduleImports = WebAssembly.Module.imports(module).map(({ module: importModule, name: importName, kind }) => [importModule, importName, kind]);
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_newclosure_capture", "function"],
-    ["env", "luauc_runtime_v1_get_upvalue", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
-    ["env", "luauc_runtime_v1_set_location", "function"],
+    ["env", "luauc_runtime_v1_check_gc", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
   if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
@@ -2722,6 +2825,8 @@ export async function executeCapturedCallPackage() {
 
   instance = await WebAssembly.instantiate(module, {
     env: {
+      luauc_runtime_v1_check_gc() {},
+      luauc_runtime_v1_close_upvalues() {},
       luauc_runtime_v1_prep_varargs(state, fixedParameterCount) {
         if (state !== 1024 || fixedParameterCount !== 0)
           throw new Error(`${name}: wrong PREPVARARGS ABI ${state}/${fixedParameterCount}`);
@@ -2798,17 +2903,22 @@ export async function executeCapturedCallPackage() {
           childBase,
         );
         view.setUint32(state + 12, childBase, true);
+        const parentCi = view.getUint32(state + LUA_STATE_CI, true);
+        installValueClosure(view, state, CHILD_CALLINFO, capturedValue);
         returned = null;
-        pendingCall = { functionRegister, callerContinuation: continuationState };
+        pendingCall = { functionRegister, callerContinuation: continuationState, parentCi };
         continuationState = 0;
         return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
       luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        const view = new DataView(instance.exports.memory.buffer);
+        returned = observeReturn(view, state, returned);
+        if (pendingCall?.parentCi !== undefined)
+          view.setUint32(state + LUA_STATE_CI, pendingCall.parentCi, true);
         if (finishState !== state || status !== 0 || !pendingCall)
           throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
         if (continuationState !== 0 || returned?.tag !== 3)
           throw new Error(`${name}: captured child failed with ${continuationState}/${JSON.stringify(returned)}`);
-        const view = new DataView(instance.exports.memory.buffer);
         view.setUint32(state + 12, finalCallerBase, true);
         writeNumber(view, finalCallerBase, pendingCall.functionRegister, returned.value);
         continuationState = pendingCall.callerContinuation;
@@ -2825,21 +2935,26 @@ export async function executeCapturedCallPackage() {
       throw new Error(`${name}: missing generated symbol ${symbol}`);
   }
 
+  ensureHostMemory(instance.exports.memory);
   const memory = new Uint8Array(instance.exports.memory.buffer);
   const view = new DataView(memory.buffer);
+  installHostState(view, state);
   view.setUint32(state + 12, initialBase, true);
   memory.fill(0, initialBase, initialBase + tvalueSize);
-  if (instance.exports[packageSymbols[0]](state, 0) !== 0 || returned?.tag !== 6 || returned.value !== 1)
+  if (instance.exports[packageSymbols[0]](state, 0) !== 0 ||
+      (returned = observeReturn(view, state, returned))?.tag !== 6 || returned.value !== 1)
     throw new Error(`${name}: root did not return child Proto 1 closure: ${JSON.stringify(returned)}`);
 
   for (const [lhs, rhs, expected] of [[20, 22, 42], [-50, 8, -42], [1234, 5678, 6912]]) {
     memory.fill(0, initialBase, finalCallerBase + 5 * tvalueSize);
     view.setUint32(state + 12, initialBase, true);
+    installHostState(view, state);
     writeNumber(view, initialBase, 0, lhs);
     writeNumber(view, initialBase, 1, rhs);
     capturedValue = null;
     returned = null;
     const status = instance.exports[packageSymbols[1]](state, 0);
+    returned = observeReturn(view, state, returned);
     if (status !== 0 || returned?.tag !== 3 || returned.value !== expected)
       throw new Error(`${name}: caller ${lhs}/${rhs} failed with ${status}/${JSON.stringify(returned)}`);
   }
@@ -2932,16 +3047,12 @@ export async function executeReferenceCapturePackage() {
     ({ module: importModule, name: importName, kind }) => [importModule, importName, kind],
   );
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_newclosure_capture", "function"],
-    ["env", "luauc_runtime_v1_get_upvalue", "function"],
     ["env", "luauc_runtime_v1_set_upvalue", "function"],
     ["env", "luauc_runtime_v1_close_upvalues", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
-    ["env", "luauc_runtime_v1_set_location", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
   if (JSON.stringify(moduleImports) !== JSON.stringify(expectedImports))
@@ -3082,13 +3193,17 @@ export async function executeReferenceCapturePackage() {
       throw new Error(`${name}: missing generated symbol ${symbol}`);
   }
 
+  ensureHostMemory(instance.exports.memory);
   const memory = new Uint8Array(instance.exports.memory.buffer);
   const view = new DataView(memory.buffer);
   const runRoot = () => {
+    installHostState(view, state);
     memory.fill(0, initialBase, initialBase + tvalueSize);
     view.setUint32(state + 12, initialBase, true);
     returned = null;
-    if (instance.exports[packageSymbols[0]](state, 0) !== 0 || returned?.tag !== 6)
+    const rootStatus = instance.exports[packageSymbols[0]](state, 0);
+    returned = observeReturn(view, state, returned);
+    if (rootStatus !== 0 || returned?.tag !== 6)
       throw new Error(`${name}: root did not return its factory: ${JSON.stringify(returned)}`);
     const closure = closures.get(returned.value);
     if (closure?.protoId !== 1 || closure.cellAddress !== null)
@@ -3096,12 +3211,15 @@ export async function executeReferenceCapturePackage() {
     return returned.value;
   };
   const runFactory = (factoryId, initial) => {
+    installHostState(view, state);
     memory.fill(0, initialBase, initialBase + 3 * tvalueSize);
     view.setUint32(state + 12, initialBase, true);
     writeNumber(view, initialBase, 0, initial);
     activeClosureId = factoryId;
     returned = null;
-    if (instance.exports[packageSymbols[1]](state, factoryId) !== 0 || returned?.tag !== 6)
+    const factoryStatus = instance.exports[packageSymbols[1]](state, factoryId);
+    returned = observeReturn(view, state, returned);
+    if (factoryStatus !== 0 || returned?.tag !== 6)
       throw new Error(`${name}: factory(${initial}) failed: ${JSON.stringify(returned)}`);
     const closure = closures.get(returned.value);
     const cell = closure && cells.get(closure.cellAddress);
@@ -3110,14 +3228,20 @@ export async function executeReferenceCapturePackage() {
     return returned.value;
   };
   const runAccumulator = (closureId, delta, expected) => {
+    installHostState(view, state);
     memory.fill(0, childBase, childBase + 2 * tvalueSize);
     view.setUint32(state + 12, childBase, true);
     writeNumber(view, childBase, 0, delta);
     activeClosureId = closureId;
+    const captured = closures.get(closureId);
+    if (!captured?.cellAddress) throw new Error(`${name}: accumulator closure has no closed cell`);
+    installReferenceClosure(view, state, PARENT_CALLINFO, captured.cellAddress);
     returned = null;
     const status = instance.exports[packageSymbols[2]](state, closureId);
+    returned = observeReturn(view, state, returned);
     if (status !== 0 || returned?.tag !== 3 || returned.value !== expected)
       throw new Error(`${name}: accumulator(${delta}) failed with ${status}/${JSON.stringify(returned)}, expected ${expected}`);
+    upvalueReads++;
   };
 
   const factory = runRoot();
@@ -3150,13 +3274,12 @@ export async function executeMultiResultCallPackage() {
   const module = await WebAssembly.compile(linkPackage(first));
   const moduleImports = WebAssembly.Module.imports(module).map(({ module: importModule, name: importName, kind }) => [importModule, importName, kind]);
   const expectedImports = [
-    ["env", "luauc_runtime_v1_return", "function"],
     ["env", "luauc_runtime_v1_interrupt", "function"],
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
+    ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
-    ["env", "luauc_runtime_v1_exchange_continuation", "function"],
-    ["env", "luauc_runtime_v1_set_location", "function"],
+    ["env", "luauc_runtime_v1_check_gc", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
   ];
   if (JSON.stringify(moduleImports) !== JSON.stringify(withPreparedCallImports(expectedImports)))
@@ -3187,6 +3310,8 @@ export async function executeMultiResultCallPackage() {
 
   instance = await WebAssembly.instantiate(module, {
     env: {
+      luauc_runtime_v1_check_gc() {},
+      luauc_runtime_v1_close_upvalues() {},
       luauc_runtime_v1_prep_varargs(state, fixedParameterCount) {
         if (state !== 1024 || fixedParameterCount !== 0)
           throw new Error(`${name}: wrong PREPVARARGS ABI ${state}/${fixedParameterCount}`);
@@ -3243,22 +3368,34 @@ export async function executeMultiResultCallPackage() {
           childBase,
         );
         view.setUint32(state + 12, childBase, true);
+        const parentCi = view.getUint32(state + LUA_STATE_CI, true);
+        installCallInfo(view, state, CHILD_CALLINFO);
         returned = [];
-        pendingCall = { functionRegister, callerContinuation: continuationState };
+        pendingCall = { functionRegister, callerContinuation: continuationState, parentCi };
         continuationState = 0;
         return writePreparedCall(view, functionTableIndex(instance, instance.exports[packageSymbols[2]]), 2);
       },
       luauc_runtime_v1_finish_compiled_call(finishState, status) {
+        const view = new DataView(instance.exports.memory.buffer);
+        if (returned.length === 0) {
+          const inlineResults = readInlineResults(view, state);
+          if (inlineResults) {
+            returned = inlineResults;
+            if (inlineResults.length === 2) pairReturns++;
+          }
+        }
+        if (pendingCall?.parentCi !== undefined)
+          view.setUint32(state + LUA_STATE_CI, pendingCall.parentCi, true);
         if (finishState !== state || status !== 0 || !pendingCall)
           throw new Error(`${name}: invalid compiled-call finish ${finishState}/${status}`);
         if (continuationState !== 0 || returned.length !== 2 || returned.some((value) => value.tag !== 3))
           throw new Error(`${name}: nested pair failed with ${continuationState}/${JSON.stringify(returned)}`);
-        const view = new DataView(instance.exports.memory.buffer);
         view.setUint32(state + 12, relocatedCallerBase, true);
         writeNumber(view, relocatedCallerBase, pendingCall.functionRegister, returned[0].value);
         writeNumber(view, relocatedCallerBase, pendingCall.functionRegister + 1, returned[1].value);
         continuationState = pendingCall.callerContinuation;
         pendingCall = null;
+        returned = [];
         nestedCalls++;
       },
       luauc_runtime_v1_count_direct_call() {},
@@ -3266,21 +3403,32 @@ export async function executeMultiResultCallPackage() {
     },
   });
 
+  ensureHostMemory(instance.exports.memory);
   const memory = new Uint8Array(instance.exports.memory.buffer);
   const view = new DataView(memory.buffer);
+  installHostState(view, state);
   view.setUint32(state + 12, initialBase, true);
   memory.fill(0, initialBase, initialBase + tvalueSize);
-  if (instance.exports[packageSymbols[0]](state, 0) !== 0 || returned.length !== 1 ||
-      returned[0].tag !== 6 || returned[0].value !== 1)
+  const rootStatus = instance.exports[packageSymbols[0]](state, 0);
+  if (returned.length === 0) {
+    const inlineResults = readInlineResults(view, state);
+    if (inlineResults) returned = inlineResults;
+  }
+  if (rootStatus !== 0 || returned.length !== 1 || returned[0].tag !== 6 || returned[0].value !== 1)
     throw new Error(`${name}: root did not return child Proto 1 closure: ${JSON.stringify(returned)}`);
 
   for (const [lhs, rhs, expected] of [[20, 22, 62], [-50, 8, -92], [1234, 5678, 8146]]) {
     memory.fill(0, initialBase, relocatedCallerBase + 6 * tvalueSize);
     view.setUint32(state + 12, initialBase, true);
+    installHostState(view, state);
     writeNumber(view, initialBase, 0, lhs);
     writeNumber(view, initialBase, 1, rhs);
     returned = [];
     const status = instance.exports[packageSymbols[1]](state, 0);
+    if (returned.length === 0) {
+      const inlineResults = readInlineResults(view, state);
+      if (inlineResults) returned = inlineResults;
+    }
     if (status !== 0 || returned.length !== 1 || returned[0].tag !== 3 || returned[0].value !== expected)
       throw new Error(`${name}: caller ${lhs}/${rhs} failed with ${status}/${JSON.stringify(returned)}`);
   }

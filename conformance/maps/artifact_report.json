@@ -3,10 +3,10 @@
   "generator_version": "luauc-artifact-report-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
+  "frontend_contract_digest": "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5",
   "input_sha256": {
-    "luauc.wasm": "60b14b38ef36245ee55ed6e38234f1131a6da7cabef2ef689850defb232ab6c0",
-    "embed_v1.pack.wasm": "14c297525e2bcbdfe123c05c2beeaecbd22639a1401ac1e4b62883ce03f15ba5",
+    "luauc.wasm": "df6cccd736014f1b603630110cd671fcea8d0f1900c48c006f7d66ae4fb041d7",
+    "embed_v1.pack.wasm": "aa47cfd5d26a2b52e53dec724eea9a1266815e33368fa61be02b10f2144fe657",
     "scalar_fixture.wasm": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "gates": [
@@ -18,8 +18,8 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "60b14b38ef36245ee55ed6e38234f1131a6da7cabef2ef689850defb232ab6c0",
-      "size": 1639790,
+      "sha256": "df6cccd736014f1b603630110cd671fcea8d0f1900c48c006f7d66ae4fb041d7",
+      "size": 1898279,
       "imports": [],
       "exports": [
         "luauc_v1_alloc",
@@ -31,7 +31,7 @@
         "luauc_v1_result_free",
         "memory"
       ],
-      "function_count": 3253,
+      "function_count": 3489,
       "memory_min": 1024,
       "helpers": [],
       "features": [
@@ -45,8 +45,8 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "14c297525e2bcbdfe123c05c2beeaecbd22639a1401ac1e4b62883ce03f15ba5",
-      "size": 262280,
+      "sha256": "aa47cfd5d26a2b52e53dec724eea9a1266815e33368fa61be02b10f2144fe657",
+      "size": 268267,
       "imports": [
         "luauc_embed_v1.protected_call",
         "luauc_embed_v1.set_throw"
@@ -96,8 +96,12 @@
         "luauc_runtime_v1_closure_matches_proto_id",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_concat",
+        "luauc_runtime_v1_count_block",
+        "luauc_runtime_v1_count_chain",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
+        "luauc_runtime_v1_count_loop",
+        "luauc_runtime_v1_count_scan",
         "luauc_runtime_v1_coverage_hit",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_do_len",
@@ -140,6 +144,7 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_set_userdata_metatable",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
@@ -156,7 +161,7 @@
         "luauc_runtime_v1_type_name",
         "memory"
       ],
-      "function_count": 1048,
+      "function_count": 1062,
       "memory_min": 1024,
       "helpers": [],
       "features": [
@@ -189,5 +194,5 @@
       ]
     }
   ],
-  "canonical_hash": "61d84003b49050270a23a52de83abc5442126ea157172d05e655a3aede19dc44"
+  "canonical_hash": "e5758254cf42f8588ea3971bf6666f5ca53f8b09e44680449fd45dd224be15c5"
 }

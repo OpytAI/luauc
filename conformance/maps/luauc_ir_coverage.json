@@ -2,9 +2,9 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "516e83c07e602eebfb0c1cabbb4e743bb917a00e68faa886276745a2d46138c7",
+  "compiler_build_digest": "76591b9c0d8cae9a3c715ca2e8400888cb7709e11eb3bb3317e5b6d84cfb7427",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
+  "frontend_contract_digest": "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,
@@ -23,6 +23,7 @@
       "cluster_only": true,
       "forms": [],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -133,6 +134,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -253,6 +255,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -345,6 +349,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -503,9 +508,8 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -559,7 +563,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -630,6 +636,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -698,6 +705,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -810,6 +818,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -891,6 +901,7 @@
         "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -898,7 +909,6 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number"
       ],
@@ -952,6 +962,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -1037,6 +1049,7 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_try_get_tm"
       ],
@@ -1084,6 +1097,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_get_upvalue",
@@ -1160,6 +1174,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -1328,9 +1343,8 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -1383,6 +1397,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -1477,6 +1492,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -1593,6 +1609,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -1652,7 +1670,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -1723,6 +1743,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -1791,6 +1812,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -1903,6 +1925,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -1990,6 +2014,7 @@
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_dupclosure",
@@ -2060,10 +2085,14 @@
         "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
@@ -2122,7 +2151,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -2187,7 +2218,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -2256,6 +2289,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -2330,6 +2364,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -2405,7 +2440,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -2468,6 +2505,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -2542,6 +2580,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -2616,6 +2655,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -2690,6 +2730,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -2760,7 +2801,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -2826,7 +2869,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -2883,7 +2928,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -2937,6 +2984,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -3047,6 +3095,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -3112,6 +3162,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -3177,9 +3229,11 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -3281,9 +3335,8 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -3335,6 +3388,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -3403,6 +3458,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3477,6 +3533,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3551,6 +3608,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3619,7 +3677,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3689,6 +3749,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3768,6 +3829,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3842,6 +3904,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -3910,9 +3973,11 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -3965,7 +4030,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -4036,6 +4103,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4137,6 +4205,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4211,6 +4280,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4285,6 +4355,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4359,6 +4430,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4433,6 +4505,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4588,6 +4661,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4689,6 +4763,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4759,11 +4834,13 @@
       "runtime_symbols": [
         "luauc_runtime_v1_array_set",
         "luauc_runtime_v1_barrier_table_back",
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -4774,7 +4851,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_userdata_metatable",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_store"
@@ -4825,6 +4901,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4899,6 +4976,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -4973,6 +5051,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5074,6 +5153,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5148,6 +5228,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5276,6 +5357,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5377,6 +5459,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5451,6 +5534,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5525,6 +5609,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5599,6 +5684,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5673,6 +5759,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5747,6 +5834,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5821,6 +5909,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -5916,6 +6005,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -5985,6 +6076,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -6059,6 +6151,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -6154,6 +6247,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_get_upvalue",
         "luauc_runtime_v1_interrupt",
@@ -6210,6 +6305,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -6376,9 +6472,8 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -6430,6 +6525,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -6489,6 +6586,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -6551,10 +6650,15 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
@@ -6659,9 +6763,8 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -6713,6 +6816,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -6786,6 +6890,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -6901,6 +7006,7 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_try_get_tm"
       ],
@@ -6947,6 +7053,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -7011,7 +7119,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -7077,6 +7187,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -7155,6 +7266,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -7230,6 +7342,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -7306,15 +7419,18 @@
         "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number"
       ],
@@ -7386,6 +7502,7 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_try_get_tm"
       ],
@@ -7434,11 +7551,13 @@
       "runtime_symbols": [
         "luauc_runtime_v1_array_set",
         "luauc_runtime_v1_barrier_table_back",
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -7449,7 +7568,6 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_userdata_metatable",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_store"
@@ -7513,6 +7631,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -7582,7 +7702,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -7647,7 +7769,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -7741,7 +7865,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -7808,7 +7934,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -7873,7 +8001,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -7943,6 +8073,7 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -7999,6 +8130,7 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -8058,6 +8190,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -8132,6 +8265,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -8203,7 +8337,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -8257,6 +8393,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -8321,7 +8459,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -8394,6 +8534,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -8462,7 +8603,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -8530,7 +8673,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -8597,6 +8742,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -8705,6 +8851,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_len",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -8770,6 +8918,7 @@
         "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -8780,8 +8929,6 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_set",
@@ -8835,14 +8982,15 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_array_set",
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number"
       ],
@@ -8905,6 +9053,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_exchange_continuation",
@@ -8984,6 +9134,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_concat",
         "luauc_runtime_v1_do_len",
@@ -9041,6 +9192,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_get_upvalue",
         "luauc_runtime_v1_interrupt",
@@ -9192,6 +9345,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -9318,6 +9472,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -9392,7 +9547,9 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_barrier_table_forward",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -9459,6 +9616,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -9521,7 +9680,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_dupclosure",
@@ -9602,6 +9763,7 @@
         "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -9609,7 +9771,6 @@
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number"
       ],
@@ -9663,6 +9824,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -9748,6 +9911,7 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_try_get_tm"
       ],
@@ -9798,6 +9962,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -9859,7 +10024,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -9916,9 +10083,10 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_array_set",
-        "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -9927,7 +10095,6 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_userdata_metatable",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_store"
@@ -9985,7 +10152,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -10056,6 +10225,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -10135,6 +10305,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -10208,6 +10379,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -10331,6 +10503,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -10427,9 +10600,10 @@
       "runtime_symbols": [
         "luauc_runtime_v1_array_set",
         "luauc_runtime_v1_barrier_object",
-        "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -10438,7 +10612,6 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_userdata_metatable",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_store"
@@ -10488,9 +10661,10 @@
       "runtime_symbols": [
         "luauc_runtime_v1_array_set",
         "luauc_runtime_v1_barrier_table_back",
-        "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_userdata_tag",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -10499,7 +10673,6 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_userdata_metatable",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_store"
@@ -10554,7 +10727,9 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_barrier_table_forward",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -10621,6 +10796,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -10798,6 +10974,8 @@
       "cluster_only": true,
       "forms": [],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_get_upvalue",
         "luauc_runtime_v1_interrupt",
@@ -10889,6 +11067,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -10949,6 +11128,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_exchange_continuation",
@@ -11044,6 +11225,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -11176,9 +11358,13 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
         "luauc_runtime_v1_forg_loop_call",
         "luauc_runtime_v1_forg_loop_finish",
@@ -11241,9 +11427,13 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
         "luauc_runtime_v1_forg_loop_call",
         "luauc_runtime_v1_forg_loop_finish",
@@ -11351,9 +11541,8 @@
         "luauc_runtime_v1_set_list",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_array_get",
-        "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -11433,7 +11622,9 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_barrier_table_forward",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -11497,7 +11688,9 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_barrier_table_forward",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -11561,7 +11754,9 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_barrier_table_forward",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -11625,6 +11820,7 @@
         "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -11708,6 +11904,7 @@
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
+        "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_try_get_tm"
       ],
@@ -11754,6 +11951,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -11881,6 +12079,7 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -11940,6 +12139,7 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_get_upvalue",
@@ -12016,6 +12216,7 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
@@ -12137,9 +12338,13 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_count_direct_call",
+        "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
         "luauc_runtime_v1_forg_loop_call",
         "luauc_runtime_v1_forg_loop_finish",
@@ -12219,6 +12424,7 @@
       "cluster_only": true,
       "forms": [],
       "runtime_symbols": [
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
@@ -12269,7 +12475,9 @@
       "cluster_only": true,
       "forms": [],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_dupclosure",
@@ -12351,6 +12559,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12430,6 +12639,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12504,6 +12714,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12578,6 +12789,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12648,7 +12860,9 @@
       "runtime_symbols": [
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -12711,6 +12925,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12790,6 +13005,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12864,6 +13080,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -12938,6 +13155,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13012,6 +13230,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13086,6 +13305,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13160,6 +13380,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13228,7 +13449,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13297,6 +13520,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13365,7 +13589,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13422,7 +13648,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13485,6 +13713,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13553,7 +13782,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13622,6 +13853,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13690,7 +13922,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13753,6 +13987,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -13821,7 +14056,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13878,7 +14115,9 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -13941,6 +14180,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -14015,6 +14255,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -14094,6 +14335,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -14173,6 +14415,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -14305,7 +14548,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14366,6 +14611,7 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14427,7 +14673,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14486,7 +14734,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14547,6 +14797,7 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14608,7 +14859,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14667,7 +14920,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14726,7 +14981,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14786,6 +15043,7 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -14840,6 +15098,7 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -14893,7 +15152,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -14952,7 +15213,9 @@
         "luauc_runtime_v1_buffer_bounds_error",
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
+        "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -15013,6 +15276,7 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -15076,6 +15340,7 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_safe_env",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
         "luauc_runtime_v1_do_arith",
@@ -15134,6 +15399,8 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_closure_matches_proto_id",
         "luauc_runtime_v1_count_direct_call",
         "luauc_runtime_v1_count_indirect_call",
@@ -15276,5 +15543,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "6fc76c10b4bb3a70e173ccc689594ca60d9f5f55a809516c59913b5bb0bc78e7"
+  "canonical_hash": "6f9042ab6696ab7015c14d6a01d8985303c9fc022d051dc38253c156e7c628e7"
 }

@@ -3,23 +3,23 @@
   "generator_version": "luauc-runtime-profile-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
+  "frontend_contract_digest": "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5",
   "input_sha256": {
-    "profile": "98dc524ac661e114a1e05a25ce1e5a7bd76c3436cee0803ffb0a8e18d3825ffb",
+    "profile": "c3064ef44365d9242a8676495c5fb6c4c3a9a09e75a0c05e594301bb48aeae1d",
     "policy": "1a5e03e18b8eb2a09063a3ed18ad9ea74a58d75485f5d4b9cdc3aff9cacf3bc4",
-    "pack": "14c297525e2bcbdfe123c05c2beeaecbd22639a1401ac1e4b62883ce03f15ba5"
+    "pack": "aa47cfd5d26a2b52e53dec724eea9a1266815e33368fa61be02b10f2144fe657"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
   "memory_minimum": 1024,
   "memory_maximum": 4096,
-  "table_minimum": 400,
-  "table_maximum": 400,
+  "table_minimum": 401,
+  "table_maximum": 401,
   "identities": {
     "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
-    "object_contract_sha256": "cfdc8723b60c127b30f342fa4d52c4fd8520992b3bb57c6e74e51c32a927ae7b",
-    "pack_build_sha256": "31a5ced3c055b03ee7c28bcf139b13843f896e137241e78fc980d4266bac7b64",
+    "object_contract_sha256": "7ccac6e7f4c1ff6adb096b7e21c2d67229711012c6aad541fe76465f20cc73c2",
+    "pack_build_sha256": "e651afb918fc39e6d0de150024c848600ec0729cadcf09b971584784695b1c58",
     "license_inventory_sha256": "8e10cbc659c50024a618103c11c0cb992721a2bc945af296f845375100d25b60"
   },
   "host_imports": [
@@ -188,8 +188,12 @@
     "luauc_runtime_v1_closure_matches_proto_id",
     "luauc_runtime_v1_compare_any",
     "luauc_runtime_v1_concat",
+    "luauc_runtime_v1_count_block",
+    "luauc_runtime_v1_count_chain",
     "luauc_runtime_v1_count_direct_call",
     "luauc_runtime_v1_count_indirect_call",
+    "luauc_runtime_v1_count_loop",
+    "luauc_runtime_v1_count_scan",
     "luauc_runtime_v1_coverage_hit",
     "luauc_runtime_v1_do_arith",
     "luauc_runtime_v1_do_len",
@@ -229,6 +233,7 @@
     "luauc_runtime_v1_set_location",
     "luauc_runtime_v1_set_upvalue",
     "luauc_runtime_v1_set_userdata_metatable",
+    "luauc_runtime_v1_slice_string",
     "luauc_runtime_v1_slot_node_addr",
     "luauc_runtime_v1_table_array_get",
     "luauc_runtime_v1_table_array_set",
@@ -448,5 +453,5 @@
       }
     ]
   },
-  "canonical_hash": "91b8dee02d750c5046d1aafb9b54418a5a95946292f74ea252f78eccbc8bf178"
+  "canonical_hash": "6b385e2055c2676456d23576081bb4cee69e5c3f3c757f8e50bac223f487bd8d"
 }

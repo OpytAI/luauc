@@ -3,10 +3,10 @@
   "generator_version": "luauc-runtime-symbols-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "639e9c3dcdd885592fc54f344d5163d8fc312a0b4cbe042d8795ba0024c2176f",
+  "frontend_contract_digest": "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5",
   "input_sha256": {
-    "runtime_symbols_bzl": "f8d2613ff0103a96082ffbe712b98eddc6beb9c61af3a5d208a24e36d809c3ea",
-    "aot_runtime_v1_h": "c5b5ff38a99741788af401b76cee3004322a8a454036b49aa0139465a269163e",
+    "runtime_symbols_bzl": "e5b3be6a1c5e5a13a9ce6f9a6fe21cb4a1afc9643904e383d160e41c5620c003",
+    "aot_runtime_v1_h": "d7cd9d5b7be5add5e108c59fdeda5f847ee647ff3cc07bde08a9d048e0bbc575",
     "embed_build": "13e7fbadc3776f4b53bf9618db803c6deb7c45b5ad2d3d99a7fd3ecb1ed5b039"
   },
   "generated_runtime_module": "env",
@@ -31,8 +31,12 @@
     "luauc_runtime_v1_close_upvalues",
     "luauc_runtime_v1_compare_any",
     "luauc_runtime_v1_concat",
+    "luauc_runtime_v1_count_block",
+    "luauc_runtime_v1_count_chain",
     "luauc_runtime_v1_count_direct_call",
     "luauc_runtime_v1_count_indirect_call",
+    "luauc_runtime_v1_count_loop",
+    "luauc_runtime_v1_count_scan",
     "luauc_runtime_v1_coverage_hit",
     "luauc_runtime_v1_do_arith",
     "luauc_runtime_v1_do_len",
@@ -71,6 +75,7 @@
     "luauc_runtime_v1_table_store",
     "luauc_runtime_v1_set_location",
     "luauc_runtime_v1_set_upvalue",
+    "luauc_runtime_v1_slice_string",
     "luauc_runtime_v1_slot_node_addr",
     "luauc_runtime_v1_table_array_get",
     "luauc_runtime_v1_table_array_set",
@@ -107,8 +112,12 @@
     "luauc_runtime_v1_closure_matches_proto_id",
     "luauc_runtime_v1_compare_any",
     "luauc_runtime_v1_concat",
+    "luauc_runtime_v1_count_block",
+    "luauc_runtime_v1_count_chain",
     "luauc_runtime_v1_count_direct_call",
     "luauc_runtime_v1_count_indirect_call",
+    "luauc_runtime_v1_count_loop",
+    "luauc_runtime_v1_count_scan",
     "luauc_runtime_v1_coverage_hit",
     "luauc_runtime_v1_direct_calls",
     "luauc_runtime_v1_do_arith",
@@ -166,6 +175,7 @@
     "luauc_runtime_v1_set_location",
     "luauc_runtime_v1_set_upvalue",
     "luauc_runtime_v1_set_userdata_metatable",
+    "luauc_runtime_v1_slice_string",
     "luauc_runtime_v1_slot_node_addr",
     "luauc_runtime_v1_table_array_get",
     "luauc_runtime_v1_table_array_set",
@@ -217,5 +227,5 @@
     "match": "symbol_name",
     "note": "Generated objects export this data symbol; the linker matches it by name, not as a pack function export. Object import modules are rewritten to generated_runtime_module before resolution."
   },
-  "canonical_hash": "58b31993c5fa6817cc221b1cf897d45c68eaeb8846e5ad19a2b2c1b7059cdca3"
+  "canonical_hash": "24a0834536211bef0c45f6c1dc5cb7b8dfe9f5ad4ec19695ba4c5541ffb9eb76"
 }

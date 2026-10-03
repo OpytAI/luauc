@@ -878,6 +878,40 @@ fn emitCopyRegisterToPointer(self: anytype, destination: snapshot_v1.IrOperand, 
     try self.body.i64Load(self.allocator, 3, source_offset + 8);
     try self.body.i64Store(self.allocator, 3, 8);
 }
+/// A table pointer loaded in another block is only safe when that load still names a
+/// guarded table register. Zeroing the register drops provenance; accepting the store
+/// would publish an unguarded pointer.
+pub noinline fn rejectUnprovenCrossBlockTableStore(
+    self: anytype,
+    instruction_id: u32,
+    instruction_value: snapshot_v1.IrInstruction,
+) Error!void {
+    if (instruction_value.operand_count < 3)
+        return;
+    const tag = try self.operand(instruction_value, 1);
+    if (tag.kind != .constant)
+        return;
+    const tag_value = (try self.constant(tag.value)).tagValue() orelse return;
+    if (tag_value != lua_tag_table)
+        return;
+    const source = try self.operand(instruction_value, 2);
+    if (source.kind != .instruction or source.value >= self.function.instruction_count)
+        return;
+    const producer = try self.instruction(source.value);
+    if (producer.command != .load_pointer or producer.operand_count != 1)
+        return;
+    const loaded = try self.operand(producer, 0);
+    if (loaded.kind != .vm_reg)
+        return;
+    const producer_block = self.plan.instructionBlock(source.value) orelse return;
+    const consumer_block = self.plan.instructionBlock(instruction_id) orelse return;
+    if (producer_block == consumer_block)
+        return;
+    if (!self.plan.isProvenTablePointer(source.value)) {
+        diagnostics.trace("split xreg");
+        return Error.UnsupportedControlFlow;
+    }
+}
 pub noinline fn emitStoreSplitTValue(
     self: anytype,
     instruction_id: u32,

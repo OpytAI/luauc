@@ -170,10 +170,13 @@ function productionLink(objectBytes, name) {
   writeFileSync(profilePath, profileBytes);
   writeFileSync(packPath, packBytes);
   writeFileSync(objectPath, objectBytes);
-  const linked = spawnSync(linkerCli, [profilePath, packPath, objectPath], { encoding: "buffer" });
+  const linked = spawnSync(linkerCli, [profilePath, packPath, objectPath], {
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
   if (linked.status !== 0) {
     throw new Error(
-      `production linker ${name} failed (${linked.status}): ${linked.stderr?.toString() ?? ""}`,
+      `production linker ${name} failed (${linked.status}/${linked.signal ?? ""}): ${linked.stderr?.toString() ?? ""} ${linked.error ?? ""}`,
     );
   }
   rmSync(directory, { recursive: true, force: true });
