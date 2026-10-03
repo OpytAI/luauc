@@ -414,7 +414,8 @@ pub noinline fn emitGeneralForgLoopFallback(
 
 pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIterationPattern) Error!void {
     // ipairs (aux 0x80000002) stops at the first hole. The array step is a few loads.
-    // A cursor that is not the builtin iterator still enters the pinned helper.
+    // Every other proved builtin cursor walks the array, skipping holes, then the live hash nodes.
+    // A cursor that fails the same tag proof still enters the pinned helper.
     if (pattern.aux == 0x8000_0002) {
         try emitIpairsIteratorOk(self, pattern.base);
         try self.body.ifVoid(self.allocator);
@@ -424,7 +425,12 @@ pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIteratio
         try self.body.end(self.allocator);
         return;
     }
+    try emitIpairsIteratorOk(self, pattern.base);
+    try self.body.ifVoid(self.allocator);
+    try emitBuiltinTableStep(self, pattern);
+    try self.body.else_(self.allocator);
     try emitForgLoopHelper(self, pattern);
+    try self.body.end(self.allocator);
 }
 fn emitForgLoopHelper(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -540,6 +546,193 @@ fn emitIpairsArrayStep(self: anytype, pattern: GenericIterationPattern) Error!vo
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try emitIterationSelect(self, pattern);
+}
+fn emitBuiltinTableStep(self: anytype, pattern: GenericIterationPattern) Error!void {
+    // luauc_runtime_v1_forg_loop publishes one live pair per entry. Variables past the key and
+    // value are nil on both the body and the exit. The miss path is the helper above.
+    try emitIterationExtraNils(self, pattern);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, slotField(pattern.base, 1, 0));
+    try self.body.localSet(self.allocator, self.call_aux_local);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, slotField(pattern.base, 2, 0));
+    try self.body.localSet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_sizearray_offset);
+    try self.body.localSet(self.allocator, self.call_proto_local);
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
+    try emitBuiltinArrayScan(self, pattern.base);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitBuiltinHashScan(self, pattern.base);
+    try self.body.end(self.allocator);
+    try emitIterationSelect(self, pattern);
+}
+fn emitIterationExtraNils(self: anytype, pattern: GenericIterationPattern) Error!void {
+    if (pattern.variable_count <= 2)
+        return;
+    const origin = std.math.add(u32, pattern.base, 3) catch return Error.UnsupportedControlFlow;
+    try self.body.i32Const(self.allocator, 2);
+    try self.body.localSet(self.allocator, self.table_index_local);
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, @intCast(pattern.variable_count));
+    try self.body.opcode(self.allocator, 0x4f); // i32.ge_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, @intCast(origin));
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.i32Const(self.allocator, lua_tag_nil);
+    try self.body.i32Store(self.allocator, 2, tvalue_tag_offset);
+    try self.body.localGet(self.allocator, self.table_index_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.table_index_local);
+    try self.body.branch(self.allocator, 0);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+fn emitAdvanceIteratorIndex(self: anytype) Error!void {
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_func_local);
+}
+fn emitStoreIteratorCursor(self: anytype, base: u32) Error!void {
+    const cursor_slot = slotField(base, 2, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Store(self.allocator, 2, cursor_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, lu_tag_iterator);
+    try self.body.i32Store(self.allocator, 2, cursor_slot + abi.tvalue_extra_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_lightuserdata));
+    try self.body.i32Store(self.allocator, 2, cursor_slot + tvalue_tag_offset);
+}
+fn emitStoreNumberKey(self: anytype, base: u32) Error!void {
+    const key_slot = slotField(base, 3, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+    try self.body.f64Store(self.allocator, 3, key_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Const(self.allocator, @intCast(lua_tag_number));
+    try self.body.i32Store(self.allocator, 2, key_slot + tvalue_tag_offset);
+}
+fn emitStoreCopiedValue(self: anytype, base: u32, source_offset: u32) Error!void {
+    const value_slot = slotField(base, 4, 0);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, source_offset);
+    try self.body.i64Store(self.allocator, 3, value_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, source_offset + 8);
+    try self.body.i64Store(self.allocator, 3, value_slot + 8);
+}
+fn emitStoreNodeKey(self: anytype, base: u32) Error!void {
+    // getnodekey copies the key value, its extra word, and the 4-bit tag. The chain link stays put.
+    const key_slot = slotField(base, 3, 0);
+    const key_extra = abi.lua_node_key_offset + abi.tvalue_extra_offset;
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i64Load(self.allocator, 3, abi.lua_node_key_offset);
+    try self.body.i64Store(self.allocator, 3, key_slot);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, key_extra);
+    try self.body.i32Store(self.allocator, 2, key_slot + abi.tvalue_extra_offset);
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, abi.lua_node_key_tag_offset);
+    try self.body.i32Const(self.allocator, abi.lua_node_key_tag_mask);
+    try self.body.opcode(self.allocator, 0x71); // i32.and
+    try self.body.i32Store(self.allocator, 2, key_slot + tvalue_tag_offset);
+}
+fn emitBuiltinArrayScan(self: anytype, base: u32) Error!void {
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.opcode(self.allocator, 0x4f); // i32.ge_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_array_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.i32Const(self.allocator, @intCast(tvalue_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitAdvanceIteratorIndex(self);
+    try self.body.branch(self.allocator, 1);
+    try self.body.end(self.allocator);
+    try emitAdvanceIteratorIndex(self);
+    try emitStoreIteratorCursor(self, base);
+    try emitStoreNumberKey(self, base);
+    try emitStoreCopiedValue(self, base, 0);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.branch(self.allocator, 1);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
+}
+fn emitBuiltinHashScan(self: anytype, base: u32) Error!void {
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load8U(self.allocator, 0, abi.table_lsizenode_offset);
+    try self.body.opcode(self.allocator, 0x74); // i32.shl
+    try self.body.localSet(self.allocator, self.call_meta_local);
+    try self.body.block(self.allocator);
+    try self.body.loop(self.allocator);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.localGet(self.allocator, self.call_meta_local);
+    try self.body.opcode(self.allocator, 0x4f); // i32.ge_u
+    try self.body.ifVoid(self.allocator);
+    try self.body.branch(self.allocator, 2);
+    try self.body.end(self.allocator);
+    try self.body.localGet(self.allocator, self.call_aux_local);
+    try self.body.i32Load(self.allocator, 2, abi.table_node_offset);
+    try self.body.localGet(self.allocator, self.call_func_local);
+    try self.body.localGet(self.allocator, self.call_proto_local);
+    try self.body.opcode(self.allocator, 0x6b); // i32.sub
+    try self.body.i32Const(self.allocator, @intCast(abi.lua_node_size));
+    try self.body.opcode(self.allocator, 0x6c); // i32.mul
+    try self.body.opcode(self.allocator, 0x6a); // i32.add
+    try self.body.localSet(self.allocator, self.call_closure_local);
+    try self.body.localGet(self.allocator, self.call_closure_local);
+    try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
+    try self.body.i32Eqz(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try emitAdvanceIteratorIndex(self);
+    try self.body.branch(self.allocator, 1);
+    try self.body.end(self.allocator);
+    try emitAdvanceIteratorIndex(self);
+    try emitStoreIteratorCursor(self, base);
+    try emitStoreNodeKey(self, base);
+    try emitStoreCopiedValue(self, base, 0);
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+    try self.body.branch(self.allocator, 1);
+    try self.body.end(self.allocator);
+    try self.body.end(self.allocator);
 }
 pub noinline fn emitGenericIterationFinish(self: anytype, pattern: GenericIterationPattern) Error!void {
     try self.body.localGet(self.allocator, 0);
