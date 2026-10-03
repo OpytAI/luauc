@@ -1053,37 +1053,137 @@ pub noinline fn emitGenericTableFallbackCall(self: anytype, pattern: GenericTabl
     }
     try self.emitReloadBase();
 }
+fn publishedNumberStore(self: anytype, register: u32, consumer: u32) Error!?u32 {
+    const block_id = self.plan.instructionBlock(consumer) orelse return null;
+    const block = try self.snapshot.irBlock(self.function, block_id);
+    if (!block.kind.isCompilable() or consumer < block.start or consumer > block.finish)
+        return null;
+    var payload: ?u32 = null;
+    var instruction_id = block.start;
+    while (instruction_id < consumer) : (instruction_id += 1) {
+        if (!try self.instructionWritesRegister(instruction_id, register))
+            continue;
+        const instruction_value = try self.instruction(instruction_id);
+        if (instruction_value.command == .store_double and instruction_value.operand_count == 2) {
+            const destination = try self.operand(instruction_value, 0);
+            if (destination.kind == .vm_reg and destination.value == register)
+                payload = instruction_id
+            else
+                payload = null;
+        } else if (instruction_value.command != .store_tag)
+            payload = null;
+    }
+    const published = payload orelse return null;
+    if (published + 1 >= consumer)
+        return null;
+    const tag_store = try self.instruction(published + 1);
+    if (tag_store.command != .store_tag or tag_store.operand_count != 2)
+        return null;
+    const tag_destination = try self.operand(tag_store, 0);
+    const tag = try self.operand(tag_store, 1);
+    if (tag_destination.kind != .vm_reg or tag_destination.value != register or tag.kind != .constant or
+        (try self.constant(tag.value)).tagValue() != lua_tag_number)
+        return null;
+    if (!try self.preservesRegisterToConsumer(register, published + 1, consumer))
+        return null;
+    return published;
+}
+
+// A fresh NEW_TABLE covers a numeric store when its recorded array size contains the key.
+// The key and the value are numbers already published in this block. The table register
+// still holds that allocation. The caller still checks the live sizearray before writing.
+fn coveredFreshNumericStore(self: anytype, pattern: GenericTablePattern) Error!bool {
+    const key_register = pattern.register_key orelse return false;
+    var covered: ?u32 = null;
+    for (self.plan.facts.table_allocs) |candidate| {
+        if (candidate.dest_reg != pattern.table or candidate.finish >= pattern.start)
+            continue;
+        if (covered == null or candidate.start > covered.?)
+            covered = candidate.start;
+    }
+    const allocation_start = covered orelse return false;
+    const allocation = self.plan.tableAllocAt(allocation_start) orelse return false;
+    if (allocation.array_count == 0 or allocation.destination != pattern.table)
+        return false;
+    var cursor = allocation.finish + 1;
+    while (cursor < pattern.start) : (cursor += 1) {
+        if (try self.instructionWritesRegister(cursor, pattern.table))
+            return false;
+    }
+    const published = (try publishedNumberStore(self, key_register, pattern.start)) orelse return false;
+    const stored = try self.operand(try self.instruction(published), 1);
+    if (stored.kind != .constant)
+        return false;
+    const number = (try self.constant(stored.value)).doubleValue() orelse return false;
+    if (!std.math.isFinite(number) or @trunc(number) != number or number < 1 or
+        number > @as(f64, @floatFromInt(allocation.array_count)))
+        return false;
+    return (try publishedNumberStore(self, pattern.value, pattern.start)) != null;
+}
+
+fn emitUnprovedNumericTableSet(
+    self: anytype,
+    pattern: GenericTablePattern,
+    key: snapshot_v1.IrOperand,
+) Error!void {
+    // table_set_number owns growth, deletion, and the metamethod boundary. The f64 is the
+    // number payload; a non-number key never reaches this call.
+    const key_offset = try self.vmRegisterOffset(key, 0);
+    try self.emitSavedPcLocation(pattern.marker);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(pattern.table));
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, key_offset);
+    try self.body.i32Const(self.allocator, @intCast(pattern.value));
+    try self.body.call(self.allocator, self.table_set_number orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    try self.body.i32Const(self.allocator, 1);
+    try self.body.localSet(self.allocator, self.status_local);
+}
+
 pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTablePattern) Error!void {
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.status_local);
 
     const register_key = pattern.register_key orelse return;
     const key = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register_key };
-    try self.emitTValueTag(key);
-    try self.body.i32Const(self.allocator, lua_tag_number);
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+    // An unproved numeric store has no recorded slot. The bounds probe would miss, then
+    // table_set would repeat the same numeric checks. Call the numeric helper once instead.
+    if (pattern.operation == .set and !try coveredFreshNumericStore(self, pattern)) {
+        try self.emitTValueTag(key);
+        try self.body.i32Const(self.allocator, lua_tag_number);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitUnprovedNumericTableSet(self, pattern, key);
+        try self.body.end(self.allocator);
+    } else {
+        try self.emitTValueTag(key);
+        try self.body.i32Const(self.allocator, lua_tag_number);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
 
-    // TRY_NUM_TO_INDEX is an exact signed-i32 conversion: truncate without trapping, convert
-    // back to f64, and admit only values whose round trip is numerically equal. NaN and values
-    // outside the signed-i32 range keep status 0 and use table_set/table_get.
-    const key_offset = try self.vmRegisterOffset(key, 0);
-    try self.body.localGet(self.allocator, self.base_local);
-    try self.body.f64Load(self.allocator, 3, key_offset);
-    try self.body.opcode(self.allocator, 0xfc);
-    try self.body.opcode(self.allocator, 0x02); // i32.trunc_sat_f64_s
-    try self.body.localSet(self.allocator, self.table_index_local);
-    try self.body.localGet(self.allocator, self.base_local);
-    try self.body.f64Load(self.allocator, 3, key_offset);
-    try self.body.localGet(self.allocator, self.table_index_local);
-    try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
-    try self.body.f64Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
+        // TRY_NUM_TO_INDEX is an exact signed-i32 conversion: truncate without trapping, convert
+        // back to f64, and admit only values whose round trip is numerically equal. NaN and values
+        // outside the signed-i32 range keep status 0 and use table_set/table_get.
+        const key_offset = try self.vmRegisterOffset(key, 0);
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.f64Load(self.allocator, 3, key_offset);
+        try self.body.opcode(self.allocator, 0xfc);
+        try self.body.opcode(self.allocator, 0x02); // i32.trunc_sat_f64_s
+        try self.body.localSet(self.allocator, self.table_index_local);
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.f64Load(self.allocator, 3, key_offset);
+        try self.body.localGet(self.allocator, self.table_index_local);
+        try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+        try self.body.f64Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
 
-    // The index local is still the converted key. A hit overwrites it with the slot address.
-    try emitInlineArrayHit(self, pattern.operation, pattern.table, pattern.value);
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
+        // The index local is still the converted key. A hit overwrites it with the slot address.
+        // emitInlineArrayHit keeps the live sizearray check and refuses a write past the array.
+        try emitInlineArrayHit(self, pattern.operation, pattern.table, pattern.value);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+    }
     if (pattern.operation == .get) {
         try self.emitTValueTag(key);
         try self.body.i32Const(self.allocator, lua_tag_string);
@@ -1098,7 +1198,11 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
         try self.body.end(self.allocator);
     }
     if (pattern.operation == .set) {
-        // Existing string keys update in place. A missing key or a hash growth stays on table_set.
+        // A completed numeric store owns the key. Existing string keys update in place.
+        // A missing key or a hash growth stays on table_set.
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
         try self.emitTValueTag(key);
         try self.body.i32Const(self.allocator, lua_tag_string);
         try self.body.i32Eq(self.allocator);
@@ -1108,6 +1212,7 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
         try self.body.ifVoid(self.allocator);
         try self.body.i32Const(self.allocator, 1);
         try self.body.localSet(self.allocator, self.status_local);
+        try self.body.end(self.allocator);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
     }
