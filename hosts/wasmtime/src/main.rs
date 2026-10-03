@@ -5,6 +5,7 @@ use wasmtime::{Caller, Engine, Extern, Instance, Linker, Memory, Module, Store};
 
 const SOURCE_HEADER_SIZE: usize = 240;
 const SOURCE_RECORD_SIZE: usize = 64;
+const ALLOWED_IMPORT_CEILING: u32 = 64;
 const FRONTEND_CONTRACT: [u8; 32] = [
     0xba, 0x6e, 0xe1, 0xa8, 0xf6, 0x9d, 0x21, 0xd2, 0x81, 0xe3, 0x2b, 0xb3, 0x13, 0xd2, 0xe6, 0x8d,
     0xfc, 0x7a, 0xf5, 0xbd, 0x14, 0x1f, 0xee, 0x2c, 0x6c, 0x43, 0xe2, 0x16, 0xa4, 0x72, 0xcd, 0xa5,
@@ -119,7 +120,7 @@ fn source_request(
     put_u32(&mut request, 24, SOURCE_RECORD_SIZE as u32);
     put_u32(&mut request, 28, 0);
     put_u32(&mut request, 176, 0);
-    put_u32(&mut request, 180, 32);
+    put_u32(&mut request, 180, ALLOWED_IMPORT_CEILING);
     put_u32(&mut request, 184, 0);
     put_u32(&mut request, 188, 1_048_576);
     put_u32(&mut request, 192, 4096);
@@ -132,7 +133,7 @@ fn source_request(
     request_identity.update(pack_digest);
     request_identity.update(manifest_digest);
     request_identity.update(0u32.to_le_bytes());
-    request_identity.update(32u32.to_le_bytes());
+    request_identity.update(ALLOWED_IMPORT_CEILING.to_le_bytes());
     request_identity.update(0u32.to_le_bytes());
     request_identity.update(1_048_576u32.to_le_bytes());
     request_identity.update(4096u32.to_le_bytes());

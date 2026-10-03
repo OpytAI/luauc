@@ -68,7 +68,7 @@ function canonicalRequest(source, profileDigest, packDigest, coverageLevel = 0) 
   request.writeUInt32LE(1, 16); request.writeUInt32LE(0, 20); request.writeUInt32LE(64, 24);
   request.writeUInt32LE(coverageLevel, 28);
   request.writeUInt32LE(0, 176);
-  request.writeUInt32LE(32, 180);
+  request.writeUInt32LE(64, 180);
   request.writeUInt32LE(0, 184);
   request.writeUInt32LE(1048576, 188);
   request.writeUInt32LE(4096, 192);
@@ -76,7 +76,7 @@ function canonicalRequest(source, profileDigest, packDigest, coverageLevel = 0) 
   const coverage = Buffer.alloc(4); coverage.writeUInt32LE(coverageLevel);
   const options = Buffer.alloc(32);
   options.writeUInt32LE(0, 0);
-  options.writeUInt32LE(32, 4);
+  options.writeUInt32LE(64, 4);
   options.writeUInt32LE(0, 8);
   options.writeUInt32LE(1048576, 12);
   options.writeUInt32LE(4096, 16);

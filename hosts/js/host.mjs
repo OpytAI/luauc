@@ -117,7 +117,7 @@ async function buildRequest(modules, entryModuleId, profileDigest, packDigest, c
 
   const headerSize = 240;
   const recordSize = 64;
-  const allowedImportCeiling = 32;
+  const allowedImportCeiling = 64;
   const featureCeiling = 0;
   const budgetInstructions = 1_048_576;
   const budgetFunctions = 4096;

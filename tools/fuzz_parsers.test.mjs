@@ -91,11 +91,11 @@ function canonicalRequest(source, profileDigest, packDigest) {
   Buffer.from("LUAUCS1\0", "binary").copy(request, 0);
   request.writeUInt16LE(1, 8); request.writeUInt16LE(240, 10); request.writeUInt32LE(total, 12);
   request.writeUInt32LE(1, 16); request.writeUInt32LE(0, 20); request.writeUInt32LE(64, 24);
-  request.writeUInt32LE(0, 176); request.writeUInt32LE(32, 180); request.writeUInt32LE(0, 184);
+  request.writeUInt32LE(0, 176); request.writeUInt32LE(64, 180); request.writeUInt32LE(0, 184);
   request.writeUInt32LE(1048576, 188); request.writeUInt32LE(4096, 192); request.writeUInt32LE(16777216, 196);
   const coverage = Buffer.alloc(4);
   const options = Buffer.alloc(32);
-  options.writeUInt32LE(32, 4); options.writeUInt32LE(1048576, 12);
+  options.writeUInt32LE(64, 4); options.writeUInt32LE(1048576, 12);
   options.writeUInt32LE(4096, 16); options.writeUInt32LE(16777216, 20);
   sha256(Buffer.concat([
     Buffer.from("luauc-source-request-v1\0"), coverage, frontendContract, profileDigest, packDigest, manifestDigest, options, zeroPlans,

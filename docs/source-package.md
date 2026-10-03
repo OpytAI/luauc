@@ -21,7 +21,7 @@ the compiler performs no filesystem or network discovery.
 | 112 | runtime-pack SHA-256 |
 | 144 | canonical manifest SHA-256 |
 | 176 | `u32 output_kind` (`0` executable module) |
-| 180 | `u32 allowed_import_ceiling` |
+| 180 | `u32 allowed_import_ceiling` (host default 64, the runtime-profile import cap) |
 | 184 | `u32 feature_ceiling` |
 | 188 | `u32 compile_budget_instructions` |
 | 192 | `u32 compile_budget_functions` |
