@@ -2,6 +2,12 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 
 # Facade: archive name and historical labels stay on //compiler/backend.
 alias(
+    name = "backend",
+    actual = "//compiler/backend/lower:backend",
+    visibility = ["//visibility:public"],
+)
+
+alias(
     name = "component",
     actual = "//compiler/backend/lower:component",
     tags = ["manual"],

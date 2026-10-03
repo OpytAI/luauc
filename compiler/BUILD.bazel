@@ -23,7 +23,22 @@ zig_static_library(
     extra_srcs = ["compiler_build_digest.zig"],
     tags = ["manual"],
     deps = [
-        "//compiler/backend:component_api",
+        "//compiler/backend:backend",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/link:linker",
+        "//schema:compiler_result_v1",
+        "//schema:runtime_profile_v1",
+        "//schema:source_package_v1",
+    ],
+)
+
+zig_library(
+    name = "compiler_host_lib",
+    main = "compiler_host.zig",
+    import_name = "luauc_compiler_host",
+    srcs = ["compiler_build_digest.zig"],
+    deps = [
+        "//compiler/backend:backend",
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/link:linker",
         "//schema:compiler_result_v1",
@@ -60,12 +75,35 @@ zig_binary(
     tags = ["manual"],
     deps = [
         ":compiler_component_wasm32_wasi",
-        "//compiler/backend:component",
         "//frontend:adapter_wasm32_wasi",
         "//frontend:host_stubs_wasm32_wasi",
         "//frontend:luau_execute_stub_wasm32_wasi",
         "@luau//:aot_frontend_wasm32_wasi",
     ],
+)
+
+zig_binary(
+    name = "compiler_port_raw",
+    main = "compiler_port.zig",
+    linkopts = [
+        "-lc",
+        "-lc++",
+    ],
+    deps = [
+        ":compiler_host_lib",
+        "//frontend:adapter_native",
+        "//frontend:luau_execute_stub_native",
+        "//schema:source_package_v1",
+        "@luau//:aot_frontend_native",
+    ],
+)
+
+zig_configure_binary(
+    name = "compiler_port",
+    actual = ":compiler_port_raw",
+    mode = "release_small",
+    threaded = "single",
+    visibility = ["//visibility:public"],
 )
 
 zig_configure_binary(
@@ -122,5 +160,24 @@ js_test(
         "LUAUC_EMBED_ALT_PACK": "$(rlocationpath //profiles/embed:embed_alt_v1_pack)",
         "LUAUC_HOST_MODULES_PROFILE": "$(rlocationpath //profiles/embed:embed_host_modules_v1_profile)",
         "LUAUC_HOST_MODULES_PACK": "$(rlocationpath //profiles/embed:embed_host_modules_v1_pack)",
+    },
+)
+
+js_test(
+    name = "compiler_port_test",
+    size = "large",
+    data = [
+        ":compiler_port.test.mjs",
+        ":compiler_port",
+        ":compiler_wasm",
+        "//profiles/embed:embed_v1_profile",
+        "//profiles/embed:embed_v1_pack",
+    ],
+    entry_point = "compiler_port.test.mjs",
+    env = {
+        "LUAUC_COMPILER_PORT": "$(rlocationpath :compiler_port)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath :compiler_wasm)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
     },
 )

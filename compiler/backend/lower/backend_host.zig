@@ -1,7 +1,7 @@
 const std = @import("std");
 const component = @import("luauc_backend_component_api");
 
-const allocator = std.heap.wasm_allocator;
+const allocator = if (@import("builtin").cpu.arch == .wasm32) std.heap.wasm_allocator else std.heap.c_allocator;
 
 const CompileResult = extern struct {
     data: u32,

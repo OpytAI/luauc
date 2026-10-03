@@ -1,13 +1,12 @@
 const std = @import("std");
-const backend_component = @import("luauc_backend_component_api");
+const builtin = @import("builtin");
+const lower = @import("luauc_backend");
 const linker = @import("luauc_linker");
 const runtime_profile = @import("luauc_runtime_profile_v1");
 const source_package = @import("luauc_source_package_v1");
 const compiler_result = @import("luauc_compiler_result_v1");
 const snapshot_v1 = @import("frontend_snapshot_v1");
 const compiler_build = @import("compiler_build_digest.zig");
-
-extern fn __wasm_call_ctors() void;
 
 const FrontendResult = extern struct {
     data: ?[*]u8 = null,
@@ -20,8 +19,6 @@ const FrontendResult = extern struct {
 extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_compile_inlined(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, plans: [*]const source_package.InlinePlan, plan_count: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_free(result: *FrontendResult) void;
-extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, host_modules_pointer: u32, host_modules_size: u32, result_pointer: u32) u32;
-extern fn luauc_backend_component_v1_free(result_pointer: u32) void;
 
 const ContextResult = extern struct {
     handle: u32 = 0,
@@ -44,11 +41,13 @@ const Description = extern struct {
 };
 
 comptime {
-    if (@sizeOf(FrontendResult) != 20 or @sizeOf(ContextResult) != 72 or @sizeOf(CompileResult) != 320 or @sizeOf(Description) != 32)
+    // FrontendResult matches LuaucFrontendSnapshotV1Result: pointers and size_t follow the target.
+    const frontend_result_size: comptime_int = if (builtin.cpu.arch == .wasm32) 20 else 40;
+    if (@sizeOf(FrontendResult) != frontend_result_size or @sizeOf(ContextResult) != 72 or @sizeOf(CompileResult) != 320 or @sizeOf(Description) != 32)
         @compileError("luauc compiler ABI layout drift");
 }
 
-const allocator = std.heap.wasm_allocator;
+const allocator = if (builtin.cpu.arch == .wasm32) std.heap.wasm_allocator else std.heap.c_allocator;
 const status_ok: u32 = 0;
 const status_invalid_argument: u32 = 1;
 const status_invalid_request: u32 = 2;
@@ -69,13 +68,49 @@ const ContextSlot = struct {
     pack_sha256: [32]u8 = .{0} ** 32,
 };
 
+pub const ContextSession = struct {
+    status: u32,
+    handle: u32 = 0,
+    profile_sha256: [32]u8 = .{0} ** 32,
+    pack_sha256: [32]u8 = .{0} ** 32,
+};
+
+pub const Guest = struct {
+    status: u32 = status_ok,
+    diagnostic: []u8 = &.{},
+    artifact: []u8 = &.{},
+    records: []compiler_result.DiagnosticRecord = &.{},
+    request_id: [16]u8 = .{0} ** 16,
+    compiler_build_sha256: [32]u8 = .{0} ** 32,
+    luau_pin_sha256: [32]u8 = .{0} ** 32,
+    runtime_profile_sha256: [32]u8 = .{0} ** 32,
+    runtime_pack_sha256: [32]u8 = .{0} ** 32,
+    manifest_sha256: [32]u8 = .{0} ** 32,
+    generated_object_sha256: [32]u8 = .{0} ** 32,
+    artifact_sha256: [32]u8 = .{0} ** 32,
+    generated_function_count: u32 = 0,
+    generated_data_bytes: u32 = 0,
+    import_count: u32 = 0,
+    export_count: u32 = 0,
+    resource_usage_arena_used: u32 = 0,
+    resource_usage_table_entries: u32 = 0,
+    resource_usage_output_bytes: u32 = 0,
+    resource_usage_compile_instructions: u32 = 0,
+    resource_usage_compile_functions: u32 = 0,
+    resource_usage_compile_bytes: u32 = 0,
+};
+
+pub const buildStaticPackage = lower.buildStaticPackage;
+
 var contexts = [_]ContextSlot{.{}} ** max_contexts;
 var constructors_ran = false;
 
 fn ensureConstructors() void {
+    if (comptime builtin.cpu.arch != .wasm32) return;
     if (!constructors_ran) {
         constructors_ran = true;
-        __wasm_call_ctors();
+        const call: *const fn () callconv(.c) void = @extern(*const fn () callconv(.c) void, .{ .name = "__wasm_call_ctors" });
+        call();
     }
 }
 
@@ -118,61 +153,56 @@ fn contextFor(handle: u32) ?*ContextSlot {
     return slot;
 }
 
-pub export fn luauc_v1_context_create(profile_pointer: u32, profile_size: u32, pack_pointer: u32, pack_size: u32, result_pointer: u32) u32 {
-    ensureConstructors();
-    if (profile_pointer == 0 or profile_size == 0 or profile_size > max_profile_bytes or pack_pointer == 0 or pack_size == 0 or pack_size > max_pack_bytes or result_pointer == 0 or
-        rangesOverlap(profile_pointer, profile_size, result_pointer, @sizeOf(ContextResult)) or rangesOverlap(pack_pointer, pack_size, result_pointer, @sizeOf(ContextResult)))
-        return status_invalid_argument;
-    const result: *ContextResult = @ptrFromInt(result_pointer);
-    result.* = .{};
-    const profile_input: [*]const u8 = @ptrFromInt(profile_pointer);
-    const pack_input: [*]const u8 = @ptrFromInt(pack_pointer);
-    const profile_bytes = profile_input[0..profile_size];
-    const pack_bytes = pack_input[0..pack_size];
-    const profile = runtime_profile.parse(profile_bytes) catch {
-        result.status = status_invalid_request;
-        return status_invalid_request;
-    };
-    runtime_profile.validatePackManifest(pack_bytes, profile_bytes) catch {
-        result.status = status_invalid_request;
-        return status_invalid_request;
-    };
-    linker.validateRuntimePack(allocator, pack_bytes, profile, .{}) catch {
-        result.status = status_invalid_request;
-        return status_invalid_request;
-    };
+pub fn contextCreate(profile_bytes: []const u8, pack_bytes: []const u8) ContextSession {
+    if (profile_bytes.len == 0 or profile_bytes.len > max_profile_bytes or pack_bytes.len == 0 or pack_bytes.len > max_pack_bytes)
+        return .{ .status = status_invalid_argument };
+    const profile = runtime_profile.parse(profile_bytes) catch return .{ .status = status_invalid_request };
+    runtime_profile.validatePackManifest(pack_bytes, profile_bytes) catch return .{ .status = status_invalid_request };
+    linker.validateRuntimePack(allocator, pack_bytes, profile, .{}) catch return .{ .status = status_invalid_request };
 
     var slot_index: ?usize = null;
     for (&contexts, 0..) |*slot, index| if (slot.profile == null) {
         slot_index = index;
         break;
     };
-    const index = slot_index orelse {
-        result.status = status_resource_limit;
-        return status_resource_limit;
-    };
-    const owned_profile = allocator.dupe(u8, profile_bytes) catch {
-        result.status = status_resource_limit;
-        return status_resource_limit;
-    };
+    const index = slot_index orelse return .{ .status = status_resource_limit };
+    const owned_profile = allocator.dupe(u8, profile_bytes) catch return .{ .status = status_resource_limit };
     const owned_pack = allocator.dupe(u8, pack_bytes) catch {
         allocator.free(owned_profile);
-        result.status = status_resource_limit;
-        return status_resource_limit;
+        return .{ .status = status_resource_limit };
     };
     const slot = &contexts[index];
     slot.profile = owned_profile;
     slot.pack = owned_pack;
     std.crypto.hash.sha2.Sha256.hash(owned_profile, &slot.profile_sha256, .{});
     std.crypto.hash.sha2.Sha256.hash(owned_pack, &slot.pack_sha256, .{});
-    result.handle = contextHandle(index, slot.generation);
-    result.runtime_profile_sha256 = slot.profile_sha256;
-    result.runtime_pack_sha256 = slot.pack_sha256;
-    result.status = status_ok;
-    return status_ok;
+    return .{
+        .status = status_ok,
+        .handle = contextHandle(index, slot.generation),
+        .profile_sha256 = slot.profile_sha256,
+        .pack_sha256 = slot.pack_sha256,
+    };
 }
 
-pub export fn luauc_v1_context_destroy(handle: u32) u32 {
+pub export fn luauc_v1_context_create(profile_pointer: u32, profile_size: u32, pack_pointer: u32, pack_size: u32, result_pointer: u32) u32 {
+    ensureConstructors();
+    if (profile_pointer == 0 or profile_size == 0 or profile_size > max_profile_bytes or pack_pointer == 0 or pack_size == 0 or pack_size > max_pack_bytes or result_pointer == 0 or
+        rangesOverlap(profile_pointer, profile_size, result_pointer, @sizeOf(ContextResult)) or rangesOverlap(pack_pointer, pack_size, result_pointer, @sizeOf(ContextResult)))
+        return status_invalid_argument;
+    const result: *ContextResult = @ptrFromInt(result_pointer);
+    const profile_input: [*]const u8 = @ptrFromInt(profile_pointer);
+    const pack_input: [*]const u8 = @ptrFromInt(pack_pointer);
+    const created = contextCreate(profile_input[0..profile_size], pack_input[0..pack_size]);
+    result.* = .{
+        .handle = created.handle,
+        .status = created.status,
+        .runtime_profile_sha256 = created.profile_sha256,
+        .runtime_pack_sha256 = created.pack_sha256,
+    };
+    return created.status;
+}
+
+pub fn contextDestroy(handle: u32) u32 {
     const slot = contextFor(handle) orelse return status_invalid_context;
     allocator.free(slot.profile.?);
     allocator.free(slot.pack.?);
@@ -185,17 +215,14 @@ pub export fn luauc_v1_context_destroy(handle: u32) u32 {
     return status_ok;
 }
 
-fn clearResult(result: *CompileResult) void {
-    result.* = .{};
+pub export fn luauc_v1_context_destroy(handle: u32) u32 {
+    return contextDestroy(handle);
 }
 
-fn publishDiagnosticRecord(result: *CompileResult, status: u32, module_id: u32, ir_command: u32) void {
-    if (result.diagnostic_records_ptr != 0 and result.diagnostic_records_count != 0) {
-        const prior: [*]compiler_result.DiagnosticRecord = @ptrFromInt(result.diagnostic_records_ptr);
-        allocator.free(prior[0..result.diagnostic_records_count]);
-        result.diagnostic_records_ptr = 0;
-        result.diagnostic_records_count = 0;
-        result.diagnostic_records_bytes = 0;
+fn publishDiagnosticRecord(guest: *Guest, status: u32, module_id: u32, ir_command: u32) void {
+    if (guest.records.len != 0) {
+        allocator.free(guest.records);
+        guest.records = &.{};
     }
     const records = allocator.alloc(compiler_result.DiagnosticRecord, 1) catch return;
     records[0] = .{
@@ -206,26 +233,23 @@ fn publishDiagnosticRecord(result: *CompileResult, status: u32, module_id: u32, 
         .ir_command = ir_command,
         .reserved = 0,
     };
-    result.diagnostic_records_ptr = @intCast(@intFromPtr(records.ptr));
-    result.diagnostic_records_count = 1;
-    result.diagnostic_records_bytes = compiler_result.diagnostic_record_size;
+    guest.records = records;
 }
 
-fn publishDiagnostic(result: *CompileResult, status: u32, message: []const u8) u32 {
-    return publishDiagnosticFor(result, status, compiler_result.no_module, 0, message);
+fn publishDiagnostic(guest: *Guest, status: u32, message: []const u8) void {
+    publishDiagnosticFor(guest, status, compiler_result.no_module, 0, message);
 }
 
-fn publishDiagnosticFor(result: *CompileResult, status: u32, module_id: u32, ir_command: u32, message: []const u8) u32 {
-    result.status = status;
-    publishDiagnosticRecord(result, status, module_id, ir_command);
-    if (message.len == 0 or message.len > std.math.maxInt(u32)) return status;
+fn publishDiagnosticFor(guest: *Guest, status: u32, module_id: u32, ir_command: u32, message: []const u8) void {
+    guest.status = status;
+    publishDiagnosticRecord(guest, status, module_id, ir_command);
+    if (message.len == 0 or message.len > std.math.maxInt(u32)) return;
     const owned = allocator.dupe(u8, message) catch {
-        result.status = status_resource_limit;
-        return status_resource_limit;
+        guest.status = status_resource_limit;
+        return;
     };
-    result.diagnostic = @intCast(@intFromPtr(owned.ptr));
-    result.diagnostic_size = @intCast(owned.len);
-    return status;
+    if (guest.diagnostic.len != 0) allocator.free(guest.diagnostic);
+    guest.diagnostic = owned;
 }
 
 fn featureCount(mask: u32) u32 {
@@ -243,8 +267,8 @@ fn snapshotCompileUsage(bytes: []const u8) !struct { functions: u32, instruction
     return .{ .functions = snapshot.header.ir_function_count, .instructions = instructions };
 }
 
-fn publishError(result: *CompileResult, status: u32, err: anyerror) u32 {
-    return publishDiagnostic(result, status, @errorName(err));
+fn publishError(guest: *Guest, status: u32, err: anyerror) void {
+    publishDiagnostic(guest, status, @errorName(err));
 }
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     bytes[offset] = @truncate(value);
@@ -323,33 +347,45 @@ fn encodeHostModuleList(profile: runtime_profile.Profile) ![]u8 {
     return blob;
 }
 
-pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: u32, result_pointer: u32) u32 {
-    ensureConstructors();
-    if (request_pointer == 0 or request_size == 0 or result_pointer == 0 or rangesOverlap(request_pointer, request_size, result_pointer, @sizeOf(CompileResult))) return status_invalid_argument;
-    const result: *CompileResult = @ptrFromInt(result_pointer);
-    clearResult(result);
-    const slot = contextFor(handle) orelse return publishDiagnostic(result, status_invalid_context, "InvalidContext");
-    const profile = runtime_profile.parse(slot.profile.?) catch return publishDiagnostic(result, status_invalid_context, "InvalidStoredProfile");
-    const request_bytes: [*]const u8 = @ptrFromInt(request_pointer);
+fn rejected(guest: *Guest, status: u32, message: []const u8) Guest {
+    publishDiagnostic(guest, status, message);
+    return guest.*;
+}
+
+fn rejectedFor(guest: *Guest, status: u32, module_id: u32, message: []const u8) Guest {
+    publishDiagnosticFor(guest, status, module_id, 0, message);
+    return guest.*;
+}
+
+fn rejectedError(guest: *Guest, status: u32, err: anyerror) Guest {
+    publishError(guest, status, err);
+    return guest.*;
+}
+
+pub fn compile(handle: u32, request: []const u8) Guest {
+    var guest: Guest = .{};
+    if (request.len == 0) return rejected(&guest, status_invalid_argument, "InvalidArgument");
+    const slot = contextFor(handle) orelse return rejected(&guest, status_invalid_context, "InvalidContext");
+    const profile = runtime_profile.parse(slot.profile.?) catch return rejected(&guest, status_invalid_context, "InvalidStoredProfile");
     const package = source_package.parse(
-        request_bytes[0..request_size],
+        request,
         snapshot_v1.production_identity.frontend_build.?,
         slot.profile_sha256,
         slot.pack_sha256,
-    ) catch |err| return publishError(result, if (err == error.ResourceLimit) status_resource_limit else status_invalid_request, err);
-    result.request_id = package.request_id;
-    result.compiler_build_sha256 = compiler_build.compiler_build_sha256;
-    result.luau_pin_sha256 = snapshot_v1.production_identity.luau_pin.?;
-    result.runtime_profile_sha256 = slot.profile_sha256;
-    result.runtime_pack_sha256 = slot.pack_sha256;
-    result.manifest_sha256 = package.manifest_sha256;
+    ) catch |err| return rejectedError(&guest, if (err == error.ResourceLimit) status_resource_limit else status_invalid_request, err);
+    guest.request_id = package.request_id;
+    guest.compiler_build_sha256 = compiler_build.compiler_build_sha256;
+    guest.luau_pin_sha256 = snapshot_v1.production_identity.luau_pin.?;
+    guest.runtime_profile_sha256 = slot.profile_sha256;
+    guest.runtime_pack_sha256 = slot.pack_sha256;
+    guest.manifest_sha256 = package.manifest_sha256;
 
     if (profile.import_count > package.allowed_import_ceiling)
-        return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+        return rejected(&guest, status_resource_limit, "ResourceLimit");
     if (featureCount(profile.feature_mask) > package.feature_ceiling)
-        return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+        return rejected(&guest, status_resource_limit, "ResourceLimit");
 
-    const frontend_results = allocator.alloc(FrontendResult, package.module_count) catch return publishDiagnostic(result, status_resource_limit, "frontend result allocation failed");
+    const frontend_results = allocator.alloc(FrontendResult, package.module_count) catch return rejected(&guest, status_resource_limit, "frontend result allocation failed");
     defer allocator.free(frontend_results);
     @memset(frontend_results, .{});
     var compiled_count: usize = 0;
@@ -357,102 +393,136 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     var compile_instructions: u32 = 0;
     defer for (frontend_results[0..compiled_count]) |*frontend_result| luauc_frontend_snapshot_v1_free(frontend_result);
     for (0..package.module_count) |index| {
-        const module = package.module(@intCast(index)) catch |err| return publishError(result, status_invalid_request, err);
+        const module = package.module(@intCast(index)) catch |err| return rejectedError(&guest, status_invalid_request, err);
         const frontend_result = &frontend_results[index];
         var inline_plans: ?[]source_package.InlinePlan = null;
         defer if (inline_plans) |plans| allocator.free(plans);
         const frontend_status = if (module.inline_plan_count == 0)
             luauc_frontend_snapshot_v1_compile(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, frontend_result)
         else inlined: {
-            const plans = allocator.alloc(source_package.InlinePlan, module.inline_plan_count) catch return publishDiagnostic(result, status_resource_limit, "inline plan allocation failed");
+            const plans = allocator.alloc(source_package.InlinePlan, module.inline_plan_count) catch return rejected(&guest, status_resource_limit, "inline plan allocation failed");
             inline_plans = plans;
             for (plans, 0..) |*plan, plan_id|
-                plan.* = module.inlinePlan(@intCast(plan_id)) catch |err| return publishError(result, status_invalid_request, err);
+                plan.* = module.inlinePlan(@intCast(plan_id)) catch |err| return rejectedError(&guest, status_invalid_request, err);
             break :inlined luauc_frontend_snapshot_v1_compile_inlined(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, plans.ptr, module.inline_plan_count, frontend_result);
         };
         compiled_count += 1;
         if (frontend_result.size > package.compile_budget_bytes)
-            return publishDiagnosticFor(result, status_resource_limit, @intCast(index), 0, "ResourceLimit");
+            return rejectedFor(&guest, status_resource_limit, @intCast(index), "ResourceLimit");
         if (frontend_status != 0 or frontend_result.status != 0 or frontend_result.data == null or frontend_result.size == 0) {
             const diagnostic = if (frontend_result.diagnostic) |pointer| pointer[0..frontend_result.diagnostic_size] else "frontend compilation failed";
-            return publishDiagnosticFor(result, status_frontend_failure, @intCast(index), 0, diagnostic);
+            return rejectedFor(&guest, status_frontend_failure, @intCast(index), diagnostic);
         }
         const usage = snapshotCompileUsage(frontend_result.data.?[0..frontend_result.size]) catch
-            return publishDiagnosticFor(result, status_frontend_failure, @intCast(index), 0, "invalid frontend snapshot");
+            return rejectedFor(&guest, status_frontend_failure, @intCast(index), "invalid frontend snapshot");
         compile_functions = std.math.add(u32, compile_functions, usage.functions) catch
-            return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+            return rejected(&guest, status_resource_limit, "ResourceLimit");
         compile_instructions = std.math.add(u32, compile_instructions, usage.instructions) catch
-            return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+            return rejected(&guest, status_resource_limit, "ResourceLimit");
         if (compile_functions > package.compile_budget_functions or
             compile_instructions > package.compile_budget_instructions)
-            return publishDiagnosticFor(result, status_resource_limit, @intCast(index), 0, "ResourceLimit");
+            return rejectedFor(&guest, status_resource_limit, @intCast(index), "ResourceLimit");
     }
-    const snapshot_package = buildSnapshotPackage(package, frontend_results) catch |err| return publishError(result, status_resource_limit, err);
+    const snapshot_package = buildSnapshotPackage(package, frontend_results) catch |err| return rejectedError(&guest, status_resource_limit, err);
     defer allocator.free(snapshot_package);
-    const host_module_blob = encodeHostModuleList(profile) catch |err| return publishError(result, status_resource_limit, err);
+    const host_module_blob = encodeHostModuleList(profile) catch |err| return rejectedError(&guest, status_resource_limit, err);
     defer allocator.free(host_module_blob);
-    var backend_result: backend_component.Result = .{};
-    const backend_status = luauc_backend_component_v1_compile_static_package(
-        @intCast(@intFromPtr(snapshot_package.ptr)),
-        @intCast(snapshot_package.len),
-        @intCast(@intFromPtr(host_module_blob.ptr)),
-        @intCast(host_module_blob.len),
-        @intCast(@intFromPtr(&backend_result)),
-    );
-    defer luauc_backend_component_v1_free(@intCast(@intFromPtr(&backend_result)));
-    if (backend_status != backend_component.status_ok or backend_result.status != backend_component.status_ok or backend_result.data == 0 or backend_result.size == 0) {
-        const diagnostic: []const u8 = if (backend_result.diagnostic != 0 and backend_result.diagnostic_size != 0) diagnostic: {
-            const pointer: [*]const u8 = @ptrFromInt(backend_result.diagnostic);
-            break :diagnostic pointer[0..backend_result.diagnostic_size];
-        } else "backend compilation failed";
-        const failure = if (backend_status == backend_component.status_resource_limit or backend_result.status == backend_component.status_resource_limit)
+    const object = buildStaticPackage(allocator, snapshot_package, host_module_blob) catch |err| {
+        const diagnostic = lower.diagnostics.published(@errorName(err));
+        const failure = if (err == error.OutOfMemory or err == error.ResourceLimit)
             status_resource_limit
         else if (std.mem.startsWith(u8, diagnostic, "InvalidHostModuleList"))
             status_invalid_request
         else
             status_backend_failure;
-        return publishDiagnostic(result, failure, diagnostic);
-    }
-    if (backend_result.diagnostic != 0 and backend_result.diagnostic_size != 0) {
-        const dump_pointer: [*]const u8 = @ptrFromInt(backend_result.diagnostic);
-        const owned = allocator.dupe(u8, dump_pointer[0..backend_result.diagnostic_size]) catch null;
-        if (owned) |bytes| {
-            result.diagnostic = @intCast(@intFromPtr(bytes.ptr));
-            result.diagnostic_size = @intCast(bytes.len);
-        }
-    }
-    const object_pointer: [*]const u8 = @ptrFromInt(backend_result.data);
-    const object = object_pointer[0..backend_result.size];
+        return rejected(&guest, failure, diagnostic);
+    };
+    defer allocator.free(object);
     const linked = linker.link(allocator, slot.pack.?, object, profile, .{}, .{
         .compiler_build_sha256 = compiler_build.compiler_build_sha256,
         .package_manifest_sha256 = package.manifest_sha256,
-    }) catch |err| return publishError(result, switch (err) {
+    }) catch |err| return rejectedError(&guest, switch (err) {
         error.OutOfMemory, error.ResourceLimit, error.ArenaOverflow, error.TableOverflow => status_resource_limit,
         else => status_link_failure,
     }, err);
     if (linked.bytes.len > std.math.maxInt(u32) or linked.bytes.len > package.compile_budget_bytes) {
         allocator.free(linked.bytes);
-        return publishDiagnostic(result, status_resource_limit, "artifact exceeds compile budget");
+        return rejected(&guest, status_resource_limit, "artifact exceeds compile budget");
     }
     if (linked.report.generated_function_count > package.compile_budget_functions) {
         allocator.free(linked.bytes);
-        return publishDiagnostic(result, status_resource_limit, "ResourceLimit");
+        return rejected(&guest, status_resource_limit, "ResourceLimit");
     }
-    result.data = @intCast(@intFromPtr(linked.bytes.ptr));
-    result.size = @intCast(linked.bytes.len);
-    result.generated_object_sha256 = linked.report.package_object_sha256;
-    result.artifact_sha256 = linked.report.output_sha256;
-    result.generated_function_count = linked.report.generated_function_count;
-    result.generated_data_bytes = linked.report.generated_data_bytes;
-    result.import_count = profile.import_count;
-    result.export_count = profile.export_count;
-    result.resource_usage_arena_used = linked.report.generated_data_bytes;
-    result.resource_usage_table_entries = linked.report.final_table_size;
-    result.resource_usage_output_bytes = result.size;
-    result.resource_usage_compile_instructions = compile_instructions;
-    result.resource_usage_compile_functions = compile_functions;
-    result.resource_usage_compile_bytes = request_size;
-    return status_ok;
+    guest.artifact = linked.bytes;
+    guest.generated_object_sha256 = linked.report.package_object_sha256;
+    guest.artifact_sha256 = linked.report.output_sha256;
+    guest.generated_function_count = linked.report.generated_function_count;
+    guest.generated_data_bytes = linked.report.generated_data_bytes;
+    guest.import_count = profile.import_count;
+    guest.export_count = profile.export_count;
+    guest.resource_usage_arena_used = linked.report.generated_data_bytes;
+    guest.resource_usage_table_entries = linked.report.final_table_size;
+    guest.resource_usage_output_bytes = @intCast(linked.bytes.len);
+    guest.resource_usage_compile_instructions = compile_instructions;
+    guest.resource_usage_compile_functions = compile_functions;
+    guest.resource_usage_compile_bytes = @intCast(request.len);
+    guest.status = status_ok;
+    return guest;
+}
+
+fn storeSlice(bytes: []const u8) struct { pointer: u32, size: u32 } {
+    if (bytes.len == 0) return .{ .pointer = 0, .size = 0 };
+    return .{
+        .pointer = @intCast(@intFromPtr(bytes.ptr)),
+        .size = @intCast(bytes.len),
+    };
+}
+
+pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: u32, result_pointer: u32) u32 {
+    ensureConstructors();
+    if (request_pointer == 0 or request_size == 0 or result_pointer == 0 or rangesOverlap(request_pointer, request_size, result_pointer, @sizeOf(CompileResult))) return status_invalid_argument;
+    const result: *CompileResult = @ptrFromInt(result_pointer);
+    const request_bytes: [*]const u8 = @ptrFromInt(request_pointer);
+    const guest = compile(handle, request_bytes[0..request_size]);
+    const artifact = storeSlice(guest.artifact);
+    const diagnostic = storeSlice(guest.diagnostic);
+    const records = storeSlice(std.mem.sliceAsBytes(guest.records));
+    result.* = .{
+        .data = artifact.pointer,
+        .size = artifact.size,
+        .diagnostic = diagnostic.pointer,
+        .diagnostic_size = diagnostic.size,
+        .status = guest.status,
+        .request_id = guest.request_id,
+        .compiler_build_sha256 = guest.compiler_build_sha256,
+        .luau_pin_sha256 = guest.luau_pin_sha256,
+        .runtime_profile_sha256 = guest.runtime_profile_sha256,
+        .runtime_pack_sha256 = guest.runtime_pack_sha256,
+        .manifest_sha256 = guest.manifest_sha256,
+        .generated_object_sha256 = guest.generated_object_sha256,
+        .artifact_sha256 = guest.artifact_sha256,
+        .generated_function_count = guest.generated_function_count,
+        .generated_data_bytes = guest.generated_data_bytes,
+        .diagnostic_records_ptr = records.pointer,
+        .diagnostic_records_count = if (guest.records.len == 0) 0 else @intCast(guest.records.len),
+        .diagnostic_records_bytes = if (guest.records.len == 0) 0 else compiler_result.diagnostic_record_size,
+        .import_count = guest.import_count,
+        .export_count = guest.export_count,
+        .resource_usage_arena_used = guest.resource_usage_arena_used,
+        .resource_usage_table_entries = guest.resource_usage_table_entries,
+        .resource_usage_output_bytes = guest.resource_usage_output_bytes,
+        .resource_usage_compile_instructions = guest.resource_usage_compile_instructions,
+        .resource_usage_compile_functions = guest.resource_usage_compile_functions,
+        .resource_usage_compile_bytes = guest.resource_usage_compile_bytes,
+    };
+    return guest.status;
+}
+
+pub fn freeGuest(guest: *Guest) void {
+    if (guest.artifact.len != 0) allocator.free(guest.artifact);
+    if (guest.diagnostic.len != 0) allocator.free(guest.diagnostic);
+    if (guest.records.len != 0) allocator.free(guest.records);
+    guest.* = .{};
 }
 
 pub export fn luauc_v1_result_free(result_pointer: u32) void {
@@ -470,5 +540,5 @@ pub export fn luauc_v1_result_free(result_pointer: u32) void {
         const records: [*]compiler_result.DiagnosticRecord = @ptrFromInt(result.diagnostic_records_ptr);
         allocator.free(records[0..result.diagnostic_records_count]);
     }
-    clearResult(result);
+    result.* = .{};
 }

@@ -2,7 +2,7 @@
 # the compiler frontend and strict runtime; final binaries are owned by the main repository.
 
 load("@luauc//bazel:cc.bzl", "cc_headers")
-load("@luauc//luau:components.bzl", "luauc_cpp_archive")
+load("@luauc//luau:components.bzl", "PORT_TARGET", "luauc_cpp_archive")
 
 INTERP_SRCS = glob([
     "VM/src/*.cpp",
@@ -423,6 +423,45 @@ luauc_cpp_archive(
 alias(
     name = "aot_frontend_wasm32_wasi",
     actual = ":aot_frontend_codegen_ir_wasm32_wasi",
+    visibility = ["//visibility:public"],
+)
+
+luauc_cpp_archive(
+    name = "aot_frontend_interp_native",
+    target = PORT_TARGET,
+    srcs = [src for src in INTERP_SRCS if src != "VM/src/lvmexecute.cpp"],
+    copts = [
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = INTERP_HEADERS + ["@luauc//frontend:compiler_patch_headers"],
+    deps = [
+        ":interp_headers",
+        "@luauc//frontend:frontend_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+luauc_cpp_archive(
+    name = "aot_frontend_native",
+    target = PORT_TARGET,
+    srcs = AOT_FRONTEND_CODEGEN_IR_SRCS,
+    copts = [
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = INTERP_HEADERS + [
+        ":aot_frontend_codegen_ir_headers",
+        "@luauc//frontend:compiler_patch_headers",
+    ],
+    deps = [
+        ":aot_frontend_codegen_ir_incs",
+        ":aot_frontend_interp_native",
+        ":interp_headers",
+        "@luauc//frontend:frontend_incs",
+    ],
     visibility = ["//visibility:public"],
 )
 

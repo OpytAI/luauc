@@ -2,7 +2,7 @@ const std = @import("std");
 const api = @import("luauc_backend_component_api");
 const lower = @import("luauc_backend");
 
-const allocator = std.heap.wasm_allocator;
+const allocator = if (@import("builtin").cpu.arch == .wasm32) std.heap.wasm_allocator else std.heap.c_allocator;
 
 fn publishObject(result: *api.Result, object_result: lower.Error![]u8) u32 {
     result.* = .{};

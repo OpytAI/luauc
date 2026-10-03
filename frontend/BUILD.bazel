@@ -2,7 +2,7 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary")
 load("//bazel:cc.bzl", "cc_headers", "cc_object_archive", "zig_cxx_object")
-load("//luau:components.bzl", "luauc_c_archive", "luauc_cpp_archive")
+load("//luau:components.bzl", "PORT_TARGET", "luauc_c_archive", "luauc_cpp_archive")
 
 cc_headers(
     name = "frontend_incs",
@@ -68,6 +68,34 @@ luauc_cpp_archive(
     visibility = ["//visibility:public"],
 )
 
+luauc_cpp_archive(
+    name = "adapter_native",
+    target = PORT_TARGET,
+    srcs = [
+        "frontend_adapter.cpp",
+        "frontend_fastflags.cpp",
+    ],
+    copts = [
+        "-DLUAUC_COMPILER_HOST=1",
+        "-fno-exceptions",
+        "-fno-math-errno",
+        "-fno-rtti",
+    ],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        "@luau//:aot_frontend_codegen_ir_headers",
+        "//schema:frontend_snapshot_v1.h",
+        ":compiler_patch_headers",
+        "frontend_identity_v1.h",
+    ],
+    deps = [
+        ":frontend_incs",
+        "@luau//:aot_frontend_codegen_ir_incs",
+        "@luau//:interp_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 zig_cxx_object(
     name = "luau_execute_stub_object",
     src = "luau_execute_stub.cpp",
@@ -92,6 +120,37 @@ zig_cxx_object(
 cc_object_archive(
     name = "luau_execute_stub_wasm32_wasi",
     objects = [":luau_execute_stub_object"],
+    deps = [
+        ":frontend_incs",
+        "@luau//:interp_incs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+zig_cxx_object(
+    name = "luau_execute_stub_native_object",
+    src = "luau_execute_stub.cpp",
+    target = PORT_TARGET,
+    copts = [
+        "-Oz",
+        "-DNDEBUG",
+        "-std=c++17",
+        "-fno-exceptions",
+        "-fno-rtti",
+    ],
+    extra_srcs = [
+        "@luau//:interp_all_hdrs",
+        ":compiler_patch_headers",
+    ],
+    deps = [
+        ":frontend_incs",
+        "@luau//:interp_incs",
+    ],
+)
+
+cc_object_archive(
+    name = "luau_execute_stub_native",
+    objects = [":luau_execute_stub_native_object"],
     deps = [
         ":frontend_incs",
         "@luau//:interp_incs",

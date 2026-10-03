@@ -2,6 +2,10 @@
 
 load("//bazel:cc.bzl", "cc_object_archive", "zig_c_object", "zig_cxx_object")
 
+# Zig triple of the host that supervises the native compiler port.
+# This is the glibc 2.17 triple registered as @rules_zig//zig/target:x86_64-linux-gnu.
+PORT_TARGET = "x86_64-linux-gnu.2.17"
+
 def luauc_cpp_archive(
         name,
         srcs,
@@ -11,7 +15,8 @@ def luauc_cpp_archive(
         objects_name = None,
         objects_visibility = None,
         visibility = None,
-        tags = None):
+        tags = None,
+        target = "wasm32-wasi"):
     """Compiles each C++ translation unit independently and bundles the resulting archives."""
     if not srcs:
         fail("luauc_cpp_archive requires at least one translation unit")
@@ -23,7 +28,7 @@ def luauc_cpp_archive(
         zig_cxx_object(
             name = unit,
             src = source,
-            target = "wasm32-wasi",
+            target = target,
             copts = [
                 "-Oz",
                 "-DNDEBUG",
@@ -59,7 +64,8 @@ def luauc_c_archive(
         extra_srcs,
         deps,
         visibility = None,
-        tags = None):
+        tags = None,
+        target = "wasm32-wasi"):
     """Compiles C translation units independently and bundles a deterministic archive."""
     if not srcs:
         fail("luauc_c_archive requires at least one translation unit")
@@ -71,7 +77,7 @@ def luauc_c_archive(
         zig_c_object(
             name = unit,
             src = source,
-            target = "wasm32-wasi",
+            target = target,
             copts = [
                 "-Oz",
                 "-DNDEBUG",
