@@ -1053,72 +1053,27 @@ pub noinline fn emitGenericTableFallbackCall(self: anytype, pattern: GenericTabl
     }
     try self.emitReloadBase();
 }
-fn publishedNumberStore(self: anytype, register: u32, consumer: u32) Error!?u32 {
-    const block_id = self.plan.instructionBlock(consumer) orelse return null;
-    const block = try self.snapshot.irBlock(self.function, block_id);
-    if (!block.kind.isCompilable() or consumer < block.start or consumer > block.finish)
-        return null;
-    var payload: ?u32 = null;
-    var instruction_id = block.start;
-    while (instruction_id < consumer) : (instruction_id += 1) {
-        if (!try self.instructionWritesRegister(instruction_id, register))
-            continue;
-        const instruction_value = try self.instruction(instruction_id);
-        if (instruction_value.command == .store_double and instruction_value.operand_count == 2) {
-            const destination = try self.operand(instruction_value, 0);
-            if (destination.kind == .vm_reg and destination.value == register)
-                payload = instruction_id
-            else
-                payload = null;
-        } else if (instruction_value.command != .store_tag)
-            payload = null;
-    }
-    const published = payload orelse return null;
-    if (published + 1 >= consumer)
-        return null;
-    const tag_store = try self.instruction(published + 1);
-    if (tag_store.command != .store_tag or tag_store.operand_count != 2)
-        return null;
-    const tag_destination = try self.operand(tag_store, 0);
-    const tag = try self.operand(tag_store, 1);
-    if (tag_destination.kind != .vm_reg or tag_destination.value != register or tag.kind != .constant or
-        (try self.constant(tag.value)).tagValue() != lua_tag_number)
-        return null;
-    if (!try self.preservesRegisterToConsumer(register, published + 1, consumer))
-        return null;
-    return published;
-}
-
-// A fresh NEW_TABLE covers a numeric store when its recorded array size contains the key.
-// The key and the value are numbers already published in this block. The table register
-// still holds that allocation. The caller still checks the live sizearray before writing.
-fn coveredFreshNumericStore(self: anytype, pattern: GenericTablePattern) Error!bool {
-    const key_register = pattern.register_key orelse return false;
-    var covered: ?u32 = null;
+// A fresh NEW_TABLE with a recorded array size of 0 has no slot yet. luaH_setnum grows
+// the array inside the helper, so the bounds probe cannot hit on this store. A table that
+// already has an array, including a cloned table and a parameter, keeps the probe.
+fn freshEmptyTable(self: anytype, pattern: GenericTablePattern) Error!bool {
+    var found: ?u32 = null;
     for (self.plan.facts.table_allocs) |candidate| {
         if (candidate.dest_reg != pattern.table or candidate.finish >= pattern.start)
             continue;
-        if (covered == null or candidate.start > covered.?)
-            covered = candidate.start;
+        if (found == null or candidate.start > found.?)
+            found = candidate.start;
     }
-    const allocation_start = covered orelse return false;
+    const allocation_start = found orelse return false;
     const allocation = self.plan.tableAllocAt(allocation_start) orelse return false;
-    if (allocation.array_count == 0 or allocation.destination != pattern.table)
+    if (allocation.array_count != 0 or allocation.destination != pattern.table)
         return false;
     var cursor = allocation.finish + 1;
     while (cursor < pattern.start) : (cursor += 1) {
         if (try self.instructionWritesRegister(cursor, pattern.table))
             return false;
     }
-    const published = (try publishedNumberStore(self, key_register, pattern.start)) orelse return false;
-    const stored = try self.operand(try self.instruction(published), 1);
-    if (stored.kind != .constant)
-        return false;
-    const number = (try self.constant(stored.value)).doubleValue() orelse return false;
-    if (!std.math.isFinite(number) or @trunc(number) != number or number < 1 or
-        number > @as(f64, @floatFromInt(allocation.array_count)))
-        return false;
-    return (try publishedNumberStore(self, pattern.value, pattern.start)) != null;
+    return true;
 }
 
 fn emitUnprovedNumericTableSet(
@@ -1147,9 +1102,9 @@ pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTab
 
     const register_key = pattern.register_key orelse return;
     const key = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register_key };
-    // An unproved numeric store has no recorded slot. The bounds probe would miss, then
-    // table_set would repeat the same numeric checks. Call the numeric helper once instead.
-    if (pattern.operation == .set and !try coveredFreshNumericStore(self, pattern)) {
+    // An empty fresh table has no slot. Skip the bounds probe and call the numeric helper
+    // once. Every other number key still tries the inline hit, which checks sizearray.
+    if (pattern.operation == .set and try freshEmptyTable(self, pattern)) {
         try self.emitTValueTag(key);
         try self.body.i32Const(self.allocator, lua_tag_number);
         try self.body.i32Eq(self.allocator);
