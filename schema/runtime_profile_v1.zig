@@ -7,6 +7,7 @@ pub const import_record_size: u32 = 24;
 pub const export_record_size: u32 = 16;
 pub const runtime_symbol_record_size: u32 = 24;
 pub const binding_record_size: u32 = 16;
+pub const host_module_record_size: u32 = 8;
 pub const custom_section_name = "luauc.runtime.v1";
 
 pub const Error = error{
@@ -73,6 +74,8 @@ pub const Profile = struct {
     runtime_symbol_count: u32,
     binding_offset: u32,
     binding_count: u32,
+    host_module_offset: u32,
+    host_module_count: u32,
 
     pub fn hostImport(self: Profile, index: u32) Error!HostImport {
         if (index >= self.import_count) return Error.ResourceLimit;
@@ -99,6 +102,12 @@ pub const Profile = struct {
         const size = readU32(record, 20);
         if (size == 0) return null;
         return try self.stringAt(offset, size);
+    }
+
+    pub fn hostModule(self: Profile, index: u32) Error![]const u8 {
+        if (index >= self.host_module_count) return Error.ResourceLimit;
+        const record = try self.recordAt(self.host_module_offset, index, host_module_record_size);
+        return self.stringAt(readU32(record, 0), readU32(record, 4));
     }
 
     pub fn binding(self: Profile, index: u32) Error!Binding {
@@ -171,7 +180,10 @@ pub fn parse(bytes: []const u8) Error!Profile {
     if (readU32(bytes, 76) != import_record_size or readU32(bytes, 80) != export_record_size or readU32(bytes, 84) != runtime_symbol_record_size or readU32(bytes, 88) != binding_record_size) return Error.InvalidHeader;
     for (bytes[92..104]) |byte| if (byte != 0) return Error.InvalidHeader;
     for (bytes[112..128]) |byte| if (byte != 0) return Error.InvalidHeader;
-    for (bytes[288..320]) |byte| if (byte != 0) return Error.InvalidHeader;
+    for (bytes[300..320]) |byte| if (byte != 0) return Error.InvalidHeader;
+    const host_module_offset = readU32(bytes, 288);
+    const host_module_count = readU32(bytes, 292);
+    const host_record_size = readU32(bytes, 296);
 
     const import_count = readU32(bytes, 48);
     const export_count = readU32(bytes, 56);
@@ -182,7 +194,14 @@ pub fn parse(bytes: []const u8) Error!Profile {
     const export_offset = try add(import_offset, try mul(import_count, import_record_size));
     const runtime_offset = try add(export_offset, try mul(export_count, export_record_size));
     const binding_offset = try add(runtime_offset, try mul(runtime_count, runtime_symbol_record_size));
-    const string_offset = try add(binding_offset, try mul(binding_count, binding_record_size));
+    const after_bindings = try add(binding_offset, try mul(binding_count, binding_record_size));
+    const host_section_width: u32 = if (host_module_count == 0 and host_module_offset == 0 and host_record_size == 0)
+        0
+    else if (host_module_count > 0 and host_module_count <= 64 and host_record_size == host_module_record_size and host_module_offset == after_bindings)
+        try mul(host_module_count, host_module_record_size)
+    else
+        return Error.NonCanonicalLayout;
+    const string_offset = try add(after_bindings, host_section_width);
     if (readU32(bytes, 44) != import_offset or readU32(bytes, 52) != export_offset or readU32(bytes, 60) != runtime_offset or readU32(bytes, 68) != binding_offset or readU32(bytes, 36) != string_offset or try add(string_offset, readU32(bytes, 40)) != bytes.len) return Error.NonCanonicalLayout;
     if (readU32(bytes, 20) == 0 or readU32(bytes, 24) < readU32(bytes, 20) or readU32(bytes, 28) == 0 or readU32(bytes, 32) < readU32(bytes, 28)) return Error.InvalidHeader;
 
@@ -209,6 +228,8 @@ pub fn parse(bytes: []const u8) Error!Profile {
         .runtime_symbol_count = runtime_count,
         .binding_offset = binding_offset,
         .binding_count = binding_count,
+        .host_module_offset = host_module_offset,
+        .host_module_count = host_module_count,
     };
     profile.profile_id = try profile.stringAt(readU32(bytes, 104), readU32(bytes, 108));
 
@@ -249,7 +270,25 @@ pub fn parse(bytes: []const u8) Error!Profile {
         previous_role = role_value;
     }
     inline for (.{ .{ Role.program_pointer, Kind.global }, .{ Role.generated_data_arena, Kind.global }, .{ Role.generated_data_capacity, Kind.global }, .{ Role.memory, Kind.memory }, .{ Role.protected_dispatch, Kind.function }, .{ Role.alloc, Kind.function }, .{ Role.dealloc, Kind.function }, .{ Role.context_create, Kind.function }, .{ Role.context_destroy, Kind.function }, .{ Role.invoke, Kind.function }, .{ Role.initialize, Kind.function } }) |required| _ = try profile.bindingName(required[0], required[1]);
+    var previous_host: ?[]const u8 = null;
+    index = 0;
+    while (index < host_module_count) : (index += 1) {
+        const name = try profile.hostModule(index);
+        if (!validHostModuleName(name)) return Error.InvalidString;
+        if (previous_host) |previous| if (std.mem.order(u8, previous, name) != .lt) return Error.NonCanonicalOrder;
+        previous_host = name;
+    }
     return profile;
+}
+
+fn validHostModuleName(name: []const u8) bool {
+    if (name.len == 0 or name[0] == '/' or name[name.len - 1] == '/' or std.mem.indexOf(u8, name, "..") != null)
+        return false;
+    for (name) |byte| switch (byte) {
+        'a'...'z', '0'...'9', '_', '-', '.', '/' => {},
+        else => return false,
+    };
+    return true;
 }
 
 pub fn validatePackManifest(pack: []const u8, profile_bytes: []const u8) Error!void {

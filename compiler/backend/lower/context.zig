@@ -116,7 +116,9 @@ pub const Context = struct {
     get_varargs_fixed: ?wasm.FunctionRef,
     get_varargs_multret: ?wasm.FunctionRef,
     require_static: ?wasm.FunctionRef,
+    host_module_missing: ?wasm.FunctionRef,
     static_package: ?static_package_v1.Package,
+    host_modules: []const []const u8,
     function_id_base: u32,
     proto_id_by_bytecode_id: []const u32,
     base_local: u32,
@@ -573,6 +575,7 @@ pub const Context = struct {
     pub const emitDecodedGlobalImport = calls.emitDecodedGlobalImport;
     pub const staticRequireTarget = calls.staticRequireTarget;
     pub const emitStaticRequire = calls.emitStaticRequire;
+    pub const emitHostModuleRequire = calls.emitHostModuleRequire;
     pub const isTableInsertAppendSafeEnv = calls.isTableInsertAppendSafeEnv;
     pub const emitStatusCheckedCall = calls.emitStatusCheckedCall;
     pub const emitSafeEnvCheck = calls.emitSafeEnvCheck;

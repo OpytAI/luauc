@@ -634,7 +634,10 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             continue;
         }
         if (try self.staticRequireTarget(instruction_id, block)) |require| {
-            try self.emitStaticRequire(require.interrupt_id, require.destination, require.module_id);
+            switch (require.kind) {
+                .package => try self.emitStaticRequire(require.interrupt_id, require.destination, require.module_id),
+                .host => try self.emitHostModuleRequire(require.interrupt_id, require.destination, require.name),
+            }
             instruction_id = require.end;
             continue;
         }
@@ -845,11 +848,18 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
         },
         .static_require_interrupt => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
-            try self.emitStaticRequire(
-                suffix.require.interrupt_id,
-                suffix.require.destination,
-                suffix.require.module_id,
-            );
+            switch (suffix.require.kind) {
+                .package => try self.emitStaticRequire(
+                    suffix.require.interrupt_id,
+                    suffix.require.destination,
+                    suffix.require.module_id,
+                ),
+                .host => try self.emitHostModuleRequire(
+                    suffix.require.interrupt_id,
+                    suffix.require.destination,
+                    suffix.require.name,
+                ),
+            }
             const terminated = try self.emitInstructionRange(suffix.suffix_start, suffix.block_finish, block);
             if (!terminated)
                 return Error.InvalidBlockTermination;

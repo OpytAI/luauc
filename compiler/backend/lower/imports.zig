@@ -76,6 +76,7 @@ const prep_varargs_symbol = abi.prep_varargs_symbol;
 const get_varargs_fixed_symbol = abi.get_varargs_fixed_symbol;
 const get_varargs_multret_symbol = abi.get_varargs_multret_symbol;
 const require_static_symbol = abi.require_static_symbol;
+const host_module_missing_symbol = abi.host_module_missing_symbol;
 const ir_cmd_table_len = abi.ir_cmd_table_len;
 const ir_cmd_get_arr_addr = abi.ir_cmd_get_arr_addr;
 const ir_cmd_new_table = abi.ir_cmd_new_table;
@@ -205,6 +206,7 @@ pub const RuntimeImports = struct {
     get_varargs_fixed: ?wasm.FunctionRef,
     get_varargs_multret: ?wasm.FunctionRef,
     require_static: ?wasm.FunctionRef,
+    host_module_missing: ?wasm.FunctionRef,
     generated_type: u32,
 };
 
@@ -253,6 +255,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const get_varargs_fixed_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const get_varargs_multret_params = [_]wasm.ValueType{ .i32, .i32 };
     const require_static_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
+    const host_module_missing_params = [_]wasm.ValueType{ .i32, .i32, .i32 };
     const fastcall_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 };
     const type_name_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32 };
     const builtin_type_error_params = [_]wasm.ValueType{ .i32, .i32, .i32, .i32, .i32, .i32 };
@@ -520,6 +523,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         const helper_type = try object.addType(.{ .params = &require_static_params, .results = &status_result });
         break :blk try object.importFunction("env", require_static_symbol, helper_type);
     } else null;
+    const host_module_missing = if (needs.host_module_missing) blk: {
+        const helper_type = try object.addType(.{ .params = &host_module_missing_params, .results = &no_results });
+        break :blk try object.importFunction("env", host_module_missing_symbol, helper_type);
+    } else null;
     const check_safe_env = if (needs.check_safe_env) blk: {
         const helper_type = try object.addType(.{ .params = &state_params, .results = &status_result });
         break :blk try object.importFunction("env", check_safe_env_symbol, helper_type);
@@ -625,6 +632,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .get_varargs_fixed = get_varargs_fixed,
         .get_varargs_multret = get_varargs_multret,
         .require_static = require_static,
+        .host_module_missing = host_module_missing,
         .generated_type = generated_type,
     };
 }

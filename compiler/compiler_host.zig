@@ -20,7 +20,7 @@ const FrontendResult = extern struct {
 extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_compile_inlined(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, plans: [*]const source_package.InlinePlan, plan_count: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_free(result: *FrontendResult) void;
-extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, result_pointer: u32) u32;
+extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, host_modules_pointer: u32, host_modules_size: u32, result_pointer: u32) u32;
 extern fn luauc_backend_component_v1_free(result_pointer: u32) void;
 
 const ContextResult = extern struct {
@@ -299,6 +299,30 @@ fn buildSnapshotPackage(package: source_package.Package, frontend_results: []Fro
     return frame;
 }
 
+fn encodeHostModuleList(profile: runtime_profile.Profile) ![]u8 {
+    var size: usize = 16;
+    var index: u32 = 0;
+    while (index < profile.host_module_count) : (index += 1) {
+        const name = try profile.hostModule(index);
+        size = std.math.add(usize, size, 4 + name.len) catch return error.OutOfMemory;
+    }
+    const blob = try allocator.alloc(u8, size);
+    @memcpy(blob[0..8], "LUAHC1\x00\x00");
+    std.mem.writeInt(u16, blob[8..10], 1, .little);
+    std.mem.writeInt(u16, blob[10..12], 16, .little);
+    std.mem.writeInt(u32, blob[12..16], profile.host_module_count, .little);
+    var cursor: usize = 16;
+    index = 0;
+    while (index < profile.host_module_count) : (index += 1) {
+        const name = try profile.hostModule(index);
+        std.mem.writeInt(u32, blob[cursor..][0..4], @intCast(name.len), .little);
+        cursor += 4;
+        @memcpy(blob[cursor..][0..name.len], name);
+        cursor += name.len;
+    }
+    return blob;
+}
+
 pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: u32, result_pointer: u32) u32 {
     ensureConstructors();
     if (request_pointer == 0 or request_size == 0 or result_pointer == 0 or rangesOverlap(request_pointer, request_size, result_pointer, @sizeOf(CompileResult))) return status_invalid_argument;
@@ -365,10 +389,14 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
     }
     const snapshot_package = buildSnapshotPackage(package, frontend_results) catch |err| return publishError(result, status_resource_limit, err);
     defer allocator.free(snapshot_package);
+    const host_module_blob = encodeHostModuleList(profile) catch |err| return publishError(result, status_resource_limit, err);
+    defer allocator.free(host_module_blob);
     var backend_result: backend_component.Result = .{};
     const backend_status = luauc_backend_component_v1_compile_static_package(
         @intCast(@intFromPtr(snapshot_package.ptr)),
         @intCast(snapshot_package.len),
+        @intCast(@intFromPtr(host_module_blob.ptr)),
+        @intCast(host_module_blob.len),
         @intCast(@intFromPtr(&backend_result)),
     );
     defer luauc_backend_component_v1_free(@intCast(@intFromPtr(&backend_result)));
@@ -377,11 +405,13 @@ pub export fn luauc_v1_compile(handle: u32, request_pointer: u32, request_size: 
             const pointer: [*]const u8 = @ptrFromInt(backend_result.diagnostic);
             break :diagnostic pointer[0..backend_result.diagnostic_size];
         } else "backend compilation failed";
-        return publishDiagnostic(
-            result,
-            if (backend_status == backend_component.status_resource_limit or backend_result.status == backend_component.status_resource_limit) status_resource_limit else status_backend_failure,
-            diagnostic,
-        );
+        const failure = if (backend_status == backend_component.status_resource_limit or backend_result.status == backend_component.status_resource_limit)
+            status_resource_limit
+        else if (std.mem.startsWith(u8, diagnostic, "InvalidHostModuleList"))
+            status_invalid_request
+        else
+            status_backend_failure;
+        return publishDiagnostic(result, failure, diagnostic);
     }
     if (backend_result.diagnostic != 0 and backend_result.diagnostic_size != 0) {
         const dump_pointer: [*]const u8 = @ptrFromInt(backend_result.diagnostic);

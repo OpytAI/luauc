@@ -5,8 +5,8 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5",
   "input_sha256": {
-    "compiler": "d1e658cac5b1da4a05d9ca7a922ad67bd91d58b3c0f6bd306a0fec2ec08b7510",
-    "pack": "c0c75482914faf85895086e43743893c1ca4b7423098836a766719710a9400e1",
+    "compiler": "04065fbd30a19255e4fea5302fae67a77337e0f6ecc398ccfed43bcd7f35c48b",
+    "pack": "81044ae3934323d065101c79718bedb60c80f5f13a3899692705960213154fc5",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "permitted": [
@@ -35,7 +35,7 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "d1e658cac5b1da4a05d9ca7a922ad67bd91d58b3c0f6bd306a0fec2ec08b7510",
+      "sha256": "04065fbd30a19255e4fea5302fae67a77337e0f6ecc398ccfed43bcd7f35c48b",
       "export_names": [
         "luauc_v1_alloc",
         "luauc_v1_compile",
@@ -47,7 +47,7 @@
         "memory"
       ],
       "import_names": [],
-      "function_count": 3493,
+      "function_count": 3497,
       "memory_min": 1024,
       "features": [
         "bulk-memory",
@@ -61,7 +61,7 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "c0c75482914faf85895086e43743893c1ca4b7423098836a766719710a9400e1",
+      "sha256": "81044ae3934323d065101c79718bedb60c80f5f13a3899692705960213154fc5",
       "export_names": [
         "__stack_pointer",
         "_start",
@@ -122,6 +122,7 @@
         "luauc_runtime_v1_get_varargs_fixed",
         "luauc_runtime_v1_get_varargs_multret",
         "luauc_runtime_v1_hash_node_addr",
+        "luauc_runtime_v1_host_module_missing",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_libm",
         "luauc_runtime_v1_load_constant",
@@ -165,7 +166,7 @@
         "luauc_embed_v1.protected_call",
         "luauc_embed_v1.set_throw"
       ],
-      "function_count": 1040,
+      "function_count": 1041,
       "memory_min": 1024,
       "features": [
         "bulk-memory",
@@ -195,5 +196,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "148e5a3b0164b1eb44d1dd714e112a4b6c5eca6996853b77d60bd91ce550766a"
+  "canonical_hash": "0641c7a3e8e338ffee8a7525c35d7354365279b02797f4f79377778b2bfeed5e"
 }

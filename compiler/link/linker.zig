@@ -1565,6 +1565,8 @@ fn dummyProfile() runtime_profile.Profile {
         .runtime_symbol_count = 0,
         .binding_offset = 0,
         .binding_count = 0,
+        .host_module_offset = 0,
+        .host_module_count = 0,
     };
 }
 

@@ -68,6 +68,7 @@ zig_library(
         "//compiler/model:diagnostics",
         "//compiler/model:model",
         "//compiler/model:runtime_abi",
+        "//compiler/model:static_package_v1",
     ],
 )
 

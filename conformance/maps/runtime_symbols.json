@@ -5,9 +5,9 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "ba6ee1a8f69d21d281e32bb313d2e68dfc7af5bd141fee2c6c43e216a472cda5",
   "input_sha256": {
-    "runtime_symbols_bzl": "c9166ab4c5eb699c65f012e873f924d831f98bfbe133e8dd31c4cceefc5be01f",
-    "aot_runtime_v1_h": "32fb226fc37f7e2f579190156183884bfb5f7fbaffc8706acc6413224f234b1e",
-    "embed_build": "fc8748a04f71f668a5aa2cef731b16d1deba7a780527ff008b13a31b79dac6ed"
+    "runtime_symbols_bzl": "fdc6ba8d60cf45e7ef8036d0f9efedf145e3d4442457496414c6f6a1fc4dcc20",
+    "aot_runtime_v1_h": "bff763a7788afe71e604a0364b46825bb79fa7b04cf0e9c735d345b672baaa00",
+    "embed_build": "65d4e1783385af99c280f6ae07682828b6c330a272cf6d45e3320b4f4f74ec19"
   },
   "generated_runtime_module": "env",
   "generated_runtime_symbols": [
@@ -51,6 +51,7 @@
     "luauc_runtime_v1_get_upvalue",
     "luauc_runtime_v1_get_varargs_fixed",
     "luauc_runtime_v1_get_varargs_multret",
+    "luauc_runtime_v1_host_module_missing",
     "luauc_runtime_v1_interrupt",
     "luauc_runtime_v1_libm",
     "luauc_runtime_v1_load_constant",
@@ -137,6 +138,7 @@
     "luauc_runtime_v1_get_varargs_fixed",
     "luauc_runtime_v1_get_varargs_multret",
     "luauc_runtime_v1_hash_node_addr",
+    "luauc_runtime_v1_host_module_missing",
     "luauc_runtime_v1_interrupt",
     "luauc_runtime_v1_layout_sha256",
     "luauc_runtime_v1_libm",
@@ -205,5 +207,5 @@
     "match": "symbol_name",
     "note": "Generated objects export this data symbol; the linker matches it by name, not as a pack function export. Object import modules are rewritten to generated_runtime_module before resolution."
   },
-  "canonical_hash": "39e16908957dd8b2963e77e809e2e599202c4dc7e0b9856f6ef8954671cd6669"
+  "canonical_hash": "358d34d08b6b556d544cf0414dfdc7a1d37e24badf698b0f012f4a92ddf6c9a0"
 }

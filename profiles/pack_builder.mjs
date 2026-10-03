@@ -34,6 +34,14 @@ function requireExactKeys(value, keys, description) {
     throw new Error(`${description} has unknown or missing fields`);
 }
 
+function requireModuleName(value, description) {
+  const name = requireName(value, description);
+  if (name.startsWith("/") || name.endsWith("/") || name.includes("..") ||
+      [...name].some((character) => !/[a-z0-9_\-./]/.test(character)))
+    throw new Error(`${description} is not a module name`);
+  return name;
+}
+
 function requireName(value, description) {
   const bytes = typeof value === "string" ? Buffer.from(value) : null;
   if (!bytes || !value.length || bytes.toString("utf8") !== value || bytes.includes(0) || [...value].some((character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f))
@@ -42,7 +50,9 @@ function requireName(value, description) {
 }
 
 const policy = requireObject(JSON.parse(readFileSync(policyPath, "utf8")), "runtime profile policy");
-requireExactKeys(policy, ["version", "profile_id", "bindings", "retained_exports"], "runtime profile policy");
+const policyKeys = ["version", "profile_id", "bindings", "retained_exports"];
+if (Object.hasOwn(policy, "host_modules")) policyKeys.push("host_modules");
+requireExactKeys(policy, policyKeys, "runtime profile policy");
 if (policy.version !== 1) throw new Error("unsupported runtime profile policy version");
 const profileId = requireName(policy.profile_id, "profile_id");
 if (!Array.isArray(policy.bindings) || !Array.isArray(policy.retained_exports)) throw new Error("runtime profile policy arrays are malformed");
@@ -63,6 +73,20 @@ for (const [index, rawBinding] of policy.bindings.entries()) {
   policyBindings.push({ name: bindingName, role: spec.role, kind: spec.kind, retain: spec.retain });
 }
 for (const [roleName, spec] of roleSpecs) if (spec.required && !seenRoles.has(spec.role)) throw new Error(`missing required binding ${roleName}`);
+
+const hostModules = [];
+if (Object.hasOwn(policy, "host_modules")) {
+  if (!Array.isArray(policy.host_modules) || policy.host_modules.length < 1 || policy.host_modules.length > 64)
+    throw new Error("host_modules is malformed");
+  let previous = null;
+  for (const [index, rawName] of policy.host_modules.entries()) {
+    const name = requireModuleName(rawName, `host_modules ${index}`);
+    if (previous !== null && Buffer.compare(Buffer.from(previous), Buffer.from(name)) >= 0)
+      throw new Error(`host_modules ${index} is not strictly sorted`);
+    previous = name;
+    hostModules.push(name);
+  }
+}
 
 const additionalRetained = [];
 const seenRetainedNames = new Set(policyBindings.map((binding) => binding.name));
@@ -225,13 +249,15 @@ const generatedRuntimeModule = "env";
 stringRef(generatedRuntimeModule);
 for (const item of runtimeSymbols) stringRef(item.name);
 for (const item of bindings) stringRef(item.name);
+for (const name of hostModules) stringRef(name);
 
-const headerSize = 320, importSize = 24, exportSize = 16, runtimeSize = 24, bindingSize = 16;
+const headerSize = 320, importSize = 24, exportSize = 16, runtimeSize = 24, bindingSize = 16, hostModuleSize = 8;
 const importOffset = headerSize;
 const exportOffset = importOffset + imports.length * importSize;
 const runtimeOffset = exportOffset + retained.length * exportSize;
 const bindingOffset = runtimeOffset + runtimeSymbols.length * runtimeSize;
-const stringOffset = bindingOffset + bindings.length * bindingSize;
+const hostModuleOffset = bindingOffset + bindings.length * bindingSize;
+const stringOffset = hostModuleOffset + hostModules.length * hostModuleSize;
 const profile = Buffer.alloc(stringOffset + stringSize);
 Buffer.from("LUACRP1\0", "binary").copy(profile, 0);
 profile.writeUInt16LE(1, 8); profile.writeUInt16LE(headerSize, 10); profile.writeUInt32LE(profile.length, 12);
@@ -257,6 +283,11 @@ for (const path of licensePaths) {
   licenseInventory.update(size).update(content);
 }
 licenseInventory.digest().copy(profile, 256);
+if (hostModules.length !== 0) {
+  profile.writeUInt32LE(hostModuleOffset, 288);
+  profile.writeUInt32LE(hostModules.length, 292);
+  profile.writeUInt32LE(hostModuleSize, 296);
+}
 
 for (let index = 0; index < imports.length; index++) {
   const record = importOffset + index * importSize, item = imports[index], module = stringRef(item.module), importName = stringRef(item.name);
@@ -280,6 +311,10 @@ for (let index = 0; index < bindings.length; index++) {
   const record = bindingOffset + index * bindingSize, item = bindings[index], ref = stringRef(item.name);
   profile.writeUInt32LE(ref.offset, record); profile.writeUInt32LE(ref.size, record + 4);
   profile.writeUInt16LE(item.role, record + 8); profile[record + 10] = item.kind;
+}
+for (let index = 0; index < hostModules.length; index++) {
+  const record = hostModuleOffset + index * hostModuleSize, ref = stringRef(hostModules[index]);
+  profile.writeUInt32LE(ref.offset, record); profile.writeUInt32LE(ref.size, record + 4);
 }
 Buffer.concat(stringParts).copy(profile, stringOffset);
 

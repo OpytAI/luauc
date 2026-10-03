@@ -64,6 +64,7 @@ pub const prep_varargs_symbol = abi.prep_varargs_symbol;
 pub const get_varargs_fixed_symbol = abi.get_varargs_fixed_symbol;
 pub const get_varargs_multret_symbol = abi.get_varargs_multret_symbol;
 pub const require_static_symbol = abi.require_static_symbol;
+pub const host_module_missing_symbol = abi.host_module_missing_symbol;
 pub const generated_protos_symbol = abi.generated_protos_symbol;
 pub const generated_modules_symbol = abi.generated_modules_symbol;
 pub const generated_program_symbol = abi.generated_program_symbol;

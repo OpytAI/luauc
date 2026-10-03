@@ -44,6 +44,7 @@ AOT_GENERATED_RUNTIME_SYMBOLS = [
     "luauc_runtime_v1_get_upvalue",
     "luauc_runtime_v1_get_varargs_fixed",
     "luauc_runtime_v1_get_varargs_multret",
+    "luauc_runtime_v1_host_module_missing",
     "luauc_runtime_v1_interrupt",
     "luauc_runtime_v1_libm",
     "luauc_runtime_v1_load_constant",

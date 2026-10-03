@@ -110,6 +110,8 @@ js_test(
         "//profiles/embed:embed_v1_pack",
         "//profiles/embed:embed_alt_v1_profile",
         "//profiles/embed:embed_alt_v1_pack",
+        "//profiles/embed:embed_host_modules_v1_profile",
+        "//profiles/embed:embed_host_modules_v1_pack",
     ],
     entry_point = "compiler_api.test.mjs",
     env = {
@@ -118,5 +120,7 @@ js_test(
         "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
         "LUAUC_EMBED_ALT_PROFILE": "$(rlocationpath //profiles/embed:embed_alt_v1_profile)",
         "LUAUC_EMBED_ALT_PACK": "$(rlocationpath //profiles/embed:embed_alt_v1_pack)",
+        "LUAUC_HOST_MODULES_PROFILE": "$(rlocationpath //profiles/embed:embed_host_modules_v1_profile)",
+        "LUAUC_HOST_MODULES_PACK": "$(rlocationpath //profiles/embed:embed_host_modules_v1_pack)",
     },
 )

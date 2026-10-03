@@ -61,14 +61,21 @@ export fn luauc_backend_component_v1_compile_package(
 export fn luauc_backend_component_v1_compile_static_package(
     package_pointer: u32,
     package_size: u32,
+    host_modules_pointer: u32,
+    host_modules_size: u32,
     result_pointer: u32,
 ) u32 {
-    if (package_pointer == 0 or package_size == 0 or result_pointer == 0)
+    if (package_pointer == 0 or package_size == 0 or host_modules_pointer == 0 or host_modules_size == 0 or result_pointer == 0)
         return api.status_invalid_argument;
 
     const result: *api.Result = @ptrFromInt(result_pointer);
     const package_bytes: [*]const u8 = @ptrFromInt(package_pointer);
-    return publishObject(result, lower.buildStaticPackage(allocator, package_bytes[0..package_size]));
+    const host_module_bytes: [*]const u8 = @ptrFromInt(host_modules_pointer);
+    return publishObject(result, lower.buildStaticPackage(
+        allocator,
+        package_bytes[0..package_size],
+        host_module_bytes[0..host_modules_size],
+    ));
 }
 
 export fn luauc_backend_component_v1_free(result_pointer: u32) void {

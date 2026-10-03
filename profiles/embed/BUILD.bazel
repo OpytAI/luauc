@@ -64,6 +64,13 @@ luauc_runtime_profile(
     visibility = ["//visibility:public"],
 )
 
+luauc_runtime_profile(
+    name = "embed_host_modules_v1",
+    policy = "host_modules.policy.json",
+    raw_pack = ":embed_v1_raw_pack",
+    visibility = ["//visibility:public"],
+)
+
 build_test(
     name = "runtime_profiles_build_test",
     targets = [":embed_v1_pack_files", ":embed_alt_v1_pack_files"],

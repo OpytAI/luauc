@@ -14,7 +14,7 @@ const CompileResult = extern struct {
 
 extern fn luauc_backend_component_v1_compile(snapshot_pointer: u32, snapshot_size: u32, function_id: u32, result_pointer: u32) u32;
 extern fn luauc_backend_component_v1_compile_package(snapshot_pointer: u32, snapshot_size: u32, result_pointer: u32) u32;
-extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, result_pointer: u32) u32;
+extern fn luauc_backend_component_v1_compile_static_package(package_pointer: u32, package_size: u32, host_modules_pointer: u32, host_modules_size: u32, result_pointer: u32) u32;
 
 export fn luauc_backend_v1_alloc(size: u32) u32 {
     if (size == 0)
@@ -72,8 +72,18 @@ export fn luauc_backend_v1_compile_static_package(package_pointer: u32, package_
         return component.status_invalid_argument;
 
     const result: *CompileResult = @ptrFromInt(result_pointer);
+    var empty_host_modules = [_]u8{0} ** 16;
+    @memcpy(empty_host_modules[0..8], "LUAHC1\x00\x00");
+    std.mem.writeInt(u16, empty_host_modules[8..10], 1, .little);
+    std.mem.writeInt(u16, empty_host_modules[10..12], 16, .little);
     var component_result: component.Result = .{};
-    const status = luauc_backend_component_v1_compile_static_package(package_pointer, package_size, @intCast(@intFromPtr(&component_result)));
+    const status = luauc_backend_component_v1_compile_static_package(
+        package_pointer,
+        package_size,
+        @intCast(@intFromPtr(&empty_host_modules)),
+        empty_host_modules.len,
+        @intCast(@intFromPtr(&component_result)),
+    );
     return publishComponent(result, component_result, status);
 }
 

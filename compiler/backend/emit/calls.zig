@@ -3,7 +3,6 @@ const snapshot_v1 = @import("frontend_snapshot_v1");
 const wasm = @import("luauc_wasm_object");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
-const admission = @import("luauc_backend_admission");
 
 const StringKeyPool = model.StringKeyPool;
 const Error = model.Error;
@@ -522,79 +521,15 @@ fn emitCachedImportHit(self: anytype, destination: u32, import_id: u32) Error!vo
 }
 pub fn staticRequireTarget(self: anytype, start: u32, block: snapshot_v1.IrBlock) Error!?StaticRequirePattern {
     const package = self.static_package orelse return null;
-    const first = try self.instruction(start);
-    const has_marker = first.command == .nop or first.command == .check_safe_env;
-    const get_id = std.math.add(u32, start, @intFromBool(has_marker)) catch return Error.ResourceLimit;
-    const end = std.math.add(u32, get_id, 5) catch return Error.ResourceLimit;
-    if (start < block.start or end > block.finish)
-        return null;
-
-    const get_import = try self.instruction(get_id);
-    const load_path = try self.instruction(get_id + 1);
-    const store_path = try self.instruction(get_id + 2);
-    const interrupt = try self.instruction(get_id + 3);
-    const saved_pc = try self.instruction(get_id + 4);
-    const call = try self.instruction(get_id + 5);
-    if (get_import.command != .get_cached_import or load_path.command != .load_tvalue or
-        store_path.command != .store_tvalue or interrupt.command != .interrupt or
-        saved_pc.command != .set_savedpc or call.command != .call)
-        return null;
-    if (!try admission.isRequireImportInstruction(self.snapshot, self.function, self.proto, get_import))
-        return null;
-    if (has_marker and first.command == .nop) {
-        var prefix = block.start;
-        if (prefix < start and (try self.instruction(prefix)).command == .fallback_prepvarargs)
-            prefix += 1;
-        while (prefix < start and (try self.instruction(prefix)).command == .coverage)
-            prefix += 1;
-        if (prefix != start or (block.flags & (1 << 0)) == 0 or first.operand_count != 0)
-            return Error.UnsupportedControlFlow;
-    } else if (has_marker) {
-        try self.requireOperandCount(first, 1);
-        const failure = try self.operand(first, 0);
-        if (failure.kind != .vm_exit)
-            return Error.UnsupportedControlFlow;
-    }
-
-    try self.requireOperandCount(get_import, 4);
-    const destination = try self.vmRegisterIndex(try self.operand(get_import, 0));
-    const import_pc = try self.operand(get_import, 3);
-    if (import_pc.kind != .constant or (try self.constant(import_pc.value)).uintValue() == null)
-        return Error.InvalidOperandType;
-
-    try self.requireOperandCount(load_path, 3);
-    const path_operand = try self.operand(load_path, 0);
-    const path = try self.vmString(path_operand);
-    const load_offset = try self.operand(load_path, 1);
-    const load_tag = try self.operand(load_path, 2);
-    if (load_offset.kind != .constant or (try self.constant(load_offset.value)).intValue() != 0 or
-        load_tag.kind != .constant or (try self.constant(load_tag.value)).tagValue() != lua_tag_string)
-        return Error.UnsupportedControlFlow;
-
-    try self.requireOperandCount(store_path, 2);
-    const argument = try self.vmRegisterIndex(try self.operand(store_path, 0));
-    const stored = try self.operand(store_path, 1);
-    if (argument != destination + 1 or stored.kind != .instruction or stored.value != get_id + 1)
-        return Error.UnsupportedControlFlow;
-
-    try self.requireOperandCount(interrupt, 1);
-    const interrupt_pc = try self.operand(interrupt, 0);
-    if (interrupt_pc.kind != .constant or (try self.constant(interrupt_pc.value)).uintValue() == null)
-        return Error.InvalidOperandType;
-    _ = try self.savedPc(saved_pc);
-
-    try self.requireOperandCount(call, 3);
-    if (try self.vmRegisterIndex(try self.operand(call, 0)) != destination)
-        return Error.UnsupportedControlFlow;
-    const parameter_count = try self.operand(call, 1);
-    const result_count = try self.operand(call, 2);
-    if (parameter_count.kind != .constant or result_count.kind != .constant or
-        (try self.constant(parameter_count.value)).intValue() != 1 or
-        (try self.constant(result_count.value)).intValue() != 1)
-        return Error.UnsupportedControlFlow;
-
-    const target = package.moduleByName(path) orelse return Error.UnsupportedControlFlow;
-    return .{ .end = end, .interrupt_id = get_id + 3, .destination = destination, .module_id = target.id };
+    return model.classifyStaticRequire(
+        self.snapshot,
+        self.function,
+        self.proto,
+        block,
+        start,
+        package,
+        self.host_modules,
+    );
 }
 pub noinline fn emitStaticRequire(self: anytype, interrupt_id: u32, destination: u32, module_id: u32) Error!void {
     // The source CALL cluster carries its ordinary interrupt/fuel safepoint. Static resolution
@@ -611,6 +546,43 @@ pub noinline fn emitStaticRequire(self: anytype, interrupt_id: u32, destination:
     try self.body.else_(self.allocator);
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+}
+pub noinline fn emitHostModuleRequire(self: anytype, interrupt_id: u32, destination: u32, name: []const u8) Error!void {
+    try self.emitInterrupt(interrupt_id, try self.instruction(interrupt_id));
+    const package_key = try self.string_keys.intern(self.allocator, "package");
+    const loaded_key = try self.string_keys.intern(self.allocator, "loaded");
+    const name_key = try self.string_keys.intern(self.allocator, name);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(package_key.offset));
+    try self.body.i32Const(self.allocator, @intCast(package_key.length));
+    try self.body.call(self.allocator, self.get_global orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(loaded_key.offset));
+    try self.body.i32Const(self.allocator, @intCast(loaded_key.length));
+    try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(name_key.offset));
+    try self.body.i32Const(self.allocator, @intCast(name_key.length));
+    try self.body.call(self.allocator, self.table_get_string orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, destination * tvalue_size + tvalue_tag_offset);
+    try self.body.i32Const(self.allocator, lua_tag_nil);
+    try self.body.i32Eq(self.allocator);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(name_key.offset));
+    try self.body.i32Const(self.allocator, @intCast(name_key.length));
+    try self.body.call(self.allocator, self.host_module_missing orelse return Error.UnsupportedCommand);
+    try self.body.opcode(self.allocator, 0x00);
     try self.body.end(self.allocator);
 }
 pub fn isTableInsertAppendSafeEnv(self: anytype, instruction_id: u32) Error!bool {

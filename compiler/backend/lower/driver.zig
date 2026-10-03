@@ -152,6 +152,7 @@ fn lowerFunction(
     imports: runtime_imports.RuntimeImports,
     symbol_name: []const u8,
     static_package: ?static_package_v1.Package,
+    host_modules: []const []const u8,
     function_id_base: u32,
     proto_id_by_bytecode_id: []const u32,
     string_keys: *StringKeyPool,
@@ -178,7 +179,7 @@ fn lowerFunction(
         return Error.UnsupportedControlFlow;
     }
 
-    var plan = FunctionPlan.init(allocator, snapshot, function, static_package != null) catch |err| {
+    var plan = FunctionPlan.init(allocator, snapshot, function, static_package != null, static_package, host_modules) catch |err| {
         diagnostics.recordPhase(@errorName(err), "function planning");
         return err;
     };
@@ -362,7 +363,9 @@ fn lowerFunction(
         .get_varargs_fixed = imports.get_varargs_fixed,
         .get_varargs_multret = imports.get_varargs_multret,
         .require_static = imports.require_static,
+        .host_module_missing = imports.host_module_missing,
         .static_package = static_package,
+        .host_modules = host_modules,
         .function_id_base = function_id_base,
         .proto_id_by_bytecode_id = proto_id_by_bytecode_id,
         .base_local = 2,
@@ -660,7 +663,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var needs = runtime_imports.ImportNeeds{};
     {
         const function = try snapshot.irFunction(function_id);
-        model.scanImportNeedsFor(snapshot, function, false, &needs) catch |err| {
+        model.scanImportNeedsFor(snapshot, function, false, &needs, null, &.{}) catch |err| {
             diagnostics.recordPhase(@errorName(err), "runtime import planning");
             return err;
         };
@@ -670,7 +673,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
-    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null);
+    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, &.{}, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null);
     try emitStringKeyData(&object, string_keys);
     return object.emit();
 }
@@ -686,7 +689,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     var function_id: u32 = 0;
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const function = try snapshot.irFunction(function_id);
-        try model.scanImportNeedsFor(snapshot, function, false, &needs);
+        try model.scanImportNeedsFor(snapshot, function, false, &needs, null, &.{});
     }
 
     var object = wasm.Object.init(allocator);
@@ -713,6 +716,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
             imports,
             symbol_name,
             null,
+            &.{},
             0,
             proto_id_by_bytecode_id,
             &string_keys,
@@ -1138,9 +1142,60 @@ fn emitStaticPackageMetadata(
     try object.relocateDataMemoryAddress(program, 56, modules, 0);
 }
 
-pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u8) Error![]u8 {
+fn validHostModuleBlobName(name: []const u8) bool {
+    if (name.len == 0 or name[0] == '/' or name[name.len - 1] == '/' or std.mem.indexOf(u8, name, "..") != null)
+        return false;
+    for (name) |byte| switch (byte) {
+        'a'...'z', '0'...'9', '_', '-', '.', '/' => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn parseHostModuleList(allocator: std.mem.Allocator, bytes: []const u8) Error![]const []const u8 {
+    if (bytes.len < 16 or !std.mem.eql(u8, bytes[0..8], "LUAHC1\x00\x00"))
+        return Error.InvalidHostModuleList;
+    if (std.mem.readInt(u16, bytes[8..10], .little) != 1 or std.mem.readInt(u16, bytes[10..12], .little) != 16)
+        return Error.InvalidHostModuleList;
+    const count = std.mem.readInt(u32, bytes[12..16], .little);
+    if (count > 64)
+        return Error.InvalidHostModuleList;
+    if (count == 0) {
+        if (bytes.len != 16)
+            return Error.InvalidHostModuleList;
+        return &.{};
+    }
+    const names = try allocator.alloc([]const u8, count);
+    errdefer allocator.free(names);
+    var cursor: usize = 16;
+    var previous: ?[]const u8 = null;
+    for (names) |*name| {
+        if (cursor + 4 > bytes.len)
+            return Error.InvalidHostModuleList;
+        const length = std.mem.readInt(u32, bytes[cursor..][0..4], .little);
+        cursor += 4;
+        const finish = std.math.add(usize, cursor, length) catch return Error.InvalidHostModuleList;
+        if (length == 0 or finish > bytes.len)
+            return Error.InvalidHostModuleList;
+        const value = bytes[cursor..finish];
+        cursor = finish;
+        if (!validHostModuleBlobName(value))
+            return Error.InvalidHostModuleList;
+        if (previous) |prior| if (std.mem.order(u8, prior, value) != .lt)
+            return Error.InvalidHostModuleList;
+        previous = value;
+        name.* = value;
+    }
+    if (cursor != bytes.len)
+        return Error.InvalidHostModuleList;
+    return names;
+}
+
+pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u8, host_module_bytes: []const u8) Error![]u8 {
     diagnostics.reset();
     const package = try static_package_v1.parse(package_bytes);
+    const host_modules = try parseHostModuleList(allocator, host_module_bytes);
+    defer if (host_modules.len != 0) allocator.free(host_modules);
     const function_bases = try allocator.alloc(u32, @intCast(package.module_count));
     defer allocator.free(function_bases);
 
@@ -1158,7 +1213,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
         while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
             const function = try snapshot.irFunction(function_id);
             diagnostics.enterFunction(function_id);
-            model.scanImportNeedsFor(snapshot, function, true, &needs) catch |err| {
+            model.scanImportNeedsFor(snapshot, function, true, &needs, package, host_modules) catch |err| {
                 diagnostics.recordPhase(@errorName(err), "runtime import planning");
                 return err;
             };
@@ -1210,6 +1265,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
                 imports,
                 symbol_name,
                 package,
+                host_modules,
                 function_base,
                 proto_id_by_bytecode_id,
                 &string_keys,

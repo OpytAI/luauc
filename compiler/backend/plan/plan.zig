@@ -1,5 +1,6 @@
 const std = @import("std");
 const snapshot_v1 = @import("frontend_snapshot_v1");
+const static_package_v1 = @import("luauc_backend_static_package_v1");
 const model = @import("luauc_backend_model");
 const abi = @import("luauc_backend_runtime_abi");
 const diagnostics = @import("luauc_backend_diagnostics");
@@ -124,6 +125,8 @@ pub const FunctionPlan = struct {
         snapshot: snapshot_v1.Snapshot,
         function: snapshot_v1.IrFunction,
         static_package: bool,
+        package: ?static_package_v1.Package,
+        host_modules: []const []const u8,
     ) Error!FunctionPlan {
         const block_count: usize = @intCast(function.block_count);
         const instruction_count: usize = @intCast(function.instruction_count);
@@ -489,7 +492,7 @@ pub const FunctionPlan = struct {
         errdefer if (userdata_clusters.len != 0) allocator.free(userdata_clusters);
 
         var import_needs = model.ImportNeeds{};
-        try model.scanImportNeedsFor(snapshot, function, static_package, &import_needs);
+        try model.scanImportNeedsFor(snapshot, function, static_package, &import_needs, package, host_modules);
 
         return .{
             .allocator = allocator,

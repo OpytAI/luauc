@@ -322,6 +322,7 @@ void luauc_runtime_v1_get_varargs_fixed(lua_State *state, uint32_t destination_r
 void luauc_runtime_v1_get_varargs_multret(lua_State *state, uint32_t destination_register);
 uint32_t luauc_runtime_v1_require_static(lua_State *state, uint32_t destination_register,
                                        uint32_t target_module_id);
+void luauc_runtime_v1_host_module_missing(lua_State *state, const char *name, size_t name_length);
 uint32_t luauc_runtime_v1_push_root(lua_State *state, const LuaucRuntimeProtoV1 *metadata,
                                   const char *source, size_t source_size);
 uint32_t luauc_runtime_v1_push_program(lua_State *state, const LuaucRuntimeProgramV1 *program,

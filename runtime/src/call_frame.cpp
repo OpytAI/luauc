@@ -2829,6 +2829,12 @@ static bool pushEntryModuleRecord(lua_State *L, Proto *entryProto, uint32_t *ent
     return true;
 }
 
+extern "C" void luauc_runtime_v1_host_module_missing(lua_State *L, const char *name, size_t nameLength) {
+    activeAotFrameProto(L, "host module");
+    TString *key = activeAotStringKey(L, name, nameLength, "host module");
+    luaG_runerror(L, "module '%s' not found", getstr(key));
+}
+
 extern "C" uint32_t luauc_runtime_v1_require_static(lua_State *L, uint32_t destinationRegister,
                                                   uint32_t targetModuleId) {
     if (!L || !L->ci || !isLua(L->ci))

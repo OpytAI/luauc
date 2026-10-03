@@ -14,7 +14,16 @@ pin, generated runtime ABI, object contract, pack build, and license inventory. 
 - sorted retained-export records `(name, kind, optional role)`;
 - sorted generated runtime-symbol records `(name, type index, function kind)`;
 - role-sorted binding records `(name, role, kind)`;
-- one canonical UTF-8 string table.
+- an optional host-module section, then one canonical UTF-8 string table.
+
+Bytes 288..299 name that section. All three of `host_module_offset`, `host_module_count`, and
+`host_module_record_size` are zero when the section is absent. A present section has record size 8,
+count 1..64, and sits immediately after the bindings. Each record is a string-table-relative offset
+and size. Names are unique, strictly sorted by raw bytes, and use the source-package module-name
+grammar. Bytes 300..319 stay zero.
+
+`host_modules` is an optional policy array. An absent key writes the all-zero header fields.
+`embed-v1` and `embed-alt-v1` omit it. A present array is strictly sorted and duplicate-free.
 
 Profiles are limited to 256 KiB. Unknown kinds/roles, duplicate or unsorted entries, noncanonical
 offsets, malformed strings, nonzero reserved bytes, and inconsistent resource limits are rejected.
@@ -37,7 +46,7 @@ Wasm module, derives its type/symbol/resource facts, emits the canonical profile
 profile as the pack manifest. Consumers never patch the manifest after linking.
 
 `@luauc//profiles:defs.bzl` exports `luauc_runtime_profile`. Its input policy has version, profile ID,
-semantic role bindings, and optional additional retained exports. Every required role is present
+semantic role bindings, optional host-module names, and optional additional retained exports. Every required role is present
 exactly once, its export kind and retention are fixed by the schema, and unknown fields fail closed.
 Host imports, function types, memory/table limits, generated-runtime symbols, pack identity, and
 license inventory are derived from the linked raw pack and declared inputs rather than duplicated in

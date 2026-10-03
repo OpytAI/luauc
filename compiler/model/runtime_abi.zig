@@ -75,6 +75,7 @@ pub const prep_varargs_symbol = "luauc_runtime_v1_prep_varargs";
 pub const get_varargs_fixed_symbol = "luauc_runtime_v1_get_varargs_fixed";
 pub const get_varargs_multret_symbol = "luauc_runtime_v1_get_varargs_multret";
 pub const require_static_symbol = "luauc_runtime_v1_require_static";
+pub const host_module_missing_symbol = "luauc_runtime_v1_host_module_missing";
 pub const generated_protos_symbol = "luauc_runtime_v1_protos";
 pub const generated_modules_symbol = "luauc_runtime_v1_modules";
 pub const generated_program_symbol = "luauc_runtime_v1_program";

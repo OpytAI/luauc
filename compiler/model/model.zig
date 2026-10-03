@@ -150,6 +150,7 @@ pub const ImportNeeds = struct {
     get_varargs_fixed: bool = false,
     get_varargs_multret: bool = false,
     require_static: bool = false,
+    host_module_missing: bool = false,
 
     pub fn merge(self: *ImportNeeds, other: ImportNeeds) void {
         self.coverage_hit = self.coverage_hit or other.coverage_hit;
@@ -221,6 +222,7 @@ pub const ImportNeeds = struct {
         self.get_varargs_fixed = self.get_varargs_fixed or other.get_varargs_fixed;
         self.get_varargs_multret = self.get_varargs_multret or other.get_varargs_multret;
         self.require_static = self.require_static or other.require_static;
+        self.host_module_missing = self.host_module_missing or other.host_module_missing;
     }
 };
 
@@ -231,6 +233,8 @@ pub const Error = snapshot_v1.Error || static_package_v1.Error || wasm.Error || 
     UnsupportedOperand,
     UnsupportedCondition,
     UnsupportedControlFlow,
+    HostModuleCollision,
+    InvalidHostModuleList,
     InvalidOperandCount,
     InvalidOperandType,
     InvalidInstructionResult,
@@ -282,11 +286,15 @@ pub const SetUpvaluePattern = struct {
     source_register: u32,
 };
 
+pub const StaticRequireKind = enum { package, host };
+
 pub const StaticRequirePattern = struct {
     end: u32,
     interrupt_id: u32,
     destination: u32,
+    kind: StaticRequireKind,
     module_id: u32,
+    name: []const u8,
 };
 
 pub const ContinuationAction = union(enum) {
@@ -844,8 +852,177 @@ fn isStaticRequireCall(snapshot: snapshot_v1.Snapshot, function: snapshot_v1.IrF
     return isRequireImportInstruction(snapshot, function, try snapshot.proto(function.proto_id), get_import);
 }
 
+fn blockContainingInstruction(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    instruction_id: u32,
+) Error!?snapshot_v1.IrBlock {
+    var block_id: u32 = 0;
+    while (block_id < function.block_count) : (block_id += 1) {
+        const block = try snapshot.irBlock(function, block_id);
+        if (block.isEmpty())
+            continue;
+        if (instruction_id >= block.start and instruction_id <= block.finish)
+            return block;
+    }
+    return null;
+}
+
+fn hostModuleListed(modules: []const []const u8, name: []const u8) bool {
+    var low: usize = 0;
+    var high = modules.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        switch (std.mem.order(u8, modules[mid], name)) {
+            .eq => return true,
+            .lt => low = mid + 1,
+            .gt => high = mid,
+        }
+    }
+    return false;
+}
+
+pub fn classifyStaticRequire(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    proto: snapshot_v1.Proto,
+    block: snapshot_v1.IrBlock,
+    start: u32,
+    package: ?static_package_v1.Package,
+    host_modules: []const []const u8,
+) Error!?StaticRequirePattern {
+    const resolved = package orelse return null;
+    const first = try snapshot.irInstruction(function, start);
+    const has_marker = first.command == .nop or first.command == .check_safe_env;
+    const get_id = std.math.add(u32, start, @intFromBool(has_marker)) catch return Error.ResourceLimit;
+    const end = std.math.add(u32, get_id, 5) catch return Error.ResourceLimit;
+    if (start < block.start or end > block.finish)
+        return null;
+    if (end >= function.instruction_count)
+        return null;
+
+    const get_import = try snapshot.irInstruction(function, get_id);
+    const load_path = try snapshot.irInstruction(function, get_id + 1);
+    const store_path = try snapshot.irInstruction(function, get_id + 2);
+    const interrupt = try snapshot.irInstruction(function, get_id + 3);
+    const saved_pc = try snapshot.irInstruction(function, get_id + 4);
+    const call = try snapshot.irInstruction(function, get_id + 5);
+    if (get_import.command != .get_cached_import or load_path.command != .load_tvalue or
+        store_path.command != .store_tvalue or interrupt.command != .interrupt or
+        saved_pc.command != .set_savedpc or call.command != .call)
+        return null;
+    if (!try isRequireImportInstruction(snapshot, function, proto, get_import))
+        return null;
+    if (has_marker and first.command == .nop) {
+        var prefix = block.start;
+        if (prefix < start) {
+            const prelude = try snapshot.irInstruction(function, prefix);
+            if (prelude.command == .fallback_prepvarargs)
+                prefix += 1;
+        }
+        while (prefix < start) {
+            if ((try snapshot.irInstruction(function, prefix)).command != .coverage)
+                break;
+            prefix += 1;
+        }
+        if (prefix != start or (block.flags & (1 << 0)) == 0 or first.operand_count != 0)
+            return Error.UnsupportedControlFlow;
+    } else if (has_marker) {
+        if (first.operand_count != 1)
+            return Error.InvalidOperandCount;
+        const failure = try snapshot.irOperand(first, 0);
+        if (failure.kind != .vm_exit)
+            return Error.UnsupportedControlFlow;
+    }
+
+    if (get_import.operand_count != 4)
+        return Error.InvalidOperandCount;
+    const destination_operand = try snapshot.irOperand(get_import, 0);
+    if (destination_operand.kind != .vm_reg or destination_operand.value >= proto.max_stack_size)
+        return Error.InvalidOperandType;
+    const destination = destination_operand.value;
+    const import_pc = try snapshot.irOperand(get_import, 3);
+    if (import_pc.kind != .constant or (try snapshot.irConstant(function, import_pc.value)).uintValue() == null)
+        return Error.InvalidOperandType;
+
+    if (load_path.operand_count != 3)
+        return Error.InvalidOperandCount;
+    const path_operand = try snapshot.irOperand(load_path, 0);
+    if (path_operand.kind != .vm_const)
+        return Error.InvalidOperandType;
+    const path_constant = try snapshot.vmConstant(proto, path_operand.value);
+    if (path_constant.kind != .string)
+        return Error.InvalidOperandType;
+    const path = try snapshot.string(path_constant.payload0);
+    const load_offset = try snapshot.irOperand(load_path, 1);
+    const load_tag = try snapshot.irOperand(load_path, 2);
+    if (load_offset.kind != .constant or (try snapshot.irConstant(function, load_offset.value)).intValue() != 0 or
+        load_tag.kind != .constant or (try snapshot.irConstant(function, load_tag.value)).tagValue() != abi.lua_tag_string)
+        return Error.UnsupportedControlFlow;
+
+    if (store_path.operand_count != 2)
+        return Error.InvalidOperandCount;
+    const argument_operand = try snapshot.irOperand(store_path, 0);
+    const stored = try snapshot.irOperand(store_path, 1);
+    if (argument_operand.kind != .vm_reg or argument_operand.value >= proto.max_stack_size or
+        argument_operand.value != destination + 1 or stored.kind != .instruction or stored.value != get_id + 1)
+        return Error.UnsupportedControlFlow;
+
+    if (interrupt.operand_count != 1)
+        return Error.InvalidOperandCount;
+    const interrupt_pc = try snapshot.irOperand(interrupt, 0);
+    if (interrupt_pc.kind != .constant or (try snapshot.irConstant(function, interrupt_pc.value)).uintValue() == null)
+        return Error.InvalidOperandType;
+    if (saved_pc.operand_count != 1)
+        return Error.InvalidOperandCount;
+    const saved_operand = try snapshot.irOperand(saved_pc, 0);
+    if (saved_operand.kind != .constant or (try snapshot.irConstant(function, saved_operand.value)).uintValue() == null)
+        return Error.InvalidOperandType;
+
+    if (call.operand_count != 3)
+        return Error.InvalidOperandCount;
+    const call_function = try snapshot.irOperand(call, 0);
+    if (call_function.kind != .vm_reg or call_function.value != destination)
+        return Error.UnsupportedControlFlow;
+    const parameter_count = try snapshot.irOperand(call, 1);
+    const result_count = try snapshot.irOperand(call, 2);
+    if (parameter_count.kind != .constant or result_count.kind != .constant or
+        (try snapshot.irConstant(function, parameter_count.value)).intValue() != 1 or
+        (try snapshot.irConstant(function, result_count.value)).intValue() != 1)
+        return Error.UnsupportedControlFlow;
+
+    const in_package = resolved.moduleByName(path) != null;
+    const in_host = hostModuleListed(host_modules, path);
+    if (in_package and in_host) {
+        diagnostics.recordPhase("HostModuleCollision", path);
+        return Error.HostModuleCollision;
+    }
+    if (in_package) {
+        return .{
+            .end = end,
+            .interrupt_id = get_id + 3,
+            .destination = destination,
+            .kind = .package,
+            .module_id = resolved.moduleByName(path).?.id,
+            .name = "",
+        };
+    }
+    if (in_host) {
+        return .{
+            .end = end,
+            .interrupt_id = get_id + 3,
+            .destination = destination,
+            .kind = .host,
+            .module_id = 0,
+            .name = path,
+        };
+    }
+    diagnostics.recordPhase("UnsupportedControlFlow", path);
+    return Error.UnsupportedControlFlow;
+}
+
 pub fn scanImportNeeds(snapshot: snapshot_v1.Snapshot, function_id: u32, static_package: bool, needs: *ImportNeeds) Error!void {
-    try scanImportNeedsFor(snapshot, try snapshot.irFunction(function_id), static_package, needs);
+    try scanImportNeedsFor(snapshot, try snapshot.irFunction(function_id), static_package, needs, null, &.{});
 }
 
 pub fn scanImportNeedsFor(
@@ -853,6 +1030,8 @@ pub fn scanImportNeedsFor(
     function: snapshot_v1.IrFunction,
     static_package: bool,
     needs: *ImportNeeds,
+    package: ?static_package_v1.Package,
+    host_modules: []const []const u8,
 ) Error!void {
     const ir_cmd_new_table = abi.ir_cmd_new_table;
     const ir_cmd_new_userdata = abi.ir_cmd_new_userdata;
@@ -907,9 +1086,35 @@ pub fn scanImportNeedsFor(
     const ir_cmd_buffer_writef64 = abi.ir_cmd_buffer_writef64;
     const ir_cmd_buffer_readi64 = abi.ir_cmd_buffer_readi64;
     const ir_cmd_buffer_writei64 = abi.ir_cmd_buffer_writei64;
+    if (static_package and package == null)
+        return Error.UnsupportedCommand;
     const proto = try snapshot.proto(function.proto_id);
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
+        if (static_package) {
+            if (try blockContainingInstruction(snapshot, function, instruction_id)) |block| {
+                if (try classifyStaticRequire(snapshot, function, proto, block, instruction_id, package, host_modules)) |pattern| {
+                    const window = try snapshot.irInstruction(function, instruction_id);
+                    if (window.command == .check_safe_env)
+                        needs.check_safe_env = true;
+                    needs.load_constant = true;
+                    needs.get_global = true;
+                    needs.table_get_string = true;
+                    needs.set_location = true;
+                    needs.exchange_continuation = true;
+                    switch (pattern.kind) {
+                        .package => {
+                            needs.require_static = true;
+                            needs.call = true;
+                            needs.check_gc = true;
+                        },
+                        .host => needs.host_module_missing = true,
+                    }
+                    instruction_id = pattern.end;
+                    continue;
+                }
+            }
+        }
         const instruction_value = try snapshot.irInstruction(function, instruction_id);
         switch (instruction_value.command) {
             .coverage => needs.coverage_hit = true,

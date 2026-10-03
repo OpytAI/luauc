@@ -55,17 +55,32 @@ function createContext(profile, pack, expectedStatus = 0) {
   } finally { release(result); release(packInput); release(profileInput); }
 }
 
-function canonicalRequest(source, profileDigest, packDigest, coverageLevel = 0) {
-  const name = Buffer.from("main"), sourceName = Buffer.from("@main.luau"), content = Buffer.from(source), contentDigest = sha256(content);
+function canonicalRequest(sourceOrModules, profileDigest, packDigest, coverageLevel = 0, entryId = 0) {
+  const modules = (typeof sourceOrModules === "string" ? [{ name: "main", source: sourceOrModules }] : sourceOrModules)
+    .map((module) => ({
+      name: Buffer.from(module.name),
+      sourceName: Buffer.from(`@${module.name}.luau`),
+      content: Buffer.from(module.source),
+    }));
   const sized = (bytes) => { const size = Buffer.alloc(4); size.writeUInt32LE(bytes.length); return Buffer.concat([size, bytes]); };
-  const manifestHeader = Buffer.alloc(8); manifestHeader.writeUInt32LE(1, 0);
-  const zeroPlans = Buffer.alloc(4);
-  const manifestDigest = sha256(Buffer.concat([manifestHeader, sized(name), sized(sourceName), contentDigest, zeroPlans]));
-  const total = 240 + 64 + name.length + sourceName.length + content.length;
+  const manifestHeader = Buffer.alloc(8);
+  manifestHeader.writeUInt32LE(modules.length, 0);
+  manifestHeader.writeUInt32LE(entryId, 4);
+  const zeroPlan = Buffer.alloc(4);
+  const manifestParts = [manifestHeader];
+  let bodyLength = 0;
+  const prepared = modules.map((module) => {
+    const contentDigest = sha256(module.content);
+    manifestParts.push(sized(module.name), sized(module.sourceName), contentDigest, zeroPlan);
+    bodyLength += module.name.length + module.sourceName.length + module.content.length;
+    return { ...module, contentDigest };
+  });
+  const manifestDigest = sha256(Buffer.concat(manifestParts));
+  const total = 240 + 64 * modules.length + bodyLength;
   const request = Buffer.alloc(total);
   Buffer.from("LUAUCS1\0", "binary").copy(request, 0);
   request.writeUInt16LE(1, 8); request.writeUInt16LE(240, 10); request.writeUInt32LE(total, 12);
-  request.writeUInt32LE(1, 16); request.writeUInt32LE(0, 20); request.writeUInt32LE(64, 24);
+  request.writeUInt32LE(modules.length, 16); request.writeUInt32LE(entryId, 20); request.writeUInt32LE(64, 24);
   request.writeUInt32LE(coverageLevel, 28);
   request.writeUInt32LE(0, 176);
   request.writeUInt32LE(64, 180);
@@ -89,16 +104,23 @@ function canonicalRequest(source, profileDigest, packDigest, coverageLevel = 0) 
     packDigest,
     manifestDigest,
     options,
-    zeroPlans,
+    Buffer.alloc(4 * modules.length),
   ])).subarray(0, 16).copy(request, 32);
   frontendContract.copy(request, 48);
   profileDigest.copy(request, 80);
   packDigest.copy(request, 112);
   manifestDigest.copy(request, 144);
-  let cursor = 304;
-  request.writeUInt32LE(cursor, 240); request.writeUInt32LE(name.length, 244); name.copy(request, cursor); cursor += name.length;
-  request.writeUInt32LE(cursor, 248); request.writeUInt32LE(sourceName.length, 252); sourceName.copy(request, cursor); cursor += sourceName.length;
-  request.writeUInt32LE(cursor, 256); request.writeUInt32LE(content.length, 260); content.copy(request, cursor); contentDigest.copy(request, 264);
+  let cursor = 240 + 64 * modules.length;
+  for (const [index, module] of prepared.entries()) {
+    const record = 240 + index * 64;
+    request.writeUInt32LE(cursor, record); request.writeUInt32LE(module.name.length, record + 4);
+    module.name.copy(request, cursor); cursor += module.name.length;
+    request.writeUInt32LE(cursor, record + 8); request.writeUInt32LE(module.sourceName.length, record + 12);
+    module.sourceName.copy(request, cursor); cursor += module.sourceName.length;
+    request.writeUInt32LE(cursor, record + 16); request.writeUInt32LE(module.content.length, record + 20);
+    module.content.copy(request, cursor); cursor += module.content.length;
+    module.contentDigest.copy(request, record + 24);
+  }
   return request;
 }
 
@@ -242,4 +264,30 @@ const sourceRecovery = compile(sourceFailureContext.handle, referenceRequest);
 if (!sourceRecovery.artifact.equals(referenceArtifact)) throw new Error("malformed source poisoned deterministic recovery");
 if (api.luauc_v1_context_destroy(sourceFailureContext.handle) !== 0) throw new Error("source recovery context destroy failed");
 
-console.log("verified zero-import context compiler with two independent runtime profiles, deterministic output, provenance, malformed request/profile/pack recovery, source recovery, and stale-handle rejection");
+const hostModulesProfile = readFileSync(runfile(process.env.LUAUC_HOST_MODULES_PROFILE));
+const hostModulesPack = readFileSync(runfile(process.env.LUAUC_HOST_MODULES_PACK));
+const hostModulesContext = createContext(hostModulesProfile, hostModulesPack);
+const listedHostRequire = compile(hostModulesContext.handle, canonicalRequest('local loaded = require("hash") return loaded', hostModulesContext.profileDigest, hostModulesContext.packDigest));
+if (listedHostRequire.status !== 0 || listedHostRequire.resultStatus !== 0 || !listedHostRequire.artifact.length)
+  throw new Error(`listed host-module require failed: ${listedHostRequire.status}/${listedHostRequire.resultStatus}/${listedHostRequire.diagnostic}`);
+const hostModuleKeys = Buffer.from("packageloadedhash");
+if (!listedHostRequire.artifact.includes(hostModuleKeys))
+  throw new Error("listed host-module require did not emit the package.loaded string keys");
+const plainHostProfile = compile(hostModulesContext.handle, canonicalRequest("return 1", hostModulesContext.profileDigest, hostModulesContext.packDigest));
+if (plainHostProfile.status !== 0 || plainHostProfile.artifact.includes(hostModuleKeys))
+  throw new Error(`plain compile against the host-module profile changed the require keys: ${plainHostProfile.status}/${plainHostProfile.diagnostic}`);
+const packExports = new WebAssembly.Module(hostModulesPack);
+if (!WebAssembly.Module.exports(packExports).some((item) => item.name === "luauc_runtime_v1_host_module_missing" && item.kind === "function"))
+  throw new Error("host-module pack does not export luauc_runtime_v1_host_module_missing");
+const unlistedHostRequire = compile(hostModulesContext.handle, canonicalRequest('local loaded = require("nope") return loaded', hostModulesContext.profileDigest, hostModulesContext.packDigest));
+if (unlistedHostRequire.status !== 4 || !unlistedHostRequire.diagnostic.includes("UnsupportedControlFlow") || !unlistedHostRequire.diagnostic.includes("during nope"))
+  throw new Error(`unlisted host-module require was not rejected: ${unlistedHostRequire.status}/${unlistedHostRequire.diagnostic}`);
+const collidingHostRequire = compile(hostModulesContext.handle, canonicalRequest([
+  { name: "hash", source: "return 1" },
+  { name: "main", source: 'local loaded = require("hash") return loaded' },
+], hostModulesContext.profileDigest, hostModulesContext.packDigest, 0, 1));
+if (collidingHostRequire.status !== 4 || !collidingHostRequire.diagnostic.includes("HostModuleCollision") || !collidingHostRequire.diagnostic.includes("during hash"))
+  throw new Error(`host-module collision was not rejected: ${collidingHostRequire.status}/${collidingHostRequire.diagnostic}`);
+if (api.luauc_v1_context_destroy(hostModulesContext.handle) !== 0) throw new Error("host-module context destroy failed");
+
+console.log("verified zero-import context compiler with two independent runtime profiles, deterministic output, provenance, malformed request/profile/pack recovery, source recovery, stale-handle rejection, and host-module require lowering");

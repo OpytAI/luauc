@@ -195,7 +195,7 @@
         "function_count": 92
       },
       "production": {
-        "sha256": "934504ce37e4a9ada7e517e496220907934cad5a15b68a3eefd4ee86be4eefed",
+        "sha256": "468327bb266b8c400867cd8bbf6d2aa81556aa1a88c4d2f3287eac3ac123d4a4",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -220,7 +220,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1092
+        "function_count": 1093
       }
     },
     {
@@ -266,7 +266,7 @@
         "function_count": 11
       },
       "production": {
-        "sha256": "85d9156cf665bc1574b38f541284998048a721a221e53fff1e11b6d14930c291",
+        "sha256": "fbe89663c551cd32ba977c94ca6f24f34af1cf42f02bfdd15c295e6a27a31789",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -291,7 +291,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1043
+        "function_count": 1044
       }
     },
     {
@@ -342,7 +342,7 @@
         "function_count": 15
       },
       "production": {
-        "sha256": "0d0145f023eb8aeda9e99dc6cf6473486daf1b67225a7f1256cfbcfc07f9ce8e",
+        "sha256": "fc5b5c50cf055f69c702c03ef789e424af600a7d6c65718ab01ea98cade4c515",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -367,7 +367,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1044
+        "function_count": 1045
       }
     },
     {
@@ -428,7 +428,7 @@
         "function_count": 16
       },
       "production": {
-        "sha256": "0d7cb53ca7f18b9a5a17d1cad03cf38cc9b431667cdefbef3a8be370e58ef349",
+        "sha256": "6f3e1979158370efa46f1e262c8e5a04a1b3a85fa3371ec850ec32a020ee833f",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -453,7 +453,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1042
+        "function_count": 1043
       }
     },
     {
@@ -506,7 +506,7 @@
         "function_count": 17
       },
       "production": {
-        "sha256": "69cdfe756f5e066ab74f69c6ab09fa9fe21263a325d765ce4c0ce1344ff9f47d",
+        "sha256": "4b650743d101b125510df0457d7253463ef3945fd1aac58634df8aeb0912a00c",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -531,7 +531,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1043
+        "function_count": 1044
       }
     },
     {
@@ -557,5 +557,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "4b2ad4a9b23434c31fd99a55d43584749deda4ae9212e8f6693764d6b4f5493b"
+  "canonical_hash": "6da21e5f0fb584e2c3eb375eca925b7905edc7665a710466ad3beae3d2109d1f"
 }
