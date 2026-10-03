@@ -307,6 +307,12 @@ extern "C" const uint8_t luauc_runtime_v1_layout_sha256[32] = {
 
 static bool materializableScalarConstantKind(uint8_t kind);
 static bool validAotProto(const LuaucRuntimeProtoV1 *metadata);
+static bool rememberValidAotProto(Proto *proto, const LuaucRuntimeProtoV1 *metadata);
+
+// Proto::flags is cleared by luaF_newproto and is otherwise written only by the
+// bytecode loader. That loader is not linked, so the AOT runtime owns these bits.
+static constexpr uint8_t kAotProtoFlagValidated = 1u << 0;
+static constexpr uint8_t kAotProtoFlagModuleEntry = 1u << 1;
 
 static char *getAotCoverageData(lua_State *, Proto *proto, size_t *count, size_t *lineCount) {
     if (!count || !lineCount)
@@ -425,9 +431,8 @@ static void configurePinnedRuntimeFlags(lua_State *L) {
 }
 
 // Metadata is linker-owned and immutable. validAotProto walks every constant and the
-// layout digest, so repeating it on each helper call redoes work the interpreter never does.
-static const LuaucRuntimeProtoV1 *gValidatedAotMetadata = nullptr;
-
+// layout digest. The result is stamped on the Proto so a nested metamethod and its caller
+// do not rewalk each other on every call.
 static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
     if (!L || !L->ci || L->ci <= L->base_ci || !isLua(L->ci) ||
         !(L->ci->flags & LUA_CALLINFO_NATIVE))
@@ -437,11 +442,8 @@ static Proto *activeAotFrameProto(lua_State *L, const char *operation) {
     Proto *proto = closure->l.p;
     const LuaucRuntimeProtoV1 *metadata =
         proto ? static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata) : nullptr;
-    if (metadata != gValidatedAotMetadata) {
-        if (!validAotProto(metadata))
-            luaG_runerror(L, "strict AOT %s rejected invalid frame metadata", operation);
-        gValidatedAotMetadata = metadata;
-    }
+    if (!rememberValidAotProto(proto, metadata))
+        luaG_runerror(L, "strict AOT %s rejected invalid frame metadata", operation);
     if (proto->maxstacksize != metadata->max_stack_size ||
         proto->numparams != metadata->num_params || proto->nups != metadata->nups ||
         proto->is_vararg != metadata->is_vararg || closure->stacksize != proto->maxstacksize ||
@@ -600,7 +602,7 @@ extern "C" void luauc_runtime_v1_set_location(lua_State *L, uint32_t line) {
     Closure *closure = clvalue(L->ci->func);
     const LuaucRuntimeProtoV1 *metadata =
         closure->l.p ? static_cast<const LuaucRuntimeProtoV1 *>(closure->l.p->execdata) : nullptr;
-    if (!validAotProto(metadata))
+    if (!rememberValidAotProto(closure->l.p, metadata))
         luaG_runerror(L, "strict AOT location update rejected invalid frame metadata");
     if (line > LUA_CALLINFO_AOT_LINE_MASK)
         luaG_runerror(L, "strict AOT location update rejected line %u", line);
@@ -615,7 +617,7 @@ extern "C" uint32_t luauc_runtime_v1_exchange_continuation(lua_State *L, uint32_
     Closure *closure = clvalue(L->ci->func);
     const LuaucRuntimeProtoV1 *metadata =
         closure->l.p ? static_cast<const LuaucRuntimeProtoV1 *>(closure->l.p->execdata) : nullptr;
-    if (!validAotProto(metadata))
+    if (!rememberValidAotProto(closure->l.p, metadata))
         luaG_runerror(L, "strict AOT continuation exchange rejected invalid frame metadata");
     if (next > LUA_CALLINFO_AOT_CONTINUATION_MASK)
         luaG_runerror(L, "strict AOT continuation exchange rejected ID %u", next);
@@ -2138,7 +2140,7 @@ extern "C" const LuaucRuntimePreparedCallV1 *luauc_runtime_v1_prepare_compiled_c
     Closure *callee = clvalue(calleeFrame->func);
     const LuaucRuntimeProtoV1 *metadata =
         callee->l.p ? static_cast<const LuaucRuntimeProtoV1 *>(callee->l.p->execdata) : nullptr;
-    if (!validAotProto(metadata))
+    if (!rememberValidAotProto(callee->l.p, metadata))
         luaG_runerror(L, "strict AOT prepared call rejected missing callee metadata");
     if (callee->nupvalues != metadata->nups)
         luaG_runerror(L, "strict AOT prepared call rejected callee closure shape");
@@ -2194,7 +2196,7 @@ static uint32_t callAotFunction(lua_State *L, StkId function, int32_t resultCoun
     Closure *callee = clvalue(calleeFrame->func);
     const LuaucRuntimeProtoV1 *metadata =
         callee->l.p ? static_cast<const LuaucRuntimeProtoV1 *>(callee->l.p->execdata) : nullptr;
-    if (!validAotProto(metadata))
+    if (!rememberValidAotProto(callee->l.p, metadata))
         luaG_runerror(L, "strict AOT call rejected missing callee metadata");
     if (callee->nupvalues != metadata->nups)
         luaG_runerror(L, "strict AOT call rejected callee closure shape");
@@ -3010,6 +3012,17 @@ static bool validAotProto(const LuaucRuntimeProtoV1 *metadata) {
     return true;
 }
 
+static bool rememberValidAotProto(Proto *proto, const LuaucRuntimeProtoV1 *metadata) {
+    if (!proto)
+        return false;
+    if ((proto->flags & kAotProtoFlagValidated) != 0)
+        return true;
+    if (!validAotProto(metadata))
+        return false;
+    proto->flags = uint8_t(proto->flags | kAotProtoFlagValidated);
+    return true;
+}
+
 static bool validAotModule(const LuaucRuntimeModuleV1 *module) {
     return module && module->abi_version == LUAUC_AOT_ABI_V1 &&
            module->struct_size == LUAUC_AOT_MODULE_V1_SIZE && module->source_name &&
@@ -3281,6 +3294,8 @@ static void publishModuleRegistry(lua_State *L, const LuaucRuntimeProgramV1 *pro
     lua_rawseti(L, registryIndex, MODULE_REGISTRY_COUNT_SLOT);
     lua_pushinteger(L, int(program->entry_module_id));
     lua_rawseti(L, registryIndex, MODULE_REGISTRY_ENTRY_ID_SLOT);
+    Proto *entryProto = protos[program->modules[program->entry_module_id].root_proto_id];
+    entryProto->flags = uint8_t(entryProto->flags | kAotProtoFlagModuleEntry);
 
     for (uint32_t id = 0; id < program->module_count; ++id) {
         lua_createtable(L, 3, 0);
@@ -3508,42 +3523,47 @@ extern "C" void luauc_runtime_v1_enter(lua_State *L) {
     Closure *closure = clvalue(L->ci->func);
     Proto *proto = closure->l.p;
     const LuaucRuntimeProtoV1 *metadata = static_cast<const LuaucRuntimeProtoV1 *>(proto->execdata);
-    if (!validAotProto(metadata))
+    if (!rememberValidAotProto(proto, metadata))
         luaG_runerror(L, "strict AOT metadata ABI/layout mismatch");
 
     validateActiveAotEntry(L, metadata, "runtime entry");
     uint32_t status = metadata->entry(L, metadata);
     switch (status) {
     case LUAUC_RUNTIME_V1_OK: {
-        const int resultCount = lua_gettop(L);
-        const int resultIndex = resultCount == 1 ? lua_absindex(L, -1) : 0;
-        const int originalTop = resultCount;
-        uint32_t entryModuleId = 0;
+        // Nested metamethod, iterator, and pcall frames are not the module root. Completion
+        // touches the registry only for the proto marked at publish time.
+        if ((proto->flags & kAotProtoFlagModuleEntry) != 0) {
+            const int resultCount = lua_gettop(L);
+            const int resultIndex = resultCount == 1 ? lua_absindex(L, -1) : 0;
+            const int originalTop = resultCount;
+            uint32_t entryModuleId = 0;
 
-        if (!lua_checkstack(L, 4))
-            luaG_runerror(L, "strict AOT entry completion could not reserve runtime stack space");
+            if (!lua_checkstack(L, 4))
+                luaG_runerror(L, "strict AOT entry completion could not reserve runtime stack space");
 
-        if (pushEntryModuleRecord(L, proto, &entryModuleId)) {
-            const int recordIndex = lua_gettop(L);
-            const int moduleStatus = moduleRecordStatus(L, recordIndex);
-            if (moduleStatus == MODULE_FAILED)
-                raiseCachedModuleFailure(L, originalTop, recordIndex, entryModuleId, true);
-            if (moduleStatus != MODULE_INITIALIZING) {
+            if (pushEntryModuleRecord(L, proto, &entryModuleId)) {
+                const int recordIndex = lua_gettop(L);
+                const int moduleStatus = moduleRecordStatus(L, recordIndex);
+                if (moduleStatus == MODULE_FAILED)
+                    raiseCachedModuleFailure(L, originalTop, recordIndex, entryModuleId, true);
+                if (moduleStatus != MODULE_INITIALIZING) {
+                    lua_settop(L, originalTop);
+                    luaG_runerror(L, "strict AOT entry module %u has invalid completion state",
+                                  entryModuleId);
+                }
+                if (resultCount == 1) {
+                    setModuleRecordValue(L, recordIndex, resultIndex);
+                } else {
+                    // Preserve the entry record solely for cycle detection and deterministic later
+                    // lookup. Required module initializers remain strict in require_static; a
+                    // top-level executable is allowed to return zero or many values and those
+                    // values are silent.
+                    lua_pushnil(L);
+                    setModuleRecordValue(L, recordIndex, -1);
+                }
+                setModuleRecordStatus(L, recordIndex, MODULE_INITIALIZED);
                 lua_settop(L, originalTop);
-                luaG_runerror(L, "strict AOT entry module %u has invalid completion state",
-                              entryModuleId);
             }
-            if (resultCount == 1) {
-                setModuleRecordValue(L, recordIndex, resultIndex);
-            } else {
-                // Preserve the entry record solely for cycle detection and deterministic later
-                // lookup. Required module initializers remain strict in require_static; a top-level
-                // executable is allowed to return zero or many values and those values are silent.
-                lua_pushnil(L);
-                setModuleRecordValue(L, recordIndex, -1);
-            }
-            setModuleRecordStatus(L, recordIndex, MODULE_INITIALIZED);
-            lua_settop(L, originalTop);
         }
 
         luau_poscall(L, L->base);
