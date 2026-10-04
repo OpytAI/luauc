@@ -485,6 +485,60 @@ fn heldUpvalueRegister(self: anytype, first_store: snapshot_v1.IrInstruction, up
     diagnostics.trace(text);
     return Error.UnsupportedControlFlow;
 }
+const ForwardedUpvalueGap = struct {
+    untouched: bool = true,
+    clobber_cmd: ?u32 = null,
+    cell_mutated: bool = false,
+};
+
+fn noteForwardedUpvalueGap(
+    self: anytype,
+    gap: u32,
+    held_register: u32,
+    upvalue_index: u32,
+    state: *ForwardedUpvalueGap,
+) Error!void {
+    const marker = try self.instruction(gap);
+    if (marker.command != .nop or marker.operand_count != 0)
+        state.untouched = false;
+    if (state.clobber_cmd == null and try self.instructionWritesRegister(gap, held_register))
+        state.clobber_cmd = @intFromEnum(marker.command);
+    if (try upvalueCellMutable(self, marker, upvalue_index))
+        state.cell_mutated = true;
+}
+
+fn scanForwardedUpvalueGap(
+    self: anytype,
+    upvalue_id: u32,
+    instruction_id: u32,
+    held_register: u32,
+    upvalue_index: u32,
+) Error!ForwardedUpvalueGap {
+    var state = ForwardedUpvalueGap{};
+    const get_block = self.plan.instructionBlock(upvalue_id);
+    const store_block = self.plan.instructionBlock(upvalue_id + 1);
+    // The first store publishes the upvalue. The live gap starts after it.
+    // Linearization appends the consumer, so an index walk would count writes
+    // on blocks the jump never reaches.
+    if (get_block != null and store_block != null and get_block.? == store_block.?) {
+        if (try self.provedLiveSpans(upvalue_id + 1, instruction_id)) |spans| {
+            var gap = spans.first.start;
+            while (gap < spans.first.end) : (gap += 1)
+                try noteForwardedUpvalueGap(self, gap, held_register, upvalue_index, &state);
+            if (spans.second) |second| {
+                gap = second.start;
+                while (gap < second.end) : (gap += 1)
+                    try noteForwardedUpvalueGap(self, gap, held_register, upvalue_index, &state);
+            }
+            return state;
+        }
+    }
+    var gap = upvalue_id + 2;
+    while (gap < instruction_id) : (gap += 1)
+        try noteForwardedUpvalueGap(self, gap, held_register, upvalue_index, &state);
+    return state;
+}
+
 fn forwardedUpvalueOffset(
     self: anytype,
     instruction_id: u32,
@@ -539,19 +593,16 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
             if (source.value + 1 != instruction_id) {
                 const first_store = try self.instruction(source.value + 1);
                 const held_register = try heldUpvalueRegister(self, first_store, source.value);
-                var gap = source.value + 2;
-                var untouched = true;
-                var clobber_cmd: ?u32 = null;
-                var cell_mutated = false;
-                while (gap < instruction_id) : (gap += 1) {
-                    const marker = try self.instruction(gap);
-                    if (marker.command != .nop or marker.operand_count != 0)
-                        untouched = false;
-                    if (clobber_cmd == null and try self.instructionWritesRegister(gap, held_register))
-                        clobber_cmd = @intFromEnum(marker.command);
-                    if (try upvalueCellMutable(self, marker, upvalue.value))
-                        cell_mutated = true;
-                }
+                const gap_state = try scanForwardedUpvalueGap(
+                    self,
+                    source.value,
+                    instruction_id,
+                    held_register,
+                    upvalue.value,
+                );
+                const untouched = gap_state.untouched;
+                const clobber_cmd = gap_state.clobber_cmd;
+                const cell_mutated = gap_state.cell_mutated;
                 // The first register still holds the value captured at GET_UPVALUE.
                 // Copying it keeps that value when a later instruction reuses the upvalue.
                 if (!untouched and clobber_cmd == null) {

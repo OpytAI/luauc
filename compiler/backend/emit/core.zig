@@ -1171,12 +1171,27 @@ pub noinline fn emitStoreSplitTValue(
                 try self.body.localGet(self.allocator, self.base_local);
                 try self.body.i32Load(self.allocator, 2, register * tvalue_size);
             } else if (source.kind == .instruction) {
-                // NEW_TABLE and DUP_TABLE publish into a register and have no pointer local.
+                // NEW_TABLE, DUP_TABLE, and GET_TYPE publish into a VM register and
+                // define no instruction local. A later split store reloads that
+                // register while it still holds the published pointer.
                 var published: ?u32 = null;
+                const producer_cmd = (try self.instruction(source.value)).command;
                 if (self.plan.tableAllocAt(source.value)) |alloc| {
                     published = alloc.destination;
-                } else if ((try self.instruction(source.value)).command == abi.ir_cmd_dup_table) {
+                } else if (producer_cmd == abi.ir_cmd_dup_table) {
                     published = try self.dupTableRegisterForPointer(source.value);
+                } else if (tag_value == lua_tag_string and
+                    (producer_cmd == abi.ir_cmd_get_type or producer_cmd == abi.ir_cmd_get_typeof))
+                {
+                    const custom = producer_cmd == abi.ir_cmd_get_typeof;
+                    if (try self.typeNamePattern(source.value, custom)) |pattern| {
+                        if (try self.preservesRegisterToConsumer(
+                            pattern.destination,
+                            pattern.finish,
+                            instruction_id,
+                        ))
+                            published = pattern.destination;
+                    }
                 }
                 if (published) |register| {
                     try self.body.localGet(self.allocator, self.base_local);
@@ -1238,25 +1253,36 @@ pub noinline fn emitPointerValue(self: anytype, operand_value: snapshot_v1.IrOpe
             try self.body.i32Const(self.allocator, 0);
         },
         .instruction => {
+            if (operand_value.value < self.slots.len and
+                self.slots[operand_value.value].shape == .pointer)
+            {
+                try self.body.localGet(self.allocator, self.slots[operand_value.value].first);
+                return;
+            }
+            // NEW_TABLE publishes the pointer into a VM register and defines no
+            // instruction local. A later use reloads that register.
+            if (operand_value.value < self.function.instruction_count) {
+                if (try self.freshTableRegister(operand_value.value)) |register| {
+                    try self.body.localGet(self.allocator, self.base_local);
+                    try self.body.i32Load(self.allocator, 2, register * tvalue_size);
+                    return;
+                }
+            }
             if (operand_value.value >= self.slots.len) {
                 diagnostics.trace("ptr len");
                 return Error.InvalidInstructionResult;
             }
-            const slot = self.slots[operand_value.value];
-            if (slot.shape != .pointer) {
-                const producer = self.instruction(operand_value.value) catch {
-                    diagnostics.trace("ptr miss");
-                    return Error.InvalidInstructionResult;
-                };
-                var text: [48]u8 = undefined;
-                const rendered = std.fmt.bufPrint(&text, "ptr {s} {d}", .{
-                    @tagName(slot.shape),
-                    @intFromEnum(producer.command),
-                }) catch "ptr";
-                diagnostics.trace(rendered);
+            const producer = self.instruction(operand_value.value) catch {
+                diagnostics.trace("ptr miss");
                 return Error.InvalidInstructionResult;
-            }
-            try self.body.localGet(self.allocator, slot.first);
+            };
+            var text: [48]u8 = undefined;
+            const rendered = std.fmt.bufPrint(&text, "ptr {s} {d}", .{
+                @tagName(self.slots[operand_value.value].shape),
+                @intFromEnum(producer.command),
+            }) catch "ptr";
+            diagnostics.trace(rendered);
+            return Error.InvalidInstructionResult;
         },
         else => return Error.UnsupportedOperand,
     }

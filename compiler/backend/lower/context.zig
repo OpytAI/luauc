@@ -390,6 +390,7 @@ pub const Context = struct {
     pub const fixedContiguousFastcallPatternAt = builtin_patterns.fixedContiguousFastcallPatternAt;
     pub const stringLengthPattern = builtin_patterns.stringLengthPattern;
     pub const hasPreservedStringGuard = builtin_patterns.hasPreservedStringGuard;
+    pub const provedLiveSpans = builtin_patterns.provedLiveSpans;
     pub const preservesRegisterToConsumer = builtin_patterns.preservesRegisterToConsumer;
     pub const rangeHasPreservedStringGuard = builtin_patterns.rangeHasPreservedStringGuard;
     pub const instructionWritesRegister = builtin_patterns.instructionWritesRegister;

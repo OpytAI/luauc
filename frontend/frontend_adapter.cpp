@@ -845,6 +845,143 @@ bool serializeProtoMetadata(const std::vector<ProtoRef> &protos, std::vector<Sec
     return true;
 }
 
+// A published table stores its pointer and tag, then initializes fields.
+// Const-prop keeps one CHECK_GC for a block chain and kills the rest in place.
+// Linearization clones that chain and drops the killed NOP markers. Its second
+// const-prop can then kill the CHECK_GC that still owned the assist. The table
+// is left directly against the next initializer, and the planner rejects it.
+// Put one CHECK_GC back after the last initializer of the last such table.
+// Earlier tables in the function are owned by that check. The field stores
+// stay together, so the allocation remains deferred. A table that already has
+// a marker, or a later CHECK_GC, stays as the frontend emitted it.
+bool isTableInitializer(IrCmd cmd) {
+    switch (cmd) {
+    case IrCmd::SETLIST:
+    case IrCmd::STORE_TVALUE:
+    case IrCmd::STORE_SPLIT_TVALUE:
+    case IrCmd::STORE_TAG:
+    case IrCmd::STORE_POINTER:
+    case IrCmd::STORE_DOUBLE:
+    case IrCmd::STORE_VECTOR:
+    case IrCmd::GET_SLOT_NODE_ADDR:
+    case IrCmd::CHECK_SLOT_MATCH:
+    case IrCmd::CHECK_READONLY:
+    case IrCmd::BARRIER_TABLE_FORWARD:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isCompilableBlock(IrBlockKind kind) {
+    return kind == IrBlockKind::Bytecode || kind == IrBlockKind::Internal ||
+           kind == IrBlockKind::Linearized;
+}
+
+struct BareTable {
+    uint32_t insertAt = 0;
+    uint32_t owner = 0;
+};
+
+std::optional<BareTable> barePublishedTable(const IrFunction &function, uint32_t index) {
+    const std::vector<IrInst> &instructions = function.instructions;
+    const size_t count = instructions.size();
+    if (index >= count || instructions[index].cmd != IrCmd::NEW_TABLE)
+        return std::nullopt;
+    if (index + 1 >= count || instructions[index + 1].cmd != IrCmd::STORE_POINTER)
+        return std::nullopt;
+
+    uint32_t slot = index + 2;
+    if (slot < count && instructions[slot].cmd == IrCmd::STORE_TAG)
+        ++slot;
+    if (slot < count) {
+        const IrInst &marker = instructions[slot];
+        if (marker.ops.empty() && (marker.cmd == IrCmd::CHECK_GC || marker.cmd == IrCmd::NOP))
+            return std::nullopt;
+    }
+
+    const uint32_t published = slot - 1;
+    std::optional<uint32_t> owner;
+    for (uint32_t blockIndex = 0; blockIndex < function.blocks.size(); ++blockIndex) {
+        const IrBlock &block = function.blocks[blockIndex];
+        if (block.start == ~0u || block.finish == ~0u || !isCompilableBlock(block.kind))
+            continue;
+        if (block.start <= index && published <= block.finish) {
+            owner = blockIndex;
+            break;
+        }
+    }
+    if (!owner)
+        return std::nullopt;
+
+    const IrBlock &block = function.blocks[*owner];
+    uint32_t cursor = slot;
+    uint32_t insertAt = slot;
+    bool sawInitializer = false;
+    while (cursor <= block.finish && cursor < count) {
+        const IrCmd cmd = instructions[cursor].cmd;
+        if (cmd == IrCmd::CHECK_GC)
+            return std::nullopt;
+        if (cmd == IrCmd::NEW_TABLE || cmd == IrCmd::DUP_TABLE)
+            break;
+        if (isTableInitializer(cmd)) {
+            sawInitializer = true;
+            insertAt = cursor + 1;
+        }
+        ++cursor;
+    }
+    if (!sawInitializer)
+        return std::nullopt;
+    while (cursor < count) {
+        if (instructions[cursor].cmd == IrCmd::CHECK_GC)
+            return std::nullopt;
+        ++cursor;
+    }
+    return BareTable{insertAt, *owner};
+}
+
+void insertCollectorCheck(IrFunction &function, uint32_t slot, uint32_t ownerIndex) {
+    IrInst check{};
+    check.cmd = IrCmd::CHECK_GC;
+    function.instructions.insert(function.instructions.begin() + ptrdiff_t(slot), std::move(check));
+
+    for (IrInst &inst : function.instructions) {
+        for (IrOp &op : inst.ops)
+            if (op.kind == IrOpKind::Inst && op.index >= slot)
+                ++op.index;
+    }
+
+    function.blocks[ownerIndex].finish++;
+    for (size_t blockIndex = 0; blockIndex < function.blocks.size(); ++blockIndex) {
+        if (blockIndex == ownerIndex)
+            continue;
+        IrBlock &block = function.blocks[blockIndex];
+        if (block.start == ~0u || block.finish == ~0u)
+            continue;
+        if (block.start >= slot) {
+            ++block.start;
+            ++block.finish;
+        } else if (block.finish >= slot) {
+            ++block.finish;
+        }
+    }
+
+    for (BytecodeMapping &entry : function.bcMapping) {
+        if (entry.irLocation != ~0u && entry.irLocation >= slot)
+            ++entry.irLocation;
+    }
+}
+
+void restoreStrippedTableOwnership(IrFunction &function) {
+    std::optional<BareTable> last;
+    for (uint32_t index = 0; index < function.instructions.size(); ++index) {
+        if (std::optional<BareTable> site = barePublishedTable(function, index))
+            last = site;
+    }
+    if (last)
+        insertCollectorCheck(function, last->insertAt, last->owner);
+}
+
 bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &sections,
                  uint32_t &failureStatus, std::string &error) {
     SectionData &functions = section(sections, LUAUC_SNAPSHOT_V1_IR_FUNCTIONS);
@@ -892,6 +1029,7 @@ bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &
         computeCfgInfo(builder.function);
         constPropInBlockChains(builder);
         createLinearBlocks(builder);
+        restoreStrippedTableOwnership(builder.function);
         computeCfgBlockEdges(builder.function);
         updateUseCounts(builder.function);
 

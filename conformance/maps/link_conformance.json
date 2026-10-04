@@ -3,7 +3,7 @@
   "generator_version": "luauc-link-conformance-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "5a3d58d3990465626e841af673189462bab2039e22d16ad972891484ff1143d9",
+  "frontend_contract_digest": "4f422eb1ebec170e704d16b6f7e51ddac3383d11b40f81ca7d322c70b397dbb4",
   "objects": [
     {
       "name": "embed_lib",
@@ -557,5 +557,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "494c61b0a8359190236a7e57a0d20160b1d1c20d80bde577632069c6ebba5583"
+  "canonical_hash": "d9f5239f149328514508af9aec8e9d16d4326569a87a33b414a6c69ae621776c"
 }

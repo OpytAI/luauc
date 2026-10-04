@@ -426,36 +426,55 @@ pub fn hasPreservedStringGuard(self: anytype, source: u32, pointer_id: u32) Erro
             return false;
     return true;
 }
-pub fn preservesRegisterToConsumer(self: anytype, source: u32, producer_id: u32, consumer_id: u32) Error!bool {
-    if (producer_id >= consumer_id)
-        return false;
-    const producer_owner_id = self.plan.instructionBlock(producer_id) orelse return false;
-    const consumer_owner_id = self.plan.instructionBlock(consumer_id) orelse return false;
-    if (producer_owner_id == consumer_owner_id) {
-        var instruction_id = producer_id + 1;
-        while (instruction_id < consumer_id) : (instruction_id += 1)
-            if (try self.instructionWritesRegister(instruction_id, source))
-                return false;
-        return true;
-    }
+pub const LiveSpan = struct {
+    start: u32,
+    end: u32,
+};
 
-    const producer_owner = try self.snapshot.irBlock(self.function, producer_owner_id);
+pub const LiveSpans = struct {
+    first: LiveSpan,
+    second: ?LiveSpan = null,
+};
+
+fn spanWritesRegister(self: anytype, span: LiveSpan, register: u32) Error!bool {
+    var instruction_id = span.start;
+    while (instruction_id < span.end) : (instruction_id += 1)
+        if (try self.instructionWritesRegister(instruction_id, register))
+            return true;
+    return false;
+}
+
+/// Instructions that execute after `origin` and before `consumer_id`.
+/// Linearization appends its block after the blocks it copies, so the index
+/// span between them is not the path. The single predecessor edge is.
+pub fn provedLiveSpans(self: anytype, origin: u32, consumer_id: u32) Error!?LiveSpans {
+    if (origin >= consumer_id)
+        return null;
+    const origin_owner_id = self.plan.instructionBlock(origin) orelse return null;
+    const consumer_owner_id = self.plan.instructionBlock(consumer_id) orelse return null;
+    if (origin_owner_id == consumer_owner_id)
+        return .{ .first = .{ .start = origin + 1, .end = consumer_id } };
+
+    const origin_owner = try self.snapshot.irBlock(self.function, origin_owner_id);
     const consumer_owner = try self.snapshot.irBlock(self.function, consumer_owner_id);
-    if (!producer_owner.kind.isCompilable() or consumer_owner.kind != .linearized or
+    if (!origin_owner.kind.isCompilable() or consumer_owner.kind != .linearized or
         consumer_owner.use_count != 1)
-        return false;
+        return null;
+    const predecessors = self.plan.predecessorSlice(consumer_owner_id) orelse return null;
+    if (predecessors.len != 1 or predecessors[0] != origin_owner_id)
+        return null;
+    return .{
+        .first = .{ .start = origin + 1, .end = origin_owner.finish + 1 },
+        .second = .{ .start = consumer_owner.start, .end = consumer_id },
+    };
+}
 
-    const predecessors = self.plan.predecessorSlice(consumer_owner_id) orelse return false;
-    if (predecessors.len != 1 or predecessors[0] != producer_owner_id)
+pub fn preservesRegisterToConsumer(self: anytype, source: u32, producer_id: u32, consumer_id: u32) Error!bool {
+    const spans = (try provedLiveSpans(self, producer_id, consumer_id)) orelse return false;
+    if (try spanWritesRegister(self, spans.first, source))
         return false;
-
-    var instruction_id = producer_id + 1;
-    while (instruction_id <= producer_owner.finish) : (instruction_id += 1)
-        if (try self.instructionWritesRegister(instruction_id, source))
-            return false;
-    instruction_id = consumer_owner.start;
-    while (instruction_id < consumer_id) : (instruction_id += 1)
-        if (try self.instructionWritesRegister(instruction_id, source))
+    if (spans.second) |second|
+        if (try spanWritesRegister(self, second, source))
             return false;
     return true;
 }

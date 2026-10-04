@@ -3,9 +3,9 @@
   "generator_version": "luauc-artifact-report-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "5a3d58d3990465626e841af673189462bab2039e22d16ad972891484ff1143d9",
+  "frontend_contract_digest": "4f422eb1ebec170e704d16b6f7e51ddac3383d11b40f81ca7d322c70b397dbb4",
   "input_sha256": {
-    "luauc.wasm": "e9d99f5f29fb6d0ab29aabc22441423fe687e30be36a53140b46cbd95a58a602",
+    "luauc.wasm": "c361f6fab0997eb3724c61f2ce8f81525f41766df18d059bb6b23daa0da702be",
     "embed_v1.pack.wasm": "81044ae3934323d065101c79718bedb60c80f5f13a3899692705960213154fc5",
     "scalar_fixture.wasm": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
@@ -18,8 +18,8 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "e9d99f5f29fb6d0ab29aabc22441423fe687e30be36a53140b46cbd95a58a602",
-      "size": 1907496,
+      "sha256": "c361f6fab0997eb3724c61f2ce8f81525f41766df18d059bb6b23daa0da702be",
+      "size": 1911054,
       "imports": [],
       "exports": [
         "luauc_v1_alloc",
@@ -31,7 +31,7 @@
         "luauc_v1_result_free",
         "memory"
       ],
-      "function_count": 3456,
+      "function_count": 3464,
       "memory_min": 1024,
       "helpers": [],
       "features": [
@@ -184,5 +184,5 @@
       ]
     }
   ],
-  "canonical_hash": "94dd2bc6a2467b23ca407aef05409a44ff5c9d6120278cde4a02ef3ca802a37c"
+  "canonical_hash": "cf4a39ec9eb364e9e7d40d6932592a93bb486b855c9db9e161c29191938b57dd"
 }
