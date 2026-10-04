@@ -256,6 +256,14 @@ fn featureCount(mask: u32) u32 {
     return @popCount(mask);
 }
 
+fn linkLimits(budget_bytes: u32) linker.Limits {
+    var limits: linker.Limits = .{};
+    const budget: usize = budget_bytes;
+    if (budget > limits.max_input_bytes) limits.max_input_bytes = budget;
+    if (budget > limits.max_output_bytes) limits.max_output_bytes = budget;
+    return limits;
+}
+
 fn snapshotCompileUsage(bytes: []const u8) !struct { functions: u32, instructions: u32 } {
     const snapshot = try snapshot_v1.parse(bytes, snapshot_v1.production_identity);
     var instructions: u32 = 0;
@@ -438,7 +446,9 @@ pub fn compile(handle: u32, request: []const u8) Guest {
         return rejected(&guest, failure, diagnostic);
     };
     defer allocator.free(object);
-    const linked = linker.link(allocator, slot.pack.?, object, profile, .{}, .{
+    // The source-package budget is the caller's ceiling. The linker defaults stay
+    // in force when that budget is smaller.
+    const linked = linker.link(allocator, slot.pack.?, object, profile, linkLimits(package.compile_budget_bytes), .{
         .compiler_build_sha256 = compiler_build.compiler_build_sha256,
         .package_manifest_sha256 = package.manifest_sha256,
     }) catch |err| return rejectedError(&guest, switch (err) {
