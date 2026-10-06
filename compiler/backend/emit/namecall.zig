@@ -314,32 +314,48 @@ pub noinline fn emitFallbackNamecall(
     try self.emitReloadBase();
     try self.body.end(self.allocator);
 }
+fn emitPlainNamecall(self: anytype, destination: u32, source: u32, key_offset: u32, key_length: u32) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(destination));
+    try self.body.i32Const(self.allocator, @intCast(source));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key_offset));
+    try self.body.i32Const(self.allocator, @intCast(key_length));
+    try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
+    try self.emitReloadBase();
+}
+
 pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTableNamecallPattern) Error!void {
     const key = try self.string_keys.intern(self.allocator, pattern.key);
     try self.emitPcLocation(pattern.pc);
-    // Own slot or one table __index. A string receiver uses the type metatable.
-    // A function __index, a chain longer than the walk, and a missing method stay on namecall_plain.
-    try self.emitInlineNamecallProbe(pattern.source, pattern.destination, pattern.key_constant);
-    try self.body.localGet(self.allocator, self.call_proto_local);
-    try self.body.i32Eqz(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    const fallback_block = try self.snapshot.irBlock(self.function, pattern.fallback);
-    if (try followingStringMethod(self, fallback_block.start + 1, pattern.destination))
-        try emitDeferredStringReceiver(self, pattern.destination, pattern.source)
-    else
-        try self.emitInlineNonTableNamecall(pattern.destination, pattern.source, pattern.key_constant);
-    try self.body.localGet(self.allocator, self.call_proto_local);
-    try self.body.i32Eqz(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-    try self.body.i32Const(self.allocator, @intCast(pattern.source));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
-    try self.body.i32Const(self.allocator, @intCast(key.length));
-    try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
+    // A package larger than the inline sibling chain leaves both probes clear.
+    // The helper is the only path, except a proved string method that keeps the nil method slot.
+    if (self.interrupt_helper != null) {
+        const fallback_block = try self.snapshot.irBlock(self.function, pattern.fallback);
+        if (try followingStringMethod(self, fallback_block.start + 1, pattern.destination))
+            try emitDeferredStringReceiver(self, pattern.destination, pattern.source)
+        else
+            try emitPlainNamecall(self, pattern.destination, pattern.source, key.offset, key.length);
+    } else {
+        // Own slot or one table __index. A string receiver uses the type metatable.
+        // A function __index, a chain longer than the walk, and a missing method stay on namecall_plain.
+        try self.emitInlineNamecallProbe(pattern.source, pattern.destination, pattern.key_constant);
+        try self.body.localGet(self.allocator, self.call_proto_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        const fallback_block = try self.snapshot.irBlock(self.function, pattern.fallback);
+        if (try followingStringMethod(self, fallback_block.start + 1, pattern.destination))
+            try emitDeferredStringReceiver(self, pattern.destination, pattern.source)
+        else
+            try self.emitInlineNonTableNamecall(pattern.destination, pattern.source, pattern.key_constant);
+        try self.body.localGet(self.allocator, self.call_proto_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitPlainNamecall(self, pattern.destination, pattern.source, key.offset, key.length);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+    }
+    if (self.rejoin_fallthrough)
+        return;
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }
@@ -481,7 +497,11 @@ pub noinline fn emitConcat(self: anytype, pattern: ConcatPattern) Error!void {
     // The helper writes the destination register and does not fill the load's wasm slot.
     // A later store of that load copies the slot, so publish the register into it.
     try self.emitReloadBase();
+    // The store inside this cluster is one use. A second use is a later reader of the slot.
     const load_id = pattern.start + 2;
+    const uses = self.plan.instructionUses(load_id) orelse return Error.InvalidInstructionResult;
+    if (uses <= 1)
+        return;
     if (load_id >= self.slots.len or self.slots[load_id].shape != .tvalue)
         return Error.InvalidInstructionResult;
     const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };

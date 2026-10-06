@@ -508,26 +508,22 @@ pub const IrConstant = struct {
 pub const Snapshot = struct {
     bytes: []const u8,
     header: Header,
+    /// Indexed by SectionKind. `parse` fills this once. Lookups do not walk the directory.
+    sections: [max_sections + 1]?Section,
 
-    pub fn section(self: Snapshot, wanted: SectionKind) ?Section {
-        var index: u32 = 0;
-        while (index < self.header.section_count) : (index += 1) {
-            const descriptor = readSection(self.bytes, index) catch unreachable;
-            if (descriptor.kind == wanted)
-                return descriptor;
-        }
-        return null;
+    pub fn section(self: *const Snapshot, wanted: SectionKind) ?Section {
+        return self.sections[@intFromEnum(wanted)];
     }
 
-    pub fn requireSection(self: Snapshot, wanted: SectionKind) Error!Section {
+    pub fn requireSection(self: *const Snapshot, wanted: SectionKind) Error!Section {
         return self.section(wanted) orelse Error.MissingSection;
     }
 
-    pub fn proto(self: Snapshot, id: u32) Error!Proto {
+    pub fn proto(self: *const Snapshot, id: u32) Error!Proto {
         const records = try self.requireSection(.protos);
         if (id >= records.count)
             return Error.IndexOutOfBounds;
-        const item = recordBytes(self, records, id);
+        const item = recordBytes(self.bytes, records, id);
         return .{
             .id = readU32(item, 0),
             .parent_id = readU32(item, 4),
@@ -552,14 +548,14 @@ pub const Snapshot = struct {
         };
     }
 
-    pub fn bytecodeWord(self: Snapshot, proto_value: Proto, pc: u32) Error!u32 {
+    pub fn bytecodeWord(self: *const Snapshot, proto_value: Proto, pc: u32) Error!u32 {
         if (pc >= proto_value.code_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.bytecode_words);
-        return readU32(recordBytes(self, records, proto_value.code_start + pc), 0);
+        return readU32(recordBytes(self.bytes, records, proto_value.code_start + pc), 0);
     }
 
-    pub fn sourceLine(self: Snapshot, proto_value: Proto, pc: u32) Error!u32 {
+    pub fn sourceLine(self: *const Snapshot, proto_value: Proto, pc: u32) Error!u32 {
         if (pc >= proto_value.code_count)
             return Error.IndexOutOfBounds;
         if (proto_value.lineinfo_count == 0)
@@ -572,23 +568,23 @@ pub const Snapshot = struct {
             return Error.InvalidProto;
         const lineinfo = try self.requireSection(.lineinfo_bytes);
         const abslineinfo = try self.requireSection(.abslineinfo);
-        const absolute_line = readU32(recordBytes(self, abslineinfo, proto_value.absline_start + absolute_index), 0);
-        return std.math.add(u32, absolute_line, recordBytes(self, lineinfo, proto_value.lineinfo_start + pc)[0]) catch
+        const absolute_line = readU32(recordBytes(self.bytes, abslineinfo, proto_value.absline_start + absolute_index), 0);
+        return std.math.add(u32, absolute_line, recordBytes(self.bytes, lineinfo, proto_value.lineinfo_start + pc)[0]) catch
             return Error.InvalidProto;
     }
 
-    pub fn protoChild(self: Snapshot, proto_value: Proto, id: u32) Error!u32 {
+    pub fn protoChild(self: *const Snapshot, proto_value: Proto, id: u32) Error!u32 {
         if (id >= proto_value.child_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.proto_children);
-        return readU32(recordBytes(self, records, proto_value.child_start + id), 0);
+        return readU32(recordBytes(self.bytes, records, proto_value.child_start + id), 0);
     }
 
-    pub fn vmConstant(self: Snapshot, proto_value: Proto, id: u32) Error!VmConstant {
+    pub fn vmConstant(self: *const Snapshot, proto_value: Proto, id: u32) Error!VmConstant {
         if (id >= proto_value.vm_constant_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.vm_constants);
-        const item = recordBytes(self, records, proto_value.vm_constant_start + id);
+        const item = recordBytes(self.bytes, records, proto_value.vm_constant_start + id);
         return .{
             .kind = @enumFromInt(item[0]),
             .payload0 = readU32(item, 4),
@@ -599,20 +595,20 @@ pub const Snapshot = struct {
         };
     }
 
-    pub fn vmConstantItem(self: Snapshot, id: u32) Error!VmConstantItem {
+    pub fn vmConstantItem(self: *const Snapshot, id: u32) Error!VmConstantItem {
         const records = try self.requireSection(.vm_constant_items);
         if (id >= records.count)
             return Error.IndexOutOfBounds;
-        const item = recordBytes(self, records, id);
+        const item = recordBytes(self.bytes, records, id);
         return .{ .key = readU32(item, 0), .value = readU32(item, 4) };
     }
 
-    pub fn string(self: Snapshot, id: u32) Error![]const u8 {
+    pub fn string(self: *const Snapshot, id: u32) Error![]const u8 {
         const strings = try self.requireSection(.strings);
         const bytes = try self.requireSection(.string_bytes);
         if (id >= strings.count)
             return Error.IndexOutOfBounds;
-        const item = recordBytes(self, strings, id);
+        const item = recordBytes(self.bytes, strings, id);
         const start = readU64(item, 0);
         const size = readU32(item, 8);
         if (start > bytes.count or size > bytes.count - start)
@@ -622,11 +618,11 @@ pub const Snapshot = struct {
         return self.bytes[begin..end];
     }
 
-    pub fn irFunction(self: Snapshot, id: u32) Error!IrFunction {
+    pub fn irFunction(self: *const Snapshot, id: u32) Error!IrFunction {
         const records = try self.requireSection(.ir_functions);
         if (id >= records.count)
             return Error.IndexOutOfBounds;
-        const item = recordBytes(self, records, id);
+        const item = recordBytes(self.bytes, records, id);
         return .{
             .id = readU32(item, 0),
             .proto_id = readU32(item, 4),
@@ -643,11 +639,11 @@ pub const Snapshot = struct {
         };
     }
 
-    pub fn irBlock(self: Snapshot, function: IrFunction, id: u32) Error!IrBlock {
+    pub fn irBlock(self: *const Snapshot, function: IrFunction, id: u32) Error!IrBlock {
         if (id >= function.block_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.ir_blocks);
-        const item = recordBytes(self, records, function.block_start + id);
+        const item = recordBytes(self.bytes, records, function.block_start + id);
         return .{
             .kind = @enumFromInt(item[0]),
             .flags = item[1],
@@ -659,11 +655,11 @@ pub const Snapshot = struct {
         };
     }
 
-    pub fn irInstruction(self: Snapshot, function: IrFunction, id: u32) Error!IrInstruction {
+    pub fn irInstruction(self: *const Snapshot, function: IrFunction, id: u32) Error!IrInstruction {
         if (id >= function.instruction_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.ir_instructions);
-        const item = recordBytes(self, records, function.instruction_start + id);
+        const item = recordBytes(self.bytes, records, function.instruction_start + id);
         return .{
             .command = @enumFromInt(item[0]),
             .use_count = readU16(item, 2),
@@ -672,19 +668,19 @@ pub const Snapshot = struct {
         };
     }
 
-    pub fn irOperand(self: Snapshot, instruction: IrInstruction, id: u32) Error!IrOperand {
+    pub fn irOperand(self: *const Snapshot, instruction: IrInstruction, id: u32) Error!IrOperand {
         if (id >= instruction.operand_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.ir_operands);
-        const item = recordBytes(self, records, instruction.operand_start + id);
+        const item = recordBytes(self.bytes, records, instruction.operand_start + id);
         return .{ .kind = @enumFromInt(item[0]), .value = readU32(item, 4) };
     }
 
-    pub fn irConstant(self: Snapshot, function: IrFunction, id: u32) Error!IrConstant {
+    pub fn irConstant(self: *const Snapshot, function: IrFunction, id: u32) Error!IrConstant {
         if (id >= function.constant_count)
             return Error.IndexOutOfBounds;
         const records = try self.requireSection(.ir_constants);
-        const item = recordBytes(self, records, function.constant_start + id);
+        const item = recordBytes(self.bytes, records, function.constant_start + id);
         return .{ .kind = @enumFromInt(item[0]), .bits = readU64(item, 8) };
     }
 };
@@ -744,10 +740,12 @@ pub fn parse(bytes: []const u8, expected: ExpectedIdentity) Error!Snapshot {
 
     var previous_kind: u16 = 0;
     var expected_offset: u64 = payload_start;
+    var sections = [_]?Section{null} ** (max_sections + 1);
     var index: u32 = 0;
     while (index < section_count) : (index += 1) {
         const section = try readSection(bytes, index);
         const raw_kind = @intFromEnum(section.kind);
+        sections[raw_kind] = section;
         if (raw_kind <= previous_kind)
             return if (raw_kind == previous_kind) Error.DuplicateSection else Error.NonCanonicalSectionOrder;
         previous_kind = raw_kind;
@@ -767,7 +765,7 @@ pub fn parse(bytes: []const u8, expected: ExpectedIdentity) Error!Snapshot {
     if (expected_offset != bytes.len)
         return Error.BadTotalSize;
 
-    return .{ .bytes = bytes, .header = header };
+    return .{ .bytes = bytes, .header = header, .sections = sections };
 }
 
 pub fn validateModel(snapshot: Snapshot) Error!void {
@@ -808,7 +806,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
     var string_cursor: u64 = 0;
     var index: u32 = 0;
     while (index < strings.count) : (index += 1) {
-        const item = recordBytes(snapshot, strings, index);
+        const item = recordBytes(snapshot.bytes, strings, index);
         if (readU64(item, 0) != string_cursor or !spanFits(readU64(item, 0), readU32(item, 8), string_bytes.count))
             return Error.InvalidString;
         if (readU32(item, 12) != 0)
@@ -820,7 +818,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
     index = 0;
     while (index < protos.count) : (index += 1) {
-        const proto = recordBytes(snapshot, protos, index);
+        const proto = recordBytes(snapshot.bytes, protos, index);
         const bytecode_id = readU32(proto, 20);
         const fun_id = readU32(proto, 24);
         if (readU32(proto, 0) != index or readU32(proto, 116) != index or
@@ -851,10 +849,10 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
         var previous_child: ?u32 = null;
         var child_index: u32 = 0;
         while (child_index < child_count) : (child_index += 1) {
-            const child = readU32(recordBytes(snapshot, children, child_start + child_index), 0);
+            const child = readU32(recordBytes(snapshot.bytes, children, child_start + child_index), 0);
             if (child <= index or child >= protos.count or
                 (previous_child != null and child <= previous_child.?) or
-                readU32(recordBytes(snapshot, protos, child), 4) != index)
+                readU32(recordBytes(snapshot.bytes, protos, child), 4) != index)
                 return Error.InvalidProtoGraph;
             previous_child = child;
         }
@@ -865,14 +863,14 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
             return Error.InvalidProto;
         var upvalue_index: u32 = 0;
         while (upvalue_index < upvalue_count) : (upvalue_index += 1)
-            try validateOptionalId(readU32(recordBytes(snapshot, upvalue_names, upvalue_start + upvalue_index), 0), strings.count, Error.InvalidProto);
+            try validateOptionalId(readU32(recordBytes(snapshot.bytes, upvalue_names, upvalue_start + upvalue_index), 0), strings.count, Error.InvalidProto);
 
         const local_start = readU32(proto, 68);
         const local_count = readU32(proto, 72);
         const code_count = readU32(proto, 40);
         var local_index: u32 = 0;
         while (local_index < local_count) : (local_index += 1) {
-            const local = recordBytes(snapshot, locals, local_start + local_index);
+            const local = recordBytes(snapshot.bytes, locals, local_start + local_index);
             try validateOptionalId(readU32(local, 0), strings.count, Error.InvalidProto);
             if (readU32(local, 4) > readU32(local, 8) or readU32(local, 8) > code_count or local[12] >= proto[32])
                 return Error.InvalidProto;
@@ -889,7 +887,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
         const constant_count = readU32(proto, 48);
         var constant_index: u32 = 0;
         while (constant_index < constant_count) : (constant_index += 1) {
-            const constant = recordBytes(snapshot, vm_constants, constant_start + constant_index);
+            const constant = recordBytes(snapshot.bytes, vm_constants, constant_start + constant_index);
             const constant_kind = constant[0];
             if (constant[1] != 0 or readU16(constant, 2) != 0 or !allZero(constant[20..24]) or !allZero(constant[32..40]))
                 return Error.InvalidVmConstant;
@@ -911,7 +909,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
                         return Error.InvalidVmConstant;
                     var item_index: u32 = 0;
                     while (item_index < item_count) : (item_index += 1) {
-                        const item = recordBytes(snapshot, vm_constant_items, item_start + item_index);
+                        const item = recordBytes(snapshot.bytes, vm_constant_items, item_start + item_index);
                         if (readU32(item, 0) >= constant_count or readU32(item, 4) != no_id)
                             return Error.InvalidVmConstant;
                     }
@@ -923,7 +921,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
                         return Error.InvalidVmConstant;
                     var item_index: u32 = 0;
                     while (item_index < item_count) : (item_index += 1) {
-                        const item = recordBytes(snapshot, vm_constant_items, item_start + item_index);
+                        const item = recordBytes(snapshot.bytes, vm_constant_items, item_start + item_index);
                         if (readU32(item, 0) >= constant_count)
                             return Error.InvalidVmConstant;
                         try validateOptionalId(readU32(item, 4), constant_count, Error.InvalidVmConstant);
@@ -936,7 +934,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
                         return Error.InvalidVmConstant;
                     var item_index: u32 = 0;
                     while (item_index < item_count) : (item_index += 1) {
-                        const item = recordBytes(snapshot, vm_constant_items, item_start + item_index);
+                        const item = recordBytes(snapshot.bytes, vm_constant_items, item_start + item_index);
                         if (readU32(item, 0) >= constant_count or readU32(item, 4) != no_id)
                             return Error.InvalidVmConstant;
                     }
@@ -959,10 +957,10 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
     index = 0;
     while (index < ir_functions.count) : (index += 1) {
-        const function = recordBytes(snapshot, ir_functions, index);
+        const function = recordBytes(snapshot.bytes, ir_functions, index);
         if (readU32(function, 0) != index or readU32(function, 4) != index or function[12] > 1 or !allZero(function[13..16]) or !allZero(function[56..64]))
             return Error.InvalidIrFunction;
-        const proto = recordBytes(snapshot, protos, index);
+        const proto = recordBytes(snapshot.bytes, protos, index);
         if (function[12] != proto[31])
             return Error.InvalidIrFunction;
 
@@ -985,7 +983,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
         var block_index: u32 = 0;
         while (block_index < block_count) : (block_index += 1) {
-            const block = recordBytes(snapshot, ir_blocks, block_start + block_index);
+            const block = recordBytes(snapshot.bytes, ir_blocks, block_start + block_index);
             if (block[0] > 5 or block[1] & ~@as(u8, 7) != 0 or !allZero(block[28..32]))
                 return Error.InvalidIrBlock;
             const start = readU32(block, 4);
@@ -1000,7 +998,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
         var instruction_index: u32 = 0;
         while (instruction_index < instruction_count) : (instruction_index += 1) {
-            const instruction = recordBytes(snapshot, ir_instructions, instruction_start + instruction_index);
+            const instruction = recordBytes(snapshot.bytes, ir_instructions, instruction_start + instruction_index);
             if (instruction[0] > 215 or instruction[1] != 0 or readU32(instruction, 4) != no_id or !allZero(instruction[16..24]))
                 return Error.InvalidIrInstruction;
             const first_operand = readU32(instruction, 8);
@@ -1010,7 +1008,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
             var operand_index: u32 = 0;
             while (operand_index < instruction_operand_count) : (operand_index += 1) {
-                const operand = recordBytes(snapshot, ir_operands, first_operand + operand_index);
+                const operand = recordBytes(snapshot.bytes, ir_operands, first_operand + operand_index);
                 if (!allZero(operand[1..4]))
                     return Error.InvalidIrOperand;
                 const operand_kind = operand[0];
@@ -1051,7 +1049,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
 
         var constant_index: u32 = 0;
         while (constant_index < ir_constant_count) : (constant_index += 1) {
-            const constant = recordBytes(snapshot, ir_constants, ir_constant_start + constant_index);
+            const constant = recordBytes(snapshot.bytes, ir_constants, ir_constant_start + constant_index);
             if (constant[0] > 5 or !allZero(constant[1..8]))
                 return Error.InvalidIrConstant;
             const bits = readU64(constant, 8);
@@ -1073,7 +1071,7 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
             return Error.InvalidBytecodeMapping;
         var mapping_index: u32 = 0;
         while (mapping_index < mapping_count) : (mapping_index += 1) {
-            const entry = recordBytes(snapshot, bc_mapping, mapping_start + mapping_index);
+            const entry = recordBytes(snapshot.bytes, bc_mapping, mapping_start + mapping_index);
             try validateOptionalId(readU32(entry, 0), instruction_count, Error.InvalidBytecodeMapping);
             if (readU32(entry, 4) != no_id)
                 return Error.InvalidBytecodeMapping;
@@ -1087,10 +1085,10 @@ pub fn validateModel(snapshot: Snapshot) Error!void {
     try validateExactPartitions(snapshot, ir_functions, 48, bc_mapping.count, Error.InvalidIrFunction);
 }
 
-fn recordBytes(snapshot: Snapshot, descriptor: Section, index: u32) []const u8 {
+fn recordBytes(bytes: []const u8, descriptor: Section, index: u32) []const u8 {
     std.debug.assert(index < descriptor.count);
     const start: usize = @intCast(descriptor.offset + @as(u64, index) * descriptor.record_size);
-    return snapshot.bytes[start .. start + descriptor.record_size];
+    return bytes[start .. start + descriptor.record_size];
 }
 
 fn spanFits(start: u64, count: u32, total: u32) bool {
@@ -1117,7 +1115,7 @@ fn validateExactPartitions(snapshot: Snapshot, records: Section, range_offset: u
     var cursor: u64 = 0;
     var index: u32 = 0;
     while (index < records.count) : (index += 1) {
-        const item = recordBytes(snapshot, records, index);
+        const item = recordBytes(snapshot.bytes, records, index);
         const start = readU32(item, range_offset);
         const count = readU32(item, range_offset + 4);
         if (start != cursor or !spanFits(start, count, total))

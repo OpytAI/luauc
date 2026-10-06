@@ -176,11 +176,13 @@ fn emitConstantLoadHelper(self: anytype, destination: u32, constant_id: u32) Err
     try self.body.i32Const(self.allocator, @intCast(destination));
     try self.body.i32Const(self.allocator, @intCast(constant_id));
     try self.body.call(self.allocator, self.load_constant orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
 }
 fn emitConstantLoadValue(self: anytype, destination: u32, constant_id: u32) Error!void {
+    // A package larger than the inline sibling chain copies through the runtime helper.
     // LOP_LOADK copies one Proto.k slot. The active thread is never black, so this
     // path does not barrier. A zero constant cache, or a destination at L->top, uses the helper.
+    if (self.interrupt_helper != null)
+        return emitConstantLoadHelper(self, destination, constant_id);
     const dest_offset: i32 = std.math.cast(i32, destination * tvalue_size) orelse return Error.ResourceLimit;
     const const_offset: i32 = std.math.cast(i32, constant_id * tvalue_size) orelse return Error.ResourceLimit;
     try self.body.localGet(self.allocator, self.constant_array_local);
@@ -213,8 +215,10 @@ fn emitConstantLoadValue(self: anytype, destination: u32, constant_id: u32) Erro
 }
 pub noinline fn emitConstantLoad(self: anytype, pattern: ConstantLoadPattern) Error!void {
     try emitConstantLoadValue(self, pattern.destination, pattern.constant_id);
-    // The register is published either by the copy or by the helper. Vector math reads the
-    // load instruction's slot, which this cluster replaced, so the same bytes have to land there too.
+    // The store inside this cluster is one use. A second use is a later reader of the slot.
+    const uses = self.plan.instructionUses(pattern.start) orelse return Error.InvalidInstructionResult;
+    if (uses <= 1)
+        return;
     if (pattern.start >= self.slots.len or self.slots[pattern.start].shape != .tvalue)
         return Error.InvalidInstructionResult;
     const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };
@@ -318,7 +322,11 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
         try self.body.end(self.allocator);
     }
 
+    // The store inside this cluster is one use. A second use is a later reader of the slot.
     const result_id = pattern.start + 1;
+    const uses = self.plan.instructionUses(result_id) orelse return Error.InvalidInstructionResult;
+    if (uses <= 1)
+        return;
     if (result_id >= self.slots.len or self.slots[result_id].shape != .tvalue)
         return Error.InvalidInstructionResult;
     const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };

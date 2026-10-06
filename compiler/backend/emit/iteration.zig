@@ -861,6 +861,12 @@ fn emitConstantArrayAttempt(
     slot: u32,
     index: u32,
 ) Error!void {
+    // A package larger than the inline sibling chain keeps status 0 so the caller uses array_get, array_set, or the generic fallback.
+    if (self.interrupt_helper != null) {
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.localSet(self.allocator, self.status_local);
+        return;
+    }
     const index_i32 = std.math.cast(i32, index) orelse {
         try self.body.i32Const(self.allocator, 0);
         try self.body.localSet(self.allocator, self.status_local);
@@ -887,6 +893,16 @@ fn emitArrayMissEnd(self: anytype) Error!void {
 }
 
 pub noinline fn emitInlineArrayGet(self: anytype, pattern: model.InlineArrayGetPattern) Error!void {
+    // A package larger than the inline sibling chain keeps the attempt at status 0.
+    if (self.interrupt_helper != null) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(pattern.destination));
+        try self.body.i32Const(self.allocator, @intCast(pattern.table));
+        try self.body.i32Const(self.allocator, @intCast(pattern.index));
+        try self.body.call(self.allocator, self.array_get orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+        return;
+    }
     try emitConstantArrayAttempt(self, .get, pattern.table, pattern.destination, pattern.index);
     try emitArrayMiss(self);
     try self.body.localGet(self.allocator, 0);
@@ -899,6 +915,9 @@ pub noinline fn emitInlineArrayGet(self: anytype, pattern: model.InlineArrayGetP
 }
 
 pub noinline fn emitGuardedConstantTableGet(self: anytype, pattern: GenericTablePattern) Error!void {
+    // A package larger than the inline sibling chain keeps the attempt at status 0.
+    if (self.interrupt_helper != null)
+        return emitGenericTableFallbackCall(self, pattern);
     const number = pattern.immediate_number_key orelse return emitGenericTableFallbackCall(self, pattern);
     if (number < 1 or number > @as(f64, @floatFromInt(std.math.maxInt(i32))) or @trunc(number) != number)
         return emitGenericTableFallbackCall(self, pattern);
@@ -913,8 +932,19 @@ pub noinline fn emitArrayOperation(
     pattern: ArrayOperationPattern,
     operation: ArrayOperationKind,
 ) Error!void {
+    shared: {
     switch (operation) {
         .set => {
+            // A package larger than the inline sibling chain keeps the attempt at status 0.
+            if (self.interrupt_helper != null) {
+                try self.body.localGet(self.allocator, 0);
+                try self.body.i32Const(self.allocator, @intCast(pattern.table));
+                try self.body.i32Const(self.allocator, @intCast(pattern.source));
+                try self.body.i32Const(self.allocator, @intCast(pattern.index));
+                try self.body.call(self.allocator, self.array_set orelse return Error.UnsupportedCommand);
+                try self.emitReloadBase();
+                break :shared;
+            }
             try emitConstantArrayAttempt(self, .set, pattern.table, pattern.source, pattern.index);
             try emitArrayMiss(self);
             try self.body.localGet(self.allocator, 0);
@@ -926,6 +956,15 @@ pub noinline fn emitArrayOperation(
             try emitArrayMissEnd(self);
         },
         .get => {
+            if (self.interrupt_helper != null) {
+                try self.body.localGet(self.allocator, 0);
+                try self.body.i32Const(self.allocator, @intCast(pattern.destination));
+                try self.body.i32Const(self.allocator, @intCast(pattern.table));
+                try self.body.i32Const(self.allocator, @intCast(pattern.index));
+                try self.body.call(self.allocator, self.array_get orelse return Error.UnsupportedCommand);
+                try self.emitReloadBase();
+                break :shared;
+            }
             try emitConstantArrayAttempt(self, .get, pattern.table, pattern.destination, pattern.index);
             try emitArrayMiss(self);
             try self.body.localGet(self.allocator, 0);
@@ -941,6 +980,9 @@ pub noinline fn emitArrayOperation(
             try self.publishLengthSlot(pattern.start + 5, pattern.destination);
         },
     }
+    }
+    if (self.rejoin_fallthrough)
+        return;
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }
@@ -994,16 +1036,19 @@ pub noinline fn emitGlobalOperation(self: anytype, pattern: GlobalPattern) Error
     // The fallback's bytecode pc is consumed here solely to publish the decoded source line.
     // The runtime ABI receives only the already-decoded register and literal key bytes.
     try self.emitPcLocation(pattern.pc);
-    if (pattern.operation == .get) {
+    // A package larger than the inline sibling chain leaves the env probe clear.
+    if (self.interrupt_helper != null or pattern.operation != .get) {
+        try emitGlobalLookup(self, pattern, key.offset, key.length);
+    } else {
         try tables.emitInlineEnvGet(self, pattern.value, pattern.key_constant);
         try self.body.localGet(self.allocator, self.call_proto_local);
         try self.body.i32Eqz(self.allocator);
         try self.body.ifVoid(self.allocator);
         try emitGlobalLookup(self, pattern, key.offset, key.length);
         try self.body.end(self.allocator);
-    } else {
-        try emitGlobalLookup(self, pattern, key.offset, key.length);
     }
+    if (self.rejoin_fallthrough)
+        return;
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }
@@ -1099,6 +1144,9 @@ fn emitUnprovedNumericTableSet(
 pub noinline fn emitGenericTableDirectAttempt(self: anytype, pattern: GenericTablePattern) Error!void {
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.status_local);
+    // A package larger than the inline sibling chain keeps status 0. The caller uses table_get or table_set.
+    if (self.interrupt_helper != null)
+        return;
 
     const register_key = pattern.register_key orelse return;
     const key = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register_key };
@@ -1304,6 +1352,15 @@ pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, blo
         if (try self.emitInstructionRange(block.start, pattern.start - 1, block))
             return;
     }
+    // A package larger than the inline sibling chain leaves the numeric probe clear.
+    // The helper is the only path. Status stays 0, matching the attempt it replaced.
+    if (self.interrupt_helper != null) {
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.emitGenericTableFallbackCall(pattern);
+        try self.emitDispatchRejoin(pattern.rejoin);
+        return;
+    }
     try self.emitGenericTableDirectAttempt(pattern);
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.i32Eqz(self.allocator);
@@ -1313,6 +1370,12 @@ pub noinline fn emitGenericTableOperationBlock(self: anytype, block_id: u32, blo
     try self.emitDispatchRejoin(pattern.rejoin);
 }
 pub noinline fn emitInlineGenericTableSet(self: anytype, pattern: GenericTablePattern) Error!void {
+    if (self.interrupt_helper != null) {
+        try self.body.i32Const(self.allocator, 0);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.emitGenericTableFallbackCall(pattern);
+        return;
+    }
     try self.emitGenericTableDirectAttempt(pattern);
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.i32Eqz(self.allocator);

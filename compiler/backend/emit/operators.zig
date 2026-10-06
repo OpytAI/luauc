@@ -523,6 +523,8 @@ pub noinline fn emitDynamicLength(self: anytype, pattern: DynamicLengthPattern) 
     // A string length is a load. A plain table uses the table-length helper. __len stays on do_len.
     try self.emitRegisterLength(pattern.destination, pattern.source);
     try self.publishLengthSlot(pattern.start + 5, pattern.destination);
+    if (self.rejoin_fallthrough)
+        return;
     try self.body.i32Const(self.allocator, @intCast(pattern.rejoin));
     try self.body.localSet(self.allocator, self.dispatch_local);
 }

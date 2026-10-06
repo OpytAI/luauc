@@ -107,10 +107,25 @@ pub const Body = struct {
     pub fn init(allocator: std.mem.Allocator, locals: []const Local) !Body {
         var body = Body{};
         errdefer body.deinit(allocator);
-        try appendUleb(&body.bytes, allocator, locals.len);
-        for (locals) |local| {
-            try appendUleb(&body.bytes, allocator, local.count);
-            try body.bytes.append(allocator, @intFromEnum(local.value_type));
+        // Adjacent groups of one wasm type are one declaration. Indices stay the
+        // running sum of the counts, so merging does not renumber a local.
+        var groups: usize = 0;
+        var index: usize = 0;
+        while (index < locals.len) {
+            groups += 1;
+            const value_type = locals[index].value_type;
+            index += 1;
+            while (index < locals.len and locals[index].value_type == value_type) : (index += 1) {}
+        }
+        try appendUleb(&body.bytes, allocator, groups);
+        index = 0;
+        while (index < locals.len) {
+            const value_type = locals[index].value_type;
+            var count: u32 = 0;
+            while (index < locals.len and locals[index].value_type == value_type) : (index += 1)
+                count += locals[index].count;
+            try appendUleb(&body.bytes, allocator, count);
+            try body.bytes.append(allocator, @intFromEnum(value_type));
         }
         return body;
     }

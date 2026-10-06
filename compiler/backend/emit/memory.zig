@@ -710,8 +710,10 @@ pub noinline fn emitGetSlotNodeAddr(
     const pc_is_uint = pc.kind == .constant and (try self.constant(pc.value)).uintValue() != null;
     if (!pc_is_uint or key.kind != .vm_const or key.value >= self.proto.vm_constant_count)
         return Error.InvalidOperandType;
-    // Allocation and register loads publish the table in a VM register. A skipped
-    // producer leaves the instruction local unset, so the use reloads that register.
+    // A load that ran on this path kept the GC pointer in its wasm local.
+    // Const-prop reuses that load after a later store reuses the register.
+    // Reloading is for a producer this path did not emit. Its register still
+    // holds the table, as in a fused probe that did not publish the pointer.
     const register_pointer = if (table.kind == .instruction)
         try tablePointerRegister(self, table.value)
     else
@@ -756,7 +758,9 @@ pub noinline fn emitGetSlotNodeAddr(
             return Error.UnsupportedControlFlow;
         }
     }
-    if (register_pointer) |register| {
+    if (table.kind == .instruction and pointerLocalReady(self, table.value)) {
+        try self.emitPointerValue(table);
+    } else if (register_pointer) |register| {
         try self.body.localGet(self.allocator, self.base_local);
         try self.body.i32Load(self.allocator, 2, register * tvalue_size);
     } else {
@@ -785,14 +789,58 @@ fn slotNodeEscapes(self: anytype, node_id: u32, finish: u32) Error!bool {
     return uses > inside;
 }
 
+fn pointerLocalReady(self: anytype, instruction_id: u32) bool {
+    return instruction_id < self.instruction_produced.len and
+        self.instruction_produced[instruction_id] and
+        instruction_id < self.slots.len and
+        self.slots[instruction_id].shape == .pointer;
+}
+
+fn registerStableUntil(self: anytype, start: u32, load_id: u32, register: u32) Error!bool {
+    var scan = start;
+    while (scan < load_id) : (scan += 1) {
+        const instruction = try self.instruction(scan);
+        if (instruction.command == .call)
+            return false;
+        if (try self.storesVmRegister(instruction, register))
+            return false;
+    }
+    return true;
+}
+
+/// A fused probe skips LOAD_POINTER. A later slot lookup still names that load,
+/// so the pointer has to be captured before the probe stores over the register.
+fn publishEscapedRegisterPointer(
+    self: anytype,
+    start: u32,
+    finish: u32,
+    load_id: u32,
+    instruction: snapshot_v1.IrInstruction,
+) Error!void {
+    if (pointerLocalReady(self, load_id) or !try slotNodeEscapes(self, load_id, finish))
+        return;
+    if (instruction.operand_count != 1)
+        return;
+    const source = try self.operand(instruction, 0);
+    if (source.kind != .vm_reg)
+        return;
+    if (!try registerStableUntil(self, start, load_id, source.value))
+        return;
+    try self.emitLoadI32(load_id, instruction);
+}
+
 /// A fused string-key probe does not emit GET_SLOT_NODE_ADDR. Const-prop still
 /// reloads that node from a later CHECK_NODE_VALUE, and the unset local is null.
+/// The same probe skips LOAD_POINTER. A later lookup of another key on that
+/// table names the skipped load, so the pointer is stored before the probe.
 pub fn publishEscapedSlotNodes(self: anytype, start: u32, finish: u32) Error!void {
     if (start > finish or finish >= self.function.instruction_count)
         return;
     var cursor = start;
     while (cursor <= finish) : (cursor += 1) {
         const instruction = try self.instruction(cursor);
+        if (instruction.command == .load_pointer)
+            try publishEscapedRegisterPointer(self, start, finish, cursor, instruction);
         if (instruction.command != ir_cmd_get_slot_node_addr)
             continue;
         if (!try slotNodeEscapes(self, cursor, finish))
@@ -936,6 +984,17 @@ pub noinline fn emitCheckReadonly(self: anytype, instruction_value: snapshot_v1.
         try self.body.i32Load(self.allocator, 2, register * tvalue_size);
     } else {
         try self.emitPointerValue(table);
+    }
+    // A package larger than the inline sibling chain uses check_readonly.
+    // The helper returns the same flag and raises on the same vm_exit.
+    if (self.interrupt_helper != null) {
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try emitReadonlyHelper(self, raise);
+        if (failure.kind == .vm_exit)
+            try self.body.opcode(self.allocator, 0x1a)
+        else
+            try self.emitGuardFailure(failure);
+        return;
     }
     // A writable table is one byte test. A null pointer, a non-table, or a
     // readonly table keeps the helper, which reports the same error.

@@ -35,6 +35,8 @@ pub noinline fn emitInstructionResultSet(self: anytype, instruction_id: u32) Err
         return Error.InvalidInstructionResult;
     }
     try self.body.localSet(self.allocator, self.slots[instruction_id].first);
+    if (instruction_id < self.instruction_produced.len)
+        self.instruction_produced[instruction_id] = true;
 }
 pub noinline fn emitLoadTag(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 1);
@@ -278,10 +280,12 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
     if (source.kind != .instruction and address_offset != 0)
         return Error.InvalidOperandType;
     if (source.kind == .vm_const) {
+        // One address serves both halves. The second walk was a copy of the first.
         try self.emitTValueAddress(source);
+        try self.body.localTee(self.allocator, self.call_aux_local);
         try self.body.i64Load(self.allocator, 3, 0);
         try self.body.localSet(self.allocator, self.slots[instruction_id].first);
-        try self.emitTValueAddress(source);
+        try self.body.localGet(self.allocator, self.call_aux_local);
         try self.body.i64Load(self.allocator, 3, 8);
         try self.body.localSet(self.allocator, self.slots[instruction_id].second);
         return;
@@ -418,6 +422,14 @@ fn emitResolvedUpvalueAddress(self: anytype, upvalue_index: u32) Error!void {
     try self.body.else_(self.allocator);
     try emitClosureUpvalueSlot(self, upvalue_index);
     try self.body.end(self.allocator);
+}
+fn emitUpvalueRegisterCopy(self: anytype, upvalue_index: u32, destination: snapshot_v1.IrOperand) Error!void {
+    // The import copies one upvalue cell onto a register. It does not allocate.
+    const register = try self.vmRegisterIndex(destination);
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(register));
+    try self.body.i32Const(self.allocator, @intCast(upvalue_index));
+    try self.body.call(self.allocator, self.get_upvalue orelse return Error.UnsupportedCommand);
 }
 fn emitUpvalueTValueStore(self: anytype, upvalue_index: u32, destination: snapshot_v1.IrOperand, destination_offset: u32) Error!void {
     var half: u32 = 0;
@@ -613,8 +625,12 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
                 // The register was reused. The cell still has the captured value when
                 // nothing in the gap can assign that upvalue.
                 if (!untouched and !cell_mutated) {
-                    const destination_offset = try forwardedUpvalueOffset(self, instruction_id, destination, instruction_value);
-                    try emitUpvalueTValueStore(self, upvalue.value, destination, destination_offset);
+                    if (destination.kind == .vm_reg)
+                        try emitUpvalueRegisterCopy(self, upvalue.value, destination)
+                    else {
+                        const destination_offset = try forwardedUpvalueOffset(self, instruction_id, destination, instruction_value);
+                        try emitUpvalueTValueStore(self, upvalue.value, destination, destination_offset);
+                    }
                     return;
                 }
                 if (clobber_cmd) |command| {
@@ -629,9 +645,8 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
                 return Error.UnsupportedControlFlow;
             }
 
-            // Same cell load the node store already uses. The index is inside this
-            // proto, and the copy does not allocate, so the register path stays inline.
-            try emitUpvalueTValueStore(self, upvalue.value, destination, try self.vmRegisterOffset(destination, 0));
+            // The cell copy does not allocate. One import replaces the open/closed walk.
+            try emitUpvalueRegisterCopy(self, upvalue.value, destination);
             return;
         }
     }
@@ -1496,4 +1511,114 @@ pub noinline fn emitNotAny(self: anytype, instruction_id: u32, instruction_value
     try self.body.opcode(self.allocator, 0x71); // i32.and
     try self.body.opcode(self.allocator, 0x72); // i32.or
     try self.emitInstructionResultSet(instruction_id);
+}
+
+pub const ScalarPublish = struct {
+    boolean: ?wasm.FunctionRef = null,
+    number: ?wasm.FunctionRef = null,
+    integer: ?wasm.FunctionRef = null,
+};
+
+fn emitRegisterAddress(body: *wasm.Body, allocator: std.mem.Allocator, register_local: u32) Error!void {
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_base_offset);
+    try body.localGet(allocator, register_local);
+    try body.i32Const(allocator, 4);
+    try body.opcode(allocator, 0x74); // i32.shl
+    try body.opcode(allocator, 0x6a); // i32.add
+}
+
+fn definePublish(allocator: std.mem.Allocator, object: *wasm.Object, name: []const u8, value_type: wasm.ValueType, tag: i32, wide: bool) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{ .i32, .i32, value_type };
+    const no_results = [_]wasm.ValueType{};
+    const function_type = try object.addType(.{ .params = &params, .results = &no_results });
+    var body = try wasm.Body.init(allocator, &.{});
+    defer body.deinit(allocator);
+    try emitRegisterAddress(&body, allocator, 1);
+    try body.localGet(allocator, 2);
+    if (wide) {
+        if (value_type == .f64)
+            try body.f64Store(allocator, 3, 0)
+        else
+            try body.i64Store(allocator, 3, 0);
+    } else try body.i32Store(allocator, 2, 0);
+    try emitRegisterAddress(&body, allocator, 1);
+    try body.i32Const(allocator, tag);
+    try body.i32Store(allocator, 2, tvalue_tag_offset);
+    try body.finish(allocator);
+    return object.defineFunction(name, function_type, wasm.symbol.visibility_hidden, body);
+}
+
+pub fn emitPublishBoolean(allocator: std.mem.Allocator, object: *wasm.Object) Error!wasm.FunctionRef {
+    return definePublish(allocator, object, "luauc_runtime_v1_publish_boolean", .i32, lua_tag_boolean, false);
+}
+
+pub fn emitPublishNumber(allocator: std.mem.Allocator, object: *wasm.Object) Error!wasm.FunctionRef {
+    return definePublish(allocator, object, "luauc_runtime_v1_publish_number", .f64, @intCast(lua_tag_number), true);
+}
+
+pub fn emitPublishInteger(allocator: std.mem.Allocator, object: *wasm.Object) Error!wasm.FunctionRef {
+    return definePublish(allocator, object, "luauc_runtime_v1_publish_integer", .i64, @intCast(lua_tag_integer), true);
+}
+
+/// Value store plus the matching tag store. Nil stays inline: one tag store is shorter than a call.
+pub fn emitScalarPublish(self: anytype, start: u32, range_finish: u32) Error!?u32 {
+    if (start >= range_finish or start + 1 >= self.function.instruction_count)
+        return null;
+    if (self.plan.closureContaining(start) != null or self.plan.closureContaining(start + 1) != null)
+        return null;
+    if (try self.isDupClosureCapture(start) or try self.isDupClosureCapture(start + 1))
+        return null;
+    if (self.plan.clusterAt(start) != null or self.plan.clusterAt(start + 1) != null)
+        return null;
+    const owner = self.plan.instructionBlock(start) orelse return null;
+    if ((self.plan.instructionBlock(start + 1) orelse return null) != owner)
+        return null;
+    const first = try self.instruction(start);
+    const second = try self.instruction(start + 1);
+    if (first.operand_count != 2 or second.command != .store_tag or second.operand_count != 2)
+        return null;
+    const destination = try self.operand(first, 0);
+    const tag_destination = try self.operand(second, 0);
+    const tag = try self.operand(second, 1);
+    if (destination.kind != .vm_reg or tag_destination.kind != .vm_reg or destination.value != tag_destination.value)
+        return null;
+    if (destination.value >= self.proto.max_stack_size)
+        return null;
+    if (tag.kind != .constant)
+        return null;
+    const tag_value = (try self.constant(tag.value)).tagValue() orelse return null;
+    const register = std.math.cast(i32, destination.value) orelse return Error.ResourceLimit;
+    const value = try self.operand(first, 1);
+    switch (first.command) {
+        .store_int => {
+            if (tag_value != @as(u8, @intCast(lua_tag_boolean)))
+                return null;
+            const helper = self.scalar_publish.boolean orelse return null;
+            try self.body.localGet(self.allocator, 0);
+            try self.body.i32Const(self.allocator, register);
+            try self.emitI32Value(value);
+            try self.body.call(self.allocator, helper);
+        },
+        .store_double => {
+            if (tag_value != lua_tag_number)
+                return null;
+            const helper = self.scalar_publish.number orelse return null;
+            try self.body.localGet(self.allocator, 0);
+            try self.body.i32Const(self.allocator, register);
+            try self.emitF64Value(value);
+            try self.body.call(self.allocator, helper);
+        },
+        .store_int64 => {
+            if (tag_value != lua_tag_integer)
+                return null;
+            const helper = self.scalar_publish.integer orelse return null;
+            try self.body.localGet(self.allocator, 0);
+            try self.body.i32Const(self.allocator, register);
+            try self.emitI64Value(value);
+            try self.body.call(self.allocator, helper);
+        },
+        else => return null,
+    }
+    return start + 1;
 }

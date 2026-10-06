@@ -62,8 +62,9 @@ pub fn validateStringTableContinuationTail(
             if (operand_value.kind == .instruction and
                 (operand_value.value < suffix_start or operand_value.value >= instruction_id))
                 return false;
+            // A branch is outside this straight-line tail. The ordinary region check decides it.
             if (operand_value.kind == .block)
-                return false;
+                return null;
         }
     }
 
@@ -97,8 +98,9 @@ pub fn validateNamecallContinuationTail(
             if (operand_value.kind == .instruction and
                 (operand_value.value < suffix_start or operand_value.value >= instruction_id))
                 return false;
+            // A branch is outside this straight-line tail. The ordinary region check decides it.
             if (operand_value.kind == .block)
-                return false;
+                return null;
         }
     }
     const rejoin = try context.snapshot.irBlock(context.function, pattern.rejoin);

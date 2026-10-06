@@ -1266,6 +1266,585 @@ fn appendSleb(output: *std.ArrayList(u8), allocator: std.mem.Allocator, input: i
     }
 }
 
+const TightSlot = struct {
+    at: u32,
+    kind: u8,
+};
+
+/// Relocation slots are five-byte LEB so the linker can patch them. The final guest has no
+/// relocation section, so each slot shrinks to the shortest encoding of the value already written.
+fn tightenGeneratedBody(allocator: std.mem.Allocator, body: []const u8, slots: []const TightSlot) Error![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    var cursor: u32 = 0;
+    for (slots) |slot| {
+        if (slot.at < cursor)
+            return Error.InvalidRelocation;
+        try output.appendSlice(allocator, body[cursor..slot.at]);
+        var encoded = Reader{ .bytes = body[slot.at .. slot.at + 5] };
+        switch (slot.kind) {
+            relocation.function_index_leb, relocation.type_index_leb => try appendUleb(&output, allocator, try encoded.readUleb32()),
+            relocation.memory_addr_sleb => try appendSleb(&output, allocator, try encoded.readSleb32()),
+            else => return Error.InvalidRelocation,
+        }
+        if (!encoded.done())
+            return Error.InvalidRelocation;
+        cursor = slot.at + 5;
+    }
+    try output.appendSlice(allocator, body[cursor..]);
+    return output.toOwnedSlice(allocator);
+}
+
+const ArmOp = struct {
+    at: u32,
+    len: u16,
+    class: u8,
+    op: u8,
+    imm: i32,
+};
+
+fn parseArmExpr(allocator: std.mem.Allocator, bytes: []const u8, expr_at: usize, ops: *std.ArrayList(ArmOp)) Error!void {
+    var reader = Reader{ .bytes = bytes, .cursor = expr_at };
+    while (!reader.done()) {
+        const at: u32 = @intCast(reader.cursor);
+        const op = try reader.readByte();
+        var class: u8 = 0;
+        var imm: i32 = 0;
+        if (op == 0x02 or op == 0x03 or op == 0x04) {
+            const marker = try reader.readByte();
+            if (marker & 0x80 != 0) {
+                var shift: u6 = 7;
+                while (shift < 35) : (shift += 7) {
+                    const more = try reader.readByte();
+                    if (more & 0x80 == 0) break;
+                }
+            }
+        } else if (op == 0x0c or op == 0x0d or op == 0x10 or (op >= 0x20 and op <= 0x24)) {
+            imm = @intCast(try reader.readUleb32());
+            if (op >= 0x20 and op <= 0x22) class = 2;
+        } else if (op == 0x0e) {
+            const count = try reader.readUleb32();
+            var index: u32 = 0;
+            while (index < count) : (index += 1) _ = try reader.readUleb32();
+            _ = try reader.readUleb32();
+        } else if (op == 0x11) {
+            _ = try reader.readUleb32();
+            _ = try reader.readUleb32();
+        } else if (op >= 0x28 and op <= 0x3e) {
+            _ = try reader.readUleb32();
+            _ = try reader.readUleb32();
+        } else if (op == 0x3f or op == 0x40) {
+            _ = try reader.readByte();
+        } else if (op == 0x41) {
+            class = 1;
+            imm = try reader.readSleb32();
+        } else if (op == 0x42) {
+            var count: u8 = 0;
+            while (count < 10) : (count += 1) {
+                const byte = try reader.readByte();
+                if (byte & 0x80 == 0) break;
+            }
+        } else if (op == 0x43) {
+            _ = try reader.readBytes(4);
+        } else if (op == 0x44) {
+            _ = try reader.readBytes(8);
+        } else if (op == 0xfc) {
+            const immediate = try reader.readUleb32();
+            if (immediate <= 7) {} else if (immediate == 8) {
+                _ = try reader.readUleb32();
+                _ = try reader.readByte();
+            } else if (immediate == 9) {
+                _ = try reader.readUleb32();
+            } else if (immediate == 10) {
+                _ = try reader.readBytes(2);
+            } else if (immediate == 11) {
+                _ = try reader.readByte();
+            } else return Error.InvalidCode;
+        } else if (op >= 0x45 and op <= 0xc4) {} else if (op == 0x00 or op == 0x01 or op == 0x05 or op == 0x0b or op == 0x0f or op == 0x1a or op == 0x1b) {} else return Error.InvalidCode;
+        const len = std.math.sub(usize, reader.cursor, at) catch return Error.IntegerOverflow;
+        if (len > std.math.maxInt(u16)) return Error.InvalidCode;
+        try ops.append(allocator, .{
+            .at = at,
+            .len = @intCast(len),
+            .class = class,
+            .op = op,
+            .imm = imm,
+        });
+    }
+}
+
+const ArmOcc = struct {
+    body: u32,
+    start: u32,
+    end_at: u32,
+    const_at: u32,
+    holes: u16,
+    shape: u32,
+};
+
+const ArmShape = struct {
+    occs: std.ArrayList(ArmOcc) = .empty,
+    variant: u32 = 0,
+    holes: u16 = 0,
+    helper: i32 = -1,
+    /// 0: the arm returns a status. 1: the arm ends by storing a dispatch id and branching.
+    mode: u8 = 0,
+    uses2: bool = false,
+    uses3: bool = false,
+    uses4: bool = false,
+    live2: bool = false,
+    live3: bool = false,
+    live4: bool = false,
+    sets2: bool = false,
+};
+
+fn armUsesLocal(ops: []const ArmOp, local: i32) bool {
+    for (ops) |item| if (item.class == 2 and item.imm == local) return true;
+    return false;
+}
+
+fn armLiveIn(ops: []const ArmOp, local: i32) bool {
+    for (ops) |item| {
+        if (item.class != 2 or item.imm != local) continue;
+        return item.op == 0x20;
+    }
+    return false;
+}
+
+fn armWritesLocal(ops: []const ArmOp, local: i32) bool {
+    for (ops) |item| {
+        if (item.class == 2 and item.imm == local and (item.op == 0x21 or item.op == 0x22)) return true;
+    }
+    return false;
+}
+
+fn baseSetsAreReloads(ops: []const ArmOp) bool {
+    for (ops, 0..) |item, index| {
+        if (item.class != 2 or item.imm != 2) continue;
+        if (item.op == 0x22) return false;
+        if (item.op != 0x21) continue;
+        if (index < 2) return false;
+        if (ops[index - 1].op != 0x28) return false;
+        if (ops[index - 2].op != 0x20 or ops[index - 2].imm != 0) return false;
+    }
+    return true;
+}
+
+fn armSiteBytes(values: []const i32, shape: ArmShape) usize {
+    var size: usize = 2 + 3;
+    if (shape.mode == 0) size += 1;
+    if (shape.mode == 1 and shape.sets2) size += 7;
+    if (shape.live2) size += 2;
+    if (shape.live3) size += 2;
+    if (shape.live4) size += 2;
+    var hole: u16 = 0;
+    while (hole < shape.holes) : (hole += 1) {
+        if ((shape.variant & (@as(u32, 1) << @intCast(hole))) == 0) continue;
+        size += 1 + slebBytes(values[hole]);
+    }
+    return size;
+}
+
+fn slebBytes(value: i32) usize {
+    var remaining = value;
+    var count: usize = 1;
+    while (true) {
+        const byte: u8 = @truncate(@as(u32, @bitCast(remaining)) & 0x7f);
+        remaining >>= 7;
+        const done = (remaining == 0 and byte & 0x40 == 0) or (remaining == -1 and byte & 0x40 != 0);
+        if (done) return count;
+        count += 1;
+    }
+}
+
+fn emitLocalOp(output: *std.ArrayList(u8), allocator: std.mem.Allocator, op: u8, index: u32) Error!void {
+    try output.append(allocator, op);
+    try appendUleb(output, allocator, index);
+}
+
+const SharedArms = struct {
+    bodies: [][]u8,
+    helpers: [][]u8,
+    helper_types: []u32,
+    extra_types: [][]u8,
+
+    fn deinit(self: *SharedArms, allocator: std.mem.Allocator) void {
+        for (self.bodies) |body| allocator.free(body);
+        allocator.free(self.bodies);
+        for (self.helpers) |body| allocator.free(body);
+        allocator.free(self.helpers);
+        allocator.free(self.helper_types);
+        for (self.extra_types) |encoding| allocator.free(encoding);
+        allocator.free(self.extra_types);
+    }
+};
+
+fn shareIdenticalReturnArms(
+    allocator: std.mem.Allocator,
+    bodies: [][]u8,
+    type_base: u32,
+    first_helper: u32,
+    limits: Limits,
+) Error!SharedArms {
+    var consts: std.ArrayList(i32) = .empty;
+    defer consts.deinit(allocator);
+    var shapes: std.ArrayList(ArmShape) = .empty;
+    defer {
+        for (shapes.items) |*shape| shape.occs.deinit(allocator);
+        shapes.deinit(allocator);
+    }
+    var keys = std.StringHashMap(u32).init(allocator);
+    defer {
+        var iterator = keys.iterator();
+        while (iterator.next()) |entry| allocator.free(entry.key_ptr.*);
+        keys.deinit();
+    }
+    var reps: []std.ArrayList(ArmOcc) = try allocator.alloc(std.ArrayList(ArmOcc), bodies.len);
+    defer {
+        for (reps) |*list| list.deinit(allocator);
+        allocator.free(reps);
+    }
+    for (reps) |*list| list.* = .empty;
+
+    for (bodies, 0..) |body, body_index| {
+        var reader = Reader{ .bytes = body };
+        const groups = reader.readUleb32() catch continue;
+        var group_index: u32 = 0;
+        var preamble_ok = true;
+        while (group_index < groups) : (group_index += 1) {
+            _ = reader.readUleb32() catch {
+                preamble_ok = false;
+                break;
+            };
+            _ = reader.readByte() catch {
+                preamble_ok = false;
+                break;
+            };
+        }
+        if (!preamble_ok) continue;
+        var ops: std.ArrayList(ArmOp) = .empty;
+        defer ops.deinit(allocator);
+        parseArmExpr(allocator, body, reader.cursor, &ops) catch continue;
+
+        const Frame = struct { kind: u8, index: u32 };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(allocator);
+        for (ops.items, 0..) |item, op_index| {
+            if (item.op == 0x02 or item.op == 0x03 or item.op == 0x04) {
+                try stack.append(allocator, .{ .kind = item.op, .index = @intCast(op_index) });
+                continue;
+            }
+            if (item.op != 0x0b) continue;
+            const frame = stack.pop() orelse continue;
+            if (frame.kind != 0x04 or frame.index == 0 or stack.items.len < 2) continue;
+            if (stack.items[stack.items.len - 1].kind != 0x02) continue;
+            var saw_loop = false;
+            for (stack.items[0 .. stack.items.len - 1]) |outer| {
+                if (outer.kind == 0x03) saw_loop = true;
+            }
+            if (!saw_loop) continue;
+            const previous = ops.items[frame.index - 1];
+            if (previous.op != 0x20 or previous.imm != 0) continue;
+            if (body[ops.items[frame.index].at + 1] != 0x40) continue;
+            if (op_index <= frame.index + 1) continue;
+            const arm = ops.items[frame.index + 1 .. op_index];
+            var mode: u8 = 0xff;
+            var prefix_len = arm.len;
+            if (arm[arm.len - 1].op == 0x0f) {
+                mode = 0;
+            } else if (arm.len >= 4 and arm[arm.len - 1].op == 0x0c and arm[arm.len - 2].op == 0x21 and
+                arm[arm.len - 2].imm == 3 and arm[arm.len - 3].class == 1)
+            {
+                mode = 1;
+                prefix_len = arm.len - 3;
+            }
+            if (mode == 0xff or prefix_len == 0) continue;
+            const prefix = arm[0..prefix_len];
+            var reject = false;
+            var holes: u16 = 0;
+            var depth: i32 = 0;
+            for (prefix) |step| {
+                if (step.op == 0x02 or step.op == 0x03 or step.op == 0x04) depth += 1;
+                if (step.op == 0x0b) depth = @max(depth - 1, 0);
+                if (step.op == 0x0e or step.op == 0x11 or step.op == 0x42 or step.op == 0x43 or step.op == 0x44)
+                    reject = true;
+                if ((step.op == 0x0c or step.op == 0x0d) and step.imm >= depth) reject = true;
+                if (mode == 1 and step.op == 0x0f) reject = true;
+                if (step.class == 2 and (step.imm == 1 or step.imm > 4)) reject = true;
+                if (step.class == 1) {
+                    holes += 1;
+                    if (holes > 32) reject = true;
+                }
+            }
+            const prefix_bytes = prefix[prefix.len - 1].at + prefix[prefix.len - 1].len - prefix[0].at;
+            if (reject or holes == 0 or prefix_bytes <= 24) continue;
+            if (mode == 1 and !baseSetsAreReloads(prefix)) continue;
+
+            var key: std.ArrayList(u8) = .empty;
+            defer key.deinit(allocator);
+            try key.append(allocator, mode);
+            for (prefix) |step| {
+                if (step.class == 1) {
+                    try key.append(allocator, 1);
+                } else {
+                    try key.append(allocator, 0);
+                    try key.append(allocator, @intCast(step.len));
+                    try key.appendSlice(allocator, body[step.at .. step.at + step.len]);
+                }
+            }
+            const const_at: u32 = @intCast(consts.items.len);
+            for (prefix) |step| if (step.class == 1) try consts.append(allocator, step.imm);
+            const known = keys.get(key.items);
+            const shape_index: u32 = known orelse @intCast(shapes.items.len);
+            const end_at: u32 = if (mode == 1) arm[prefix_len].at else arm[arm.len - 1].at + arm[arm.len - 1].len;
+            const occ = ArmOcc{
+                .body = @intCast(body_index),
+                .start = prefix[0].at,
+                .end_at = end_at,
+                .const_at = const_at,
+                .holes = holes,
+                .shape = shape_index,
+            };
+            if (known) |_| {
+                try shapes.items[shape_index].occs.append(allocator, occ);
+            } else {
+                const owned = try allocator.dupe(u8, key.items);
+                try keys.put(owned, shape_index);
+                var shape = ArmShape{
+                    .mode = mode,
+                    .uses2 = armUsesLocal(prefix, 2),
+                    .uses3 = armUsesLocal(prefix, 3),
+                    .uses4 = armUsesLocal(prefix, 4),
+                    .live2 = armLiveIn(prefix, 2),
+                    .live3 = armLiveIn(prefix, 3),
+                    .live4 = armLiveIn(prefix, 4),
+                    .sets2 = armWritesLocal(prefix, 2),
+                };
+                errdefer shape.occs.deinit(allocator);
+                try shape.occs.append(allocator, occ);
+                try shapes.append(allocator, shape);
+            }
+        }
+    }
+
+    var helper_bodies: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (helper_bodies.items) |body| allocator.free(body);
+        helper_bodies.deinit(allocator);
+    }
+    var helper_types: std.ArrayList(u32) = .empty;
+    errdefer helper_types.deinit(allocator);
+    var extra_types: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (extra_types.items) |encoding| allocator.free(encoding);
+        extra_types.deinit(allocator);
+    }
+    var type_of_value = [_]i32{-1} ** 33;
+    var type_of_void = [_]i32{-1} ** 33;
+    var helper_ordinal: u32 = 0;
+    for (shapes.items) |*shape| {
+        if (shape.occs.items.len < 2) continue;
+        const holes = shape.occs.items[0].holes;
+        shape.holes = holes;
+        var hole: u16 = 0;
+        while (hole < holes) : (hole += 1) {
+            const base = consts.items[shape.occs.items[0].const_at + hole];
+            for (shape.occs.items[1..]) |occ| {
+                if (consts.items[occ.const_at + hole] != base) {
+                    shape.variant |= @as(u32, 1) << @intCast(hole);
+                    break;
+                }
+            }
+        }
+        var variants: u16 = 0;
+        hole = 0;
+        while (hole < holes) : (hole += 1) {
+            if ((shape.variant & (@as(u32, 1) << @intCast(hole))) != 0) variants += 1;
+        }
+        var live_count: usize = 0;
+        if (shape.live2) live_count += 1;
+        if (shape.live3) live_count += 1;
+        if (shape.live4) live_count += 1;
+        const param_count: usize = 1 + @as(usize, variants) + live_count;
+        if (param_count > 32) continue;
+        var saved: i64 = 0;
+        for (shape.occs.items) |occ| {
+            const site = armSiteBytes(consts.items[occ.const_at .. occ.const_at + holes], shape.*);
+            saved += @as(i64, occ.end_at - occ.start) - @as(i64, @intCast(site));
+        }
+        saved -= @as(i64, shape.occs.items[0].end_at - shape.occs.items[0].start);
+        if (saved < 48) continue;
+        if (first_helper + helper_ordinal >= limits.max_functions) break;
+        const type_cache = if (shape.mode == 0) &type_of_value else &type_of_void;
+        if (type_cache[param_count] < 0 and type_base + @as(u32, @intCast(extra_types.items.len)) >= limits.max_types)
+            break;
+        const type_index: u32 = if (type_cache[param_count] >= 0) @intCast(type_cache[param_count]) else blk: {
+            var encoding: std.ArrayList(u8) = .empty;
+            errdefer encoding.deinit(allocator);
+            try encoding.append(allocator, 0x60);
+            try appendUleb(&encoding, allocator, param_count);
+            var param: usize = 0;
+            while (param < param_count) : (param += 1) try encoding.append(allocator, 0x7f);
+            if (shape.mode == 0) {
+                try encoding.append(allocator, 0x01);
+                try encoding.append(allocator, 0x7f);
+            } else try encoding.append(allocator, 0x00);
+            const index = type_base + @as(u32, @intCast(extra_types.items.len));
+            try extra_types.append(allocator, try encoding.toOwnedSlice(allocator));
+            type_cache[param_count] = @intCast(index);
+            break :blk index;
+        };
+        const template = shape.occs.items[0];
+        const source = bodies[template.body][template.start..template.end_at];
+        var helper: std.ArrayList(u8) = .empty;
+        errdefer helper.deinit(allocator);
+        var local_count: u32 = 0;
+        var map2: u32 = 0;
+        var map3: u32 = 0;
+        var map4: u32 = 0;
+        var live_at: u32 = 1 + @as(u32, variants);
+        if (shape.live2) {
+            map2 = live_at;
+            live_at += 1;
+        }
+        if (shape.live3) {
+            map3 = live_at;
+            live_at += 1;
+        }
+        if (shape.live4) {
+            map4 = live_at;
+            live_at += 1;
+        }
+        var next_local: u32 = @intCast(param_count);
+        if (shape.uses2 and !shape.live2) {
+            map2 = next_local;
+            next_local += 1;
+            local_count += 1;
+        }
+        if (shape.uses3 and !shape.live3) {
+            map3 = next_local;
+            next_local += 1;
+            local_count += 1;
+        }
+        if (shape.uses4 and !shape.live4) {
+            map4 = next_local;
+            next_local += 1;
+            local_count += 1;
+        }
+        if (local_count == 0) {
+            try helper.append(allocator, 0);
+        } else {
+            try helper.append(allocator, 1);
+            try appendUleb(&helper, allocator, local_count);
+            try helper.append(allocator, 0x7f);
+        }
+        var built: std.ArrayList(ArmOp) = .empty;
+        defer built.deinit(allocator);
+        if (parseArmExpr(allocator, source, 0, &built)) |_| {} else |_| {
+            helper.deinit(allocator);
+            continue;
+        }
+        var seen: u16 = 0;
+        var variant_ord: u32 = 1;
+        for (built.items) |step| {
+            if (step.class == 1) {
+                if ((shape.variant & (@as(u32, 1) << @intCast(seen))) != 0) {
+                    try emitLocalOp(&helper, allocator, 0x20, variant_ord);
+                    variant_ord += 1;
+                } else try helper.appendSlice(allocator, source[step.at .. step.at + step.len]);
+                seen += 1;
+            } else if (step.class == 2 and step.imm == 2) {
+                try emitLocalOp(&helper, allocator, step.op, map2);
+            } else if (step.class == 2 and step.imm == 3) {
+                try emitLocalOp(&helper, allocator, step.op, map3);
+            } else if (step.class == 2 and step.imm == 4) {
+                try emitLocalOp(&helper, allocator, step.op, map4);
+            } else try helper.appendSlice(allocator, source[step.at .. step.at + step.len]);
+        }
+        try helper.append(allocator, 0x0b);
+        shape.helper = @intCast(helper_ordinal);
+        try helper_bodies.append(allocator, try helper.toOwnedSlice(allocator));
+        try helper_types.append(allocator, type_index);
+        for (shape.occs.items) |occ| try reps[occ.body].append(allocator, occ);
+        helper_ordinal += 1;
+    }
+
+    var rewritten = try allocator.alloc([]u8, bodies.len);
+    var written: usize = 0;
+    errdefer {
+        for (rewritten[0..written]) |body| allocator.free(body);
+        allocator.free(rewritten);
+    }
+    for (bodies, 0..) |body, body_index| {
+        if (reps[body_index].items.len == 0) {
+            rewritten[body_index] = try allocator.dupe(u8, body);
+            written += 1;
+            continue;
+        }
+        std.mem.sort(ArmOcc, reps[body_index].items, {}, struct {
+            fn less(_: void, lhs: ArmOcc, rhs: ArmOcc) bool {
+                return lhs.start < rhs.start;
+            }
+        }.less);
+        var overlap = false;
+        var previous_end: u32 = 0;
+        for (reps[body_index].items) |occ| {
+            if (occ.start < previous_end) overlap = true;
+            previous_end = occ.end_at;
+        }
+        if (overlap) {
+            rewritten[body_index] = try allocator.dupe(u8, body);
+            written += 1;
+            continue;
+        }
+        var output: std.ArrayList(u8) = .empty;
+        errdefer output.deinit(allocator);
+        var cursor: u32 = 0;
+        for (reps[body_index].items) |occ| {
+            const shape = shapes.items[occ.shape];
+            try output.appendSlice(allocator, body[cursor..occ.start]);
+            try output.append(allocator, 0x20);
+            try output.append(allocator, 0x00);
+            var hole: u16 = 0;
+            while (hole < occ.holes) : (hole += 1) {
+                if ((shape.variant & (@as(u32, 1) << @intCast(hole))) == 0) continue;
+                try output.append(allocator, 0x41);
+                try appendSleb(&output, allocator, consts.items[occ.const_at + hole]);
+            }
+            if (shape.live2) {
+                try output.append(allocator, 0x20);
+                try output.append(allocator, 0x02);
+            }
+            if (shape.live3) {
+                try output.append(allocator, 0x20);
+                try output.append(allocator, 0x03);
+            }
+            if (shape.live4) {
+                try output.append(allocator, 0x20);
+                try output.append(allocator, 0x04);
+            }
+            try output.append(allocator, 0x10);
+            try appendUleb(&output, allocator, first_helper + @as(u32, @intCast(shape.helper)));
+            if (shape.mode == 0) {
+                try output.append(allocator, 0x0f);
+            } else if (shape.sets2) {
+                try output.appendSlice(allocator, &.{ 0x20, 0x00, 0x28, 0x02, 0x0c, 0x21, 0x02 });
+            }
+            cursor = occ.end_at;
+        }
+        try output.appendSlice(allocator, body[cursor..]);
+        rewritten[body_index] = try output.toOwnedSlice(allocator);
+        written += 1;
+    }
+
+    return .{
+        .bodies = rewritten,
+        .helpers = try helper_bodies.toOwnedSlice(allocator),
+        .helper_types = try helper_types.toOwnedSlice(allocator),
+        .extra_types = try extra_types.toOwnedSlice(allocator),
+    };
+}
+
 fn appendName(output: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8) !void {
     try appendUleb(output, allocator, name.len);
     try output.appendSlice(allocator, name);
@@ -1296,19 +1875,76 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     var payload: std.ArrayList(u8) = .empty;
     defer payload.deinit(allocator);
 
+    const reloc_order = try allocator.alloc(u32, object.code_relocations.items.len);
+    defer allocator.free(reloc_order);
+    for (reloc_order, 0..) |*slot, index| slot.* = @intCast(index);
+    std.mem.sort(u32, reloc_order, object.code_relocations.items, struct {
+        fn less(items: []const Relocation, lhs: u32, rhs: u32) bool {
+            return items[lhs].offset < items[rhs].offset;
+        }
+    }.less);
+    const tight_bodies = try allocator.alloc([]u8, object.bodies.items.len);
+    var tight_written: usize = 0;
+    defer {
+        for (tight_bodies[0..tight_written]) |body| allocator.free(body);
+        allocator.free(tight_bodies);
+    }
+    var reloc_cursor: usize = 0;
+    for (object.bodies.items) |body| {
+        var slots: std.ArrayList(TightSlot) = .empty;
+        defer slots.deinit(allocator);
+        const body_end = std.math.add(u32, body.payload_offset, @intCast(body.bytes.len)) catch return Error.IntegerOverflow;
+        while (reloc_cursor < reloc_order.len and object.code_relocations.items[reloc_order[reloc_cursor]].offset < body.payload_offset)
+            reloc_cursor += 1;
+        var scan = reloc_cursor;
+        while (scan < reloc_order.len) {
+            const item = object.code_relocations.items[reloc_order[scan]];
+            if (item.offset >= body_end)
+                break;
+            scan += 1;
+            switch (item.kind) {
+                relocation.function_index_leb, relocation.type_index_leb, relocation.memory_addr_sleb => {},
+                else => continue,
+            }
+            const at = item.offset - body.payload_offset;
+            const slot_end = std.math.add(u32, at, 5) catch return Error.IntegerOverflow;
+            if (slot_end > body.bytes.len)
+                return Error.InvalidRelocation;
+            try slots.append(allocator, .{ .at = at, .kind = item.kind });
+        }
+        reloc_cursor = scan;
+        tight_bodies[tight_written] = try tightenGeneratedBody(allocator, body.bytes, slots.items);
+        tight_written += 1;
+    }
+    const pack_function_count: u32 = if (object.function_types.items.len == 0)
+        @intCast(pack.imports.functions.items.len + pack.function_types.items.len)
+    else
+        resolved.function_map[object.imports.functions.items.len];
+    const type_base: u32 = @intCast(pack.types.encodings.items.len + resolved.appended_types.items.len);
+    var shared = try shareIdenticalReturnArms(
+        allocator,
+        tight_bodies,
+        type_base,
+        pack_function_count + @as(u32, @intCast(object.function_types.items.len)),
+        limits,
+    );
+    defer shared.deinit(allocator);
+
     // Types: preserve every pack index and append only genuinely new generated signatures.
-    try appendUleb(&payload, allocator, pack.types.encodings.items.len + resolved.appended_types.items.len);
+    try appendUleb(&payload, allocator, type_base + @as(u32, @intCast(shared.extra_types.len)));
     for (pack.types.encodings.items) |encoding| try payload.appendSlice(allocator, encoding);
     for (resolved.appended_types.items) |encoding| try payload.appendSlice(allocator, encoding);
+    for (shared.extra_types) |encoding| try payload.appendSlice(allocator, encoding);
     try appendSection(&output, allocator, section.type_, payload.items);
     payload.clearRetainingCapacity();
 
     // The profile-declared host imports remain byte-for-byte and in the same function-index order.
     try appendSection(&output, allocator, section.import, pack.module.payload(section.import).?);
 
-    try appendUleb(&payload, allocator, pack.function_types.items.len + object.function_types.items.len);
+    try appendUleb(&payload, allocator, pack.function_types.items.len + object.function_types.items.len + shared.helper_types.len);
     for (pack.function_types.items) |type_index| try appendUleb(&payload, allocator, type_index);
     for (object.function_types.items) |type_index| try appendUleb(&payload, allocator, resolved.type_map[type_index]);
+    for (shared.helper_types) |type_index| try appendUleb(&payload, allocator, type_index);
     try appendSection(&output, allocator, section.function, payload.items);
     payload.clearRetainingCapacity();
 
@@ -1359,14 +1995,18 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     try appendSection(&output, allocator, section.element, payload.items);
     payload.clearRetainingCapacity();
 
-    try appendUleb(&payload, allocator, pack.bodies.items.len + object.bodies.items.len);
+    try appendUleb(&payload, allocator, pack.bodies.items.len + shared.bodies.len + shared.helpers.len);
     for (pack.bodies.items) |body| {
         try appendUleb(&payload, allocator, body.bytes.len);
         try payload.appendSlice(allocator, body.bytes);
     }
-    for (object.bodies.items) |body| {
-        try appendUleb(&payload, allocator, body.bytes.len);
-        try payload.appendSlice(allocator, body.bytes);
+    for (shared.bodies) |body| {
+        try appendUleb(&payload, allocator, body.len);
+        try payload.appendSlice(allocator, body);
+    }
+    for (shared.helpers) |body| {
+        try appendUleb(&payload, allocator, body.len);
+        try payload.appendSlice(allocator, body);
     }
     try appendSection(&output, allocator, section.code, payload.items);
     payload.clearRetainingCapacity();

@@ -27,13 +27,21 @@ const tvalue_tag_offset = abi.tvalue_tag_offset;
 const i32_add: u8 = 0x6a;
 const i32_sub: u8 = 0x6b;
 const i32_mul: u8 = 0x6c;
+const i32_lt_s: u8 = 0x48;
 const i32_and: u8 = 0x71;
 const i32_lt_u: u8 = 0x49;
 const i32_gt_u: u8 = 0x4b;
 const i32_ge_u: u8 = 0x4f;
 const i32_or: u8 = 0x72;
 const i32_shr_u: u8 = 0x76;
+const i32_shl: u8 = 0x74;
 const i64_eq: u8 = 0x51;
+// Guard miss from the shared fast call. The Lua stack is unchanged.
+const fast_lua_guard_miss: i32 = -1;
+// A preface still treats this sentinel as interrupt success. The shared interrupt
+// itself returns 0 for both a quiet update and a slow success, and the caller reloads.
+const outlined_reload: i32 = -1;
+pub const call_preface_count: usize = 16;
 
 pub fn sourceLine(self: anytype, pc: u32) Error!u32 {
     const line = try self.snapshot.sourceLine(self.proto, pc);
@@ -371,6 +379,141 @@ pub noinline fn emitStringEqualityBlock(self: anytype, block_id: u32, block: sna
     try self.body.end(self.allocator);
     try self.emitConditionalDispatch(pattern.true_target, pattern.false_target);
 }
+fn emitReadContinuationId(body: *wasm.Body, allocator: std.mem.Allocator) Error!void {
+    // Previous continuation id. Local 0 is the lua_State* in every shared helper.
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.i32Load(allocator, 2, abi.callinfo_aotstate_offset);
+    try body.i32Const(allocator, @intCast(abi.aot_continuation_shift));
+    try body.opcode(allocator, i32_shr_u);
+    try body.i32Const(allocator, @intCast(abi.aot_continuation_mask));
+    try body.opcode(allocator, i32_and);
+}
+
+fn emitStoreClearedContinuation(body: *wasm.Body, allocator: std.mem.Allocator) Error!void {
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.i32Load(allocator, 2, abi.callinfo_aotstate_offset);
+    try body.i32Const(allocator, @intCast(abi.aot_line_mask));
+    try body.opcode(allocator, i32_and);
+    try body.i32Store(allocator, 2, abi.callinfo_aotstate_offset);
+}
+
+fn emitStoreContinuationFromParam(body: *wasm.Body, allocator: std.mem.Allocator, next_local: u32) Error!void {
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.i32Load(allocator, 2, abi.callinfo_aotstate_offset);
+    try body.i32Const(allocator, @intCast(abi.aot_line_mask));
+    try body.opcode(allocator, i32_and);
+    try body.localGet(allocator, next_local);
+    try body.i32Const(allocator, @intCast(abi.aot_continuation_shift));
+    try body.opcode(allocator, i32_shl);
+    try body.opcode(allocator, i32_or);
+    try body.i32Store(allocator, 2, abi.callinfo_aotstate_offset);
+}
+
+fn emitHelperClearContinuation(
+    body: *wasm.Body,
+    allocator: std.mem.Allocator,
+    expected_local: u32,
+    scratch: u32,
+) Error!void {
+    // Exchange zero, then require the previous id. A mismatch returns internal error
+    // after the store, matching emitClearContinuation.
+    try emitReadContinuationId(body, allocator);
+    try body.localSet(allocator, scratch);
+    try emitStoreClearedContinuation(body, allocator);
+    try body.localGet(allocator, scratch);
+    try body.localGet(allocator, expected_local);
+    try body.i32Eq(allocator);
+    try body.ifVoid(allocator);
+    try body.else_(allocator);
+    try body.i32Const(allocator, status_internal_error);
+    try body.return_(allocator);
+    try body.end(allocator);
+}
+
+fn emitHelperWriteLine(body: *wasm.Body, allocator: std.mem.Allocator, line_local: u32) Error!void {
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.i32Load(allocator, 2, abi.callinfo_aotstate_offset);
+    try body.i32Const(allocator, @bitCast(abi.aot_line_preserved_mask));
+    try body.opcode(allocator, i32_and);
+    try body.localGet(allocator, line_local);
+    try body.opcode(allocator, i32_or);
+    try body.i32Store(allocator, 2, abi.callinfo_aotstate_offset);
+}
+
+/// One continuation exchange for every package larger than the inline sibling chain.
+/// Parameters are L and the next continuation id. The result is the previous id.
+/// The new id is stored before the caller tests the previous id.
+pub fn emitFastExchange(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{.i32} ** 2;
+    const results = [_]wasm.ValueType{.i32};
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
+    const locals = [_]wasm.Local{.{ .count = 1, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+
+    try emitReadContinuationId(&body, allocator);
+    try body.localSet(allocator, 2);
+    try emitStoreContinuationFromParam(&body, allocator, 1);
+    try body.localGet(allocator, 2);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_fast_exchange",
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
+/// One quiet line store for every package larger than the inline sibling chain.
+/// Parameters are L and the source line. Line 0 always writes. Any other line writes when the stored line differs.
+pub fn emitFastLine(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{.i32} ** 2;
+    const results = [_]wasm.ValueType{};
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
+    var body = try wasm.Body.init(allocator, &.{});
+    defer body.deinit(allocator);
+
+    try body.localGet(allocator, 1);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try emitHelperWriteLine(&body, allocator, 1);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.i32Load(allocator, 2, abi.callinfo_aotstate_offset);
+    try body.i32Const(allocator, @intCast(abi.aot_line_mask));
+    try body.opcode(allocator, i32_and);
+    try body.localGet(allocator, 1);
+    try body.i32Ne(allocator);
+    try body.ifVoid(allocator);
+    try emitHelperWriteLine(&body, allocator, 1);
+    try body.end(allocator);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_fast_line",
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
 pub noinline fn emitInterrupt(
     self: anytype,
     instruction_id: u32,
@@ -385,6 +528,11 @@ pub noinline fn emitInterrupt(
     const pc = pc_constant.uintValue() orelse return Error.InvalidOperandType;
     const line = try self.sourceLine(pc);
 
+    if (self.interrupt_helper) |helper| {
+        try emitOutlinedInterrupt(self, helper, line, continuation.continuation_id);
+        return;
+    }
+
     // A null callback cannot yield. Publish the line and skip the helper calls.
     // A live callback keeps the exchange, interrupt, and clear sequence.
     try emitNullInterruptCallback(self);
@@ -393,6 +541,98 @@ pub noinline fn emitInterrupt(
     try self.body.else_(self.allocator);
     try emitSlowInterrupt(self, continuation.continuation_id, line);
     try self.body.end(self.allocator);
+}
+
+fn emitOutlinedInterrupt(self: anytype, helper: wasm.FunctionRef, line: u32, continuation_id: u32) Error!void {
+    // 0: quiet success, and the stored line matches `line`.
+    // outlined_reload: the import returned 0. Memory continuation is already clear.
+    // Any other status returns from this function.
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, @intCast(line));
+    try self.body.i32Const(self.allocator, @intCast(continuation_id));
+    try self.body.call(self.allocator, helper);
+    // 0 continues. Quiet and slow success both return 0, and a callback may move the stack.
+    // last_line_local and live_continuation_local have no reader on this path.
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+    try self.emitReloadBase();
+}
+
+/// One interrupt sequence for every package larger than the inline sibling chain.
+/// Parameters are L, the source line, and the continuation id.
+/// The result is 0 or a runtime status. 0 is a quiet line update or a slow success.
+pub fn emitFastInterrupt(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    interrupt: wasm.FunctionRef,
+) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{.i32} ** 3;
+    const results = [_]wasm.ValueType{.i32};
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
+    const locals = [_]wasm.Local{.{ .count = 1, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_global_offset);
+    try body.i32Load(allocator, 2, abi.global_interrupt_offset);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try emitReadContinuationId(&body, allocator);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try body.else_(allocator);
+    try body.i32Const(allocator, status_internal_error);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_ci_offset);
+    try body.i32Load(allocator, 2, abi.callinfo_aotstate_offset);
+    try body.i32Const(allocator, @intCast(abi.aot_line_mask));
+    try body.opcode(allocator, i32_and);
+    try body.localGet(allocator, 1);
+    try body.i32Ne(allocator);
+    try body.ifVoid(allocator);
+    try emitHelperWriteLine(&body, allocator, 1);
+    try body.end(allocator);
+    try body.i32Const(allocator, status_ok);
+    try body.return_(allocator);
+    try body.else_(allocator);
+    try emitReadContinuationId(&body, allocator);
+    try body.localSet(allocator, 3);
+    try emitStoreContinuationFromParam(&body, allocator, 2);
+    try body.localGet(allocator, 3);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try body.else_(allocator);
+    try body.i32Const(allocator, status_internal_error);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.localGet(allocator, 0);
+    try body.localGet(allocator, 1);
+    try body.call(allocator, interrupt);
+    try body.localTee(allocator, 3);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try emitHelperClearContinuation(&body, allocator, 2, 3);
+    try body.i32Const(allocator, status_ok);
+    try body.return_(allocator);
+    try body.else_(allocator);
+    try body.localGet(allocator, 3);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.end(allocator);
+    try body.i32Const(allocator, status_ok);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_fast_interrupt",
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
 }
 fn emitNullInterruptCallback(self: anytype) Error!void {
     try self.body.localGet(self.allocator, 0);
@@ -414,6 +654,12 @@ fn emitQuietInterrupt(self: anytype, line: u32) Error!void {
 }
 fn emitQuietLineUpdate(self: anytype, line: u32) Error!void {
     // Same line as the last store: the low bits already match and continuation bits stay put.
+    if (self.line_helper) |helper| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(line));
+        try self.body.call(self.allocator, helper);
+        return;
+    }
     if (line != 0) {
         try self.body.localGet(self.allocator, self.last_line_local);
         try self.body.i32Const(self.allocator, @intCast(line));
@@ -717,6 +963,12 @@ pub noinline fn emitExchangeContinuation(self: anytype, next_id: u32) Error!void
     // Leave the previous continuation id on the stack. Callers compare it.
     if (next_id > abi.aot_continuation_mask)
         return Error.ResourceLimit;
+    if (self.exchange_helper) |helper| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(next_id));
+        try self.body.call(self.allocator, helper);
+        return;
+    }
     const next_bits: i32 = @bitCast(next_id << abi.aot_continuation_shift);
 
     try self.body.localGet(self.allocator, 0);
@@ -856,6 +1108,18 @@ fn emitFastIdentityPredicate(self: anytype) Error!void {
     try self.body.i32Eq(self.allocator);
     try self.body.opcode(self.allocator, i32_and);
 }
+fn structType(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .pointer => |pointer| pointer.child,
+        else => T,
+    };
+}
+fn emitFastImm(self: anytype, comptime field: []const u8, value: i32) Error!void {
+    // The shared fast call reads the frame shape from parameters. An inlined site bakes the constant.
+    if (comptime @hasField(structType(@TypeOf(self)), field)) {
+        try self.body.localGet(self.allocator, @field(self, field));
+    } else try self.body.i32Const(self.allocator, value);
+}
 fn emitFastStackPredicate(self: anytype, arg_bytes: i32) Error!void {
     // CallInfo and stack room change between calls. The value already on the stack is the identity condition.
     try self.body.localGet(self.allocator, 0);
@@ -866,7 +1130,7 @@ fn emitFastStackPredicate(self: anytype, arg_bytes: i32) Error!void {
     try self.body.opcode(self.allocator, i32_and);
 
     try self.body.localGet(self.allocator, self.call_func_local);
-    try self.body.i32Const(self.allocator, arg_bytes);
+    try emitFastImm(self, "fast_arg_bytes_local", arg_bytes);
     try self.body.opcode(self.allocator, i32_add);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Load(self.allocator, 2, abi.lua_state_stack_last_offset);
@@ -877,7 +1141,7 @@ fn emitFastStackPredicate(self: anytype, arg_bytes: i32) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Load(self.allocator, 2, abi.lua_state_stack_last_offset);
     try self.body.localGet(self.allocator, self.call_func_local);
-    try self.body.i32Const(self.allocator, arg_bytes);
+    try emitFastImm(self, "fast_arg_bytes_local", arg_bytes);
     try self.body.opcode(self.allocator, i32_add);
     try self.body.opcode(self.allocator, i32_sub);
     try self.body.localGet(self.allocator, self.call_closure_local);
@@ -888,13 +1152,16 @@ fn emitFastStackPredicate(self: anytype, arg_bytes: i32) Error!void {
     try self.body.opcode(self.allocator, i32_and);
 }
 fn emitFastLuaGuard(self: anytype, function_register: u32, arg_bytes: i32) Error!void {
-    try self.body.i32Const(self.allocator, 0);
-    try self.body.localSet(self.allocator, self.status_local);
     try self.body.localGet(self.allocator, self.base_local);
     try self.body.i32Const(self.allocator, @intCast(function_register * abi.tvalue_size));
     try self.body.opcode(self.allocator, i32_add);
     try self.body.localSet(self.allocator, self.call_func_local);
-
+    try emitFastLuaGuardAt(self, arg_bytes);
+}
+fn emitFastLuaGuardAt(self: anytype, arg_bytes: i32) Error!void {
+    // call_func_local is the callee TValue. A miss writes only wasm locals.
+    try self.body.i32Const(self.allocator, 0);
+    try self.body.localSet(self.allocator, self.status_local);
     try self.body.localGet(self.allocator, self.call_func_local);
     try self.body.i32Load(self.allocator, 2, tvalue_tag_offset);
     try self.body.i32Const(self.allocator, lua_tag_function);
@@ -940,7 +1207,7 @@ fn emitFastLuaGuard(self: anytype, function_register: u32, arg_bytes: i32) Error
 }
 fn emitFastNilFill(self: anytype, arg_bytes: i32) Error!void {
     try self.body.localGet(self.allocator, self.call_func_local);
-    try self.body.i32Const(self.allocator, arg_bytes);
+    try emitFastImm(self, "fast_arg_bytes_local", arg_bytes);
     try self.body.opcode(self.allocator, i32_add);
     try self.body.localSet(self.allocator, self.table_index_local);
     try self.body.block(self.allocator);
@@ -988,7 +1255,7 @@ fn emitFastInstallFrame(self: anytype, arg_bytes: i32, result_count: i32, frame_
 
     try self.body.localGet(self.allocator, self.table_index_local);
     try self.body.localGet(self.allocator, self.call_func_local);
-    try self.body.i32Const(self.allocator, arg_bytes);
+    try emitFastImm(self, "fast_arg_bytes_local", arg_bytes);
     try self.body.opcode(self.allocator, i32_add);
     try self.body.localGet(self.allocator, self.call_closure_local);
     try self.body.i32Load8U(self.allocator, 0, abi.closure_stacksize_offset);
@@ -1002,11 +1269,11 @@ fn emitFastInstallFrame(self: anytype, arg_bytes: i32, result_count: i32, frame_
     try self.body.i32Store(self.allocator, 2, abi.callinfo_aotstate_offset);
 
     try self.body.localGet(self.allocator, self.table_index_local);
-    try self.body.i32Const(self.allocator, result_count);
+    try emitFastImm(self, "fast_result_count_local", result_count);
     try self.body.i32Store(self.allocator, 2, abi.callinfo_nresults_offset);
 
     try self.body.localGet(self.allocator, self.table_index_local);
-    try self.body.i32Const(self.allocator, frame_flags);
+    try emitFastImm(self, "fast_frame_flags_local", frame_flags);
     try self.body.i32Store(self.allocator, 2, abi.callinfo_flags_offset);
 
     try self.body.localGet(self.allocator, 0);
@@ -1135,18 +1402,392 @@ fn emitFastLuaTransfer(self: anytype) Error!void {
         try self.body.localSet(self.allocator, self.status_local);
         return;
     }
-    if (self.sibling_functions.len > 0 and self.sibling_functions.len <= max_inline_direct_siblings)
-        return emitSiblingDispatch(self, 0);
-    try self.body.localGet(self.allocator, self.call_meta_local);
-    try self.body.i32Load(self.allocator, 2, proto_function_id_offset);
-    try self.body.i32Const(self.allocator, @intCast(self.planned_function_id));
-    try self.body.i32Eq(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try emitDirectCall(self, self.self_function);
-    try self.body.else_(self.allocator);
-    try emitIndirectCall(self);
-    try self.body.end(self.allocator);
+    // The shared helper serves every caller, so it cannot specialize one function id.
+    if (comptime @hasField(structType(@TypeOf(self)), "shared_fast_call")) {
+        return emitIndirectCall(self);
+    } else {
+        if (self.sibling_functions.len > 0 and self.sibling_functions.len <= max_inline_direct_siblings)
+            return emitSiblingDispatch(self, 0);
+        try self.body.localGet(self.allocator, self.call_meta_local);
+        try self.body.i32Load(self.allocator, 2, proto_function_id_offset);
+        try self.body.i32Const(self.allocator, @intCast(self.planned_function_id));
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitDirectCall(self, self.self_function);
+        try self.body.else_(self.allocator);
+        try emitIndirectCall(self);
+        try self.body.end(self.allocator);
+    }
 }
+
+const FastLuaCall = struct {
+    allocator: std.mem.Allocator,
+    body: *wasm.Body,
+    base_local: u32,
+    status_local: u32,
+    table_index_local: u32,
+    call_func_local: u32,
+    call_closure_local: u32,
+    call_proto_local: u32,
+    call_meta_local: u32,
+    call_cached_closure_local: u32,
+    fast_arg_bytes_local: u32,
+    fast_result_count_local: u32,
+    fast_frame_flags_local: u32,
+    sibling_trampoline: ?wasm.FunctionRef,
+    generated_type: u32,
+    finish_compiled_call: ?wasm.FunctionRef,
+    check_gc: ?wasm.FunctionRef,
+    shared_fast_call: bool = true,
+};
+
+/// One function for every fixed Lua call in a package larger than the inline sibling chain.
+/// Parameters are L, the callee byte offset from L->base, argument bytes, result count, frame flags,
+/// the continuation id, and prepare_on_miss. Id 0 skips the success clear.
+/// prepare_on_miss calls the prepare helper and returns its status. A zero flag returns `fast_lua_guard_miss`.
+/// The result is `fast_lua_guard_miss` when the stack is unchanged, `status_yielded` when the caller
+/// must return, `status_internal_error` when the clear sees a different id, and `status_ok` after
+/// poscall or finish_compiled_call. The success clear is already stored.
+pub fn emitFastLuaCall(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    generated_type: u32,
+    trampoline: ?wasm.FunctionRef,
+    finish_compiled_call: wasm.FunctionRef,
+    check_gc: wasm.FunctionRef,
+    prepare_helper: ?wasm.FunctionRef,
+) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{.i32} ** 7;
+    const results = [_]wasm.ValueType{.i32};
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
+    const locals = [_]wasm.Local{.{ .count = 8, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+
+    var ctx = FastLuaCall{
+        .allocator = allocator,
+        .body = &body,
+        .base_local = 7,
+        .status_local = 8,
+        .table_index_local = 9,
+        .call_func_local = 10,
+        .call_closure_local = 11,
+        .call_proto_local = 12,
+        .call_meta_local = 13,
+        .call_cached_closure_local = 14,
+        .fast_arg_bytes_local = 2,
+        .fast_result_count_local = 3,
+        .fast_frame_flags_local = 4,
+        .sibling_trampoline = trampoline,
+        .generated_type = generated_type,
+        .finish_compiled_call = finish_compiled_call,
+        .check_gc = check_gc,
+    };
+
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_base_offset);
+    try body.localTee(allocator, ctx.base_local);
+    try body.localGet(allocator, 1);
+    try body.opcode(allocator, i32_add);
+    try body.localSet(allocator, ctx.call_func_local);
+    try emitFastLuaGuardAt(&ctx, 0);
+    try body.localGet(allocator, ctx.status_local);
+    try body.ifVoid(allocator);
+    try emitFastLuaInvoke(&ctx, 0, 0, null, 0, false, true);
+    try body.localGet(allocator, 5);
+    try body.ifVoid(allocator);
+    try emitHelperClearContinuation(&body, allocator, 5, ctx.status_local);
+    try body.end(allocator);
+    try body.i32Const(allocator, status_ok);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.localGet(allocator, 6);
+    try body.ifVoid(allocator);
+    if (prepare_helper) |prepare| {
+        // Register is the byte offset shifted by the TValue size. Argument count is one less than the frame slots.
+        try body.localGet(allocator, 0);
+        try body.localGet(allocator, 1);
+        try body.i32Const(allocator, 4);
+        try body.opcode(allocator, i32_shr_u);
+        try body.localGet(allocator, 2);
+        try body.i32Const(allocator, 4);
+        try body.opcode(allocator, i32_shr_u);
+        try body.i32Const(allocator, 1);
+        try body.opcode(allocator, i32_sub);
+        try body.localGet(allocator, 3);
+        try body.localGet(allocator, 5);
+        try body.call(allocator, prepare);
+        try body.return_(allocator);
+    } else {
+        try body.i32Const(allocator, fast_lua_guard_miss);
+        try body.return_(allocator);
+    }
+    try body.end(allocator);
+    try body.i32Const(allocator, fast_lua_guard_miss);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_fast_lua_call",
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
+fn emitFastLuaCallSite(
+    self: anytype,
+    helper: wasm.FunctionRef,
+    func_offset: i32,
+    arg_bytes: i32,
+    result_count: i32,
+    frame_flags: i32,
+    continuation_id: i32,
+    prepare_on_miss: i32,
+) Error!void {
+    try self.body.localGet(self.allocator, 0);
+    try self.body.i32Const(self.allocator, func_offset);
+    try self.body.i32Const(self.allocator, arg_bytes);
+    try self.body.i32Const(self.allocator, result_count);
+    try self.body.i32Const(self.allocator, frame_flags);
+    try self.body.i32Const(self.allocator, continuation_id);
+    try self.body.i32Const(self.allocator, prepare_on_miss);
+    try self.body.call(self.allocator, helper);
+    try self.body.localSet(self.allocator, self.status_local);
+}
+
+fn prefaceSymbol(move: bool, constant: bool, capture_count: u32) []const u8 {
+    const symbols = [_][]const u8{
+        "luauc_runtime_v1_fast_call_preface",
+        "luauc_runtime_v1_fast_call_preface_c1",
+        "luauc_runtime_v1_fast_call_preface_c2",
+        "luauc_runtime_v1_fast_call_preface_c3",
+        "luauc_runtime_v1_fast_call_preface_k",
+        "luauc_runtime_v1_fast_call_preface_k_c1",
+        "luauc_runtime_v1_fast_call_preface_k_c2",
+        "luauc_runtime_v1_fast_call_preface_k_c3",
+        "luauc_runtime_v1_fast_call_preface_m",
+        "luauc_runtime_v1_fast_call_preface_m_c1",
+        "luauc_runtime_v1_fast_call_preface_m_c2",
+        "luauc_runtime_v1_fast_call_preface_m_c3",
+        "luauc_runtime_v1_fast_call_preface_m_k",
+        "luauc_runtime_v1_fast_call_preface_m_k_c1",
+        "luauc_runtime_v1_fast_call_preface_m_k_c2",
+        "luauc_runtime_v1_fast_call_preface_m_k_c3",
+    };
+    return symbols[callPrefaceIndex(move, constant, capture_count)];
+}
+
+pub fn callPrefaceIndex(move: bool, constant: bool, capture_count: u32) u32 {
+    return @as(u32, @intFromBool(move)) * 8 + @as(u32, @intFromBool(constant)) * 4 + capture_count;
+}
+
+/// One stack-to-stack TValue copy. The packed immediate is source in the low 16 bits and destination in the high 16.
+pub fn emitMoveReg(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{ .i32, .i32 };
+    const no_results = [_]wasm.ValueType{};
+    const function_type = try object.addType(.{ .params = &params, .results = &no_results });
+    var body = try wasm.Body.init(allocator, &.{});
+    defer body.deinit(allocator);
+    try emitPrefaceRegisterCopy(&body, allocator, 1);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_move_reg",
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
+fn prefaceParamCount(move: bool, constant: bool, capture_count: u32) u32 {
+    // L, packed interrupt line and continuation, packed call line and continuation,
+    // byte offset, argument bytes, result count.
+    var count: u32 = 6;
+    if (move)
+        count += 1;
+    if (constant)
+        count += 2;
+    if (capture_count != 0)
+        count += 2 + capture_count;
+    return count;
+}
+
+fn emitMasked(body: *wasm.Body, allocator: std.mem.Allocator, local_index: u32, mask: u32) Error!void {
+    try body.localGet(allocator, local_index);
+    try body.i32Const(allocator, @intCast(mask));
+    try body.opcode(allocator, i32_and);
+}
+
+fn emitShifted(body: *wasm.Body, allocator: std.mem.Allocator, local_index: u32, shift: u32) Error!void {
+    try body.localGet(allocator, local_index);
+    try body.i32Const(allocator, @intCast(shift));
+    try body.opcode(allocator, i32_shr_u);
+}
+
+/// One straight-line preface for packages larger than the inline sibling chain.
+/// The tail is a constant load, then 0..3 dupclosure captures. Each shape is its own function.
+/// Interrupt 0 and `outlined_reload` continue. Any other interrupt status returns raw.
+/// A call-region failure returns that status. Success returns 0 after the tail.
+pub fn emitCallPreface(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    interrupt_helper: wasm.FunctionRef,
+    line_helper: wasm.FunctionRef,
+    exchange_helper: wasm.FunctionRef,
+    fast_lua_call: wasm.FunctionRef,
+    load_constant: ?wasm.FunctionRef,
+    dupclosure_capture: ?wasm.FunctionRef,
+    move: bool,
+    constant: bool,
+    capture_count: u32,
+) Error!wasm.FunctionRef {
+    if (capture_count > 3)
+        return Error.UnsupportedControlFlow;
+    if (constant and load_constant == null)
+        return Error.UnsupportedCommand;
+    if (capture_count != 0 and dupclosure_capture == null)
+        return Error.UnsupportedCommand;
+
+    const param_count = prefaceParamCount(move, constant, capture_count);
+    var params: [20]wasm.ValueType = .{.i32} ** 20;
+    const results = [_]wasm.ValueType{.i32};
+    const function_type = try object.addType(.{ .params = params[0..param_count], .results = &results });
+    const locals = [_]wasm.Local{.{ .count = 1, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+    const status: u32 = param_count;
+    const move_at: u32 = 6;
+    const const_at: u32 = 6 + @as(u32, if (move) 1 else 0);
+    const cap_base: u32 = const_at + @as(u32, if (constant) 2 else 0);
+
+    try body.localGet(allocator, 0);
+    try emitMasked(&body, allocator, 1, abi.aot_line_mask);
+    try emitShifted(&body, allocator, 1, abi.aot_continuation_shift);
+    try body.call(allocator, interrupt_helper);
+    try body.localTee(allocator, status);
+    try body.i32Eqz(allocator);
+    try body.localGet(allocator, status);
+    try body.i32Const(allocator, outlined_reload);
+    try body.i32Eq(allocator);
+    try body.opcode(allocator, i32_or);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, status);
+    try body.return_(allocator);
+    try body.end(allocator);
+
+    // Slow interrupt success does not write the call line. This store still runs.
+    try body.localGet(allocator, 0);
+    try emitMasked(&body, allocator, 2, abi.aot_line_mask);
+    try body.call(allocator, line_helper);
+
+    // Id 0 skips the exchange. A mismatch has already stored the new id.
+    try emitShifted(&body, allocator, 2, abi.aot_continuation_shift);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, 0);
+    try emitShifted(&body, allocator, 2, abi.aot_continuation_shift);
+    try body.call(allocator, exchange_helper);
+    try body.i32Eqz(allocator);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try body.i32Const(allocator, status_internal_error);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.end(allocator);
+
+    try body.localGet(allocator, 0);
+    try body.localGet(allocator, 3);
+    try body.localGet(allocator, 4);
+    try body.localGet(allocator, 5);
+    try body.i32Const(allocator, abi.lua_callinfo_native);
+    try emitShifted(&body, allocator, 2, abi.aot_continuation_shift);
+    try body.i32Const(allocator, 1);
+    try body.call(allocator, fast_lua_call);
+    try body.localTee(allocator, status);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    if (move)
+        try emitPrefaceRegisterCopy(&body, allocator, move_at);
+    if (constant) {
+        try body.localGet(allocator, 0);
+        try body.localGet(allocator, const_at);
+        try body.localGet(allocator, const_at + 1);
+        try body.call(allocator, load_constant orelse return Error.UnsupportedCommand);
+    }
+    if (capture_count != 0) {
+        const capture_fn = dupclosure_capture orelse return Error.UnsupportedCommand;
+        var index: u32 = 0;
+        while (index < capture_count) : (index += 1) {
+            const packed_capture = cap_base + 2 + index;
+            try body.localGet(allocator, 0);
+            try body.localGet(allocator, cap_base);
+            try body.localGet(allocator, cap_base + 1);
+            try body.i32Const(allocator, @intCast(index));
+            try emitShifted(&body, allocator, packed_capture, 16);
+            try emitMasked(&body, allocator, packed_capture, 0xffff);
+            try body.i32Const(allocator, @intFromBool(index + 1 == capture_count));
+            try body.call(allocator, capture_fn);
+        }
+    }
+    try body.else_(allocator);
+    try body.localGet(allocator, status);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.i32Const(allocator, status_ok);
+    try body.finish(allocator);
+    return object.defineFunction(
+        prefaceSymbol(move, constant, capture_count),
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
+fn emitPrefaceRegisterCopy(body: *wasm.Body, allocator: std.mem.Allocator, packed_local: u32) Error!void {
+    // Copy one stack TValue. The call has returned, so L->base is the caller's base.
+    // The packed local holds the source register in the low 16 bits and the destination in the high 16.
+    try emitPrefaceCopyHalf(body, allocator, packed_local, 0);
+    try emitPrefaceCopyHalf(body, allocator, packed_local, 8);
+}
+
+fn emitPackedRegister(body: *wasm.Body, allocator: std.mem.Allocator, packed_local: u32, high: bool) Error!void {
+    try body.localGet(allocator, packed_local);
+    if (high) {
+        try body.i32Const(allocator, 16);
+        try body.opcode(allocator, i32_shr_u);
+    } else {
+        try body.i32Const(allocator, 0xffff);
+        try body.opcode(allocator, i32_and);
+    }
+}
+
+fn emitPrefaceCopyHalf(
+    body: *wasm.Body,
+    allocator: std.mem.Allocator,
+    packed_local: u32,
+    offset: u32,
+) Error!void {
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_base_offset);
+    try emitPackedRegister(body, allocator, packed_local, true);
+    try body.i32Const(allocator, 4);
+    try body.opcode(allocator, i32_shl);
+    try body.i32Const(allocator, @intCast(offset));
+    try body.opcode(allocator, i32_add);
+    try body.opcode(allocator, i32_add);
+    try body.localGet(allocator, 0);
+    try body.i32Load(allocator, 2, abi.lua_state_base_offset);
+    try emitPackedRegister(body, allocator, packed_local, false);
+    try body.i32Const(allocator, 4);
+    try body.opcode(allocator, i32_shl);
+    try body.i32Const(allocator, @intCast(offset));
+    try body.opcode(allocator, i32_add);
+    try body.opcode(allocator, i32_add);
+    try body.i64Load(allocator, 3, 0);
+    try body.i64Store(allocator, 3, 0);
+}
+
 fn emitFastAdvanceResult(self: anytype) Error!void {
     try self.body.localGet(self.allocator, self.call_func_local);
     try self.body.localGet(self.allocator, self.call_closure_local);
@@ -1292,7 +1933,8 @@ fn emitFastLuaInvoke(
     result_count: i32,
     continuation: ?CallContinuation,
     frame_flags: i32,
-    mark_opyield: bool,
+    comptime mark_opyield: bool,
+    comptime outlined: bool,
 ) Error!void {
     try emitFastInstallFrame(self, arg_bytes, result_count, frame_flags);
     try emitFastLuaTransfer(self);
@@ -1310,18 +1952,105 @@ fn emitFastLuaInvoke(
     try self.body.ifVoid(self.allocator);
     try emitFastPoscall(self);
     try emitFastGcAssist(self);
-    if (continuation) |resumable|
-        try self.emitClearContinuation(resumable.continuation_id);
-    try self.emitReloadBase();
+    if (comptime !outlined) {
+        if (continuation) |resumable|
+            try self.emitClearContinuation(resumable.continuation_id);
+        try self.emitReloadBase();
+    }
     try self.body.else_(self.allocator);
     try self.body.localGet(self.allocator, 0);
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.call(self.allocator, self.finish_compiled_call orelse return Error.UnsupportedCommand);
-    if (continuation) |resumable|
-        try self.emitClearContinuation(resumable.continuation_id);
-    try self.emitReloadBase();
+    if (comptime !outlined) {
+        if (continuation) |resumable|
+            try self.emitClearContinuation(resumable.continuation_id);
+        try self.emitReloadBase();
+    }
     try self.body.end(self.allocator);
 }
+/// One prepare sequence for every package larger than the inline sibling chain.
+/// Parameters are L, the function register, the parameter count, the result count, and the continuation id.
+/// Id 0 skips the clear. The result is 0 after a finished call, or the runtime status unchanged.
+/// Yield does not clear. The caller reloads base only when the result is 0.
+pub fn emitPreparedCallHelper(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    generated_type: u32,
+    trampoline: ?wasm.FunctionRef,
+    prepare_compiled_call: wasm.FunctionRef,
+    finish_compiled_call: wasm.FunctionRef,
+) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{.i32} ** 5;
+    const results = [_]wasm.ValueType{.i32};
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
+    const locals = [_]wasm.Local{.{ .count = 3, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+
+    try body.localGet(allocator, 0);
+    try body.localGet(allocator, 1);
+    try body.localGet(allocator, 2);
+    try body.localGet(allocator, 3);
+    try body.call(allocator, prepare_compiled_call);
+    try body.localSet(allocator, 5);
+    try body.localGet(allocator, 5);
+    try body.i32Load(allocator, 2, prepared_call_status_offset);
+    try body.localTee(allocator, 6);
+    try body.i32Eqz(allocator);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, 4);
+    try body.ifVoid(allocator);
+    try emitHelperClearContinuation(&body, allocator, 4, 6);
+    try body.end(allocator);
+    try body.i32Const(allocator, status_ok);
+    try body.return_(allocator);
+    try body.end(allocator);
+
+    try body.localGet(allocator, 6);
+    try body.i32Const(allocator, status_prepared);
+    try body.i32Eq(allocator);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, 5);
+    try body.i32Load(allocator, 2, prepared_call_metadata_offset);
+    try body.localSet(allocator, 7);
+    try body.localGet(allocator, 0);
+    try body.localGet(allocator, 7);
+    if (trampoline) |direct| {
+        try body.call(allocator, direct);
+    } else {
+        try body.localGet(allocator, 5);
+        try body.i32Load(allocator, 2, prepared_call_table_index_offset);
+        try body.callIndirect(allocator, generated_type, 0);
+    }
+    try body.localSet(allocator, 6);
+    try body.localGet(allocator, 6);
+    try body.i32Const(allocator, status_yielded);
+    try body.i32Eq(allocator);
+    try body.ifVoid(allocator);
+    try body.localGet(allocator, 6);
+    try body.return_(allocator);
+    try body.end(allocator);
+    try body.localGet(allocator, 0);
+    try body.localGet(allocator, 6);
+    try body.call(allocator, finish_compiled_call);
+    try body.localGet(allocator, 4);
+    try body.ifVoid(allocator);
+    try emitHelperClearContinuation(&body, allocator, 4, 6);
+    try body.end(allocator);
+    try body.i32Const(allocator, status_ok);
+    try body.return_(allocator);
+    try body.end(allocator);
+
+    try body.localGet(allocator, 6);
+    try body.finish(allocator);
+    return object.defineFunction(
+        "luauc_runtime_v1_fast_prepare",
+        function_type,
+        wasm.symbol.visibility_hidden,
+        body,
+    );
+}
+
 fn emitPreparedCompiledCall(
     self: anytype,
     function_register: u32,
@@ -1329,6 +2058,28 @@ fn emitPreparedCompiledCall(
     result_count: i32,
     continuation: ?CallContinuation,
 ) Error!void {
+    if (self.prepare_helper) |helper| {
+        const continuation_id: i32 = if (continuation) |resumable|
+            std.math.cast(i32, resumable.continuation_id) orelse return Error.ResourceLimit
+        else
+            0;
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(function_register));
+        try self.body.i32Const(self.allocator, parameter_count);
+        try self.body.i32Const(self.allocator, result_count);
+        try self.body.i32Const(self.allocator, continuation_id);
+        try self.body.call(self.allocator, helper);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.emitReloadBase();
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.return_(self.allocator);
+        try self.body.end(self.allocator);
+        return;
+    }
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(function_register));
     try self.body.i32Const(self.allocator, parameter_count);
@@ -1406,6 +2157,19 @@ fn ipairsImportId(self: anytype) Error!?u32 {
     return null;
 }
 
+fn syntheticIpairsApplies(
+    self: anytype,
+    function_register: u32,
+    parameter_count: i32,
+    result_count: i32,
+) Error!bool {
+    if (parameter_count != 1 or result_count != 3)
+        return false;
+    if (try ipairsImportId(self) == null)
+        return false;
+    return function_register + 2 < self.proto.max_stack_size;
+}
+
 // ipairs(table) pushes its C upvalue (inext), the table, and integer 0.
 // The callee must be the closure stored for that import. Any other call uses prepare.
 fn emitSyntheticIpairs(
@@ -1415,11 +2179,9 @@ fn emitSyntheticIpairs(
     result_count: i32,
     continuation: ?CallContinuation,
 ) Error!bool {
-    if (parameter_count != 1 or result_count != 3)
+    if (!try syntheticIpairsApplies(self, function_register, parameter_count, result_count))
         return false;
     const import_id = (try ipairsImportId(self)) orelse return false;
-    if (function_register + 2 >= self.proto.max_stack_size)
-        return false;
     const import_i32 = std.math.cast(i32, import_id) orelse return false;
     const slot_addend = std.math.cast(i32, std.math.mul(u32, import_id, abi.tvalue_size) catch return false) orelse return false;
     const upval = abi.closure_c_upvals_offset;
@@ -1530,6 +2292,381 @@ fn emitSyntheticIpairs(
     return true;
 }
 
+fn emitCallMiss(
+    self: anytype,
+    instruction_id: u32,
+    function_register: u32,
+    parameter_count: i32,
+    result_count: i32,
+    continuation: ?CallContinuation,
+) Error!void {
+    if (try emitSyntheticIpairs(self, function_register, parameter_count, result_count, continuation)) {
+        // The miss arm calls prepare. A hit already published inext, the table, and 0.
+    } else if (try self.stringMethodShape(instruction_id, function_register, parameter_count, result_count)) |shape| {
+        try self.emitStringMethodGuards(shape);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.ifVoid(self.allocator);
+        try self.emitStringMethodOperation(shape, continuation);
+        try self.body.else_(self.allocator);
+        // The fused namecall left the method nil. A table fast path stored a function and must be kept.
+        try self.body.localGet(self.allocator, self.base_local);
+        try self.body.i32Load(self.allocator, 2, function_register * abi.tvalue_size + tvalue_tag_offset);
+        try self.body.i32Const(self.allocator, lua_tag_function);
+        try self.body.i32Eq(self.allocator);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.emitResolveDeferredNamecall(function_register, shape.receiver, shape.key_constant);
+        try self.body.end(self.allocator);
+        try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+        try self.body.end(self.allocator);
+    } else try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
+}
+
+fn emitOutlinedFastLuaResult(self: anytype, continuation: ?CallContinuation) Error!void {
+    // The helper already cleared a non-zero continuation on success. A second exchange
+    // would see previous id 0 and return internal error. live_continuation_local has no reader here.
+    // Yielded and every other non-zero status return. Zero reloads base and continues.
+    _ = continuation;
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.ifVoid(self.allocator);
+    try self.body.localGet(self.allocator, self.status_local);
+    try self.body.return_(self.allocator);
+    try self.body.end(self.allocator);
+    try self.emitReloadBase();
+}
+
+const PrefaceConstant = struct {
+    load_id: u32,
+    destination: u32,
+    constant_id: u32,
+};
+
+const PrefaceMove = struct {
+    source: u32,
+    destination: u32,
+    finish: u32,
+};
+
+const PrefaceCaptures = struct {
+    count: u32,
+    destination: u32,
+    child_id: u32,
+    kinds: [3]u32,
+    sources: [3]u32,
+};
+
+pub const CallPreface = struct {
+    start: u32,
+    finish: u32,
+    interrupt_line: u32,
+    interrupt_continuation: u32,
+    call_line: u32,
+    call_continuation: u32,
+    func_offset: i32,
+    arg_bytes: i32,
+    result_count: i32,
+    move: ?PrefaceMove,
+    constant: ?PrefaceConstant,
+    captures: ?PrefaceCaptures,
+};
+
+fn prefaceHelpersReady(self: anytype) bool {
+    return self.fast_lua_call != null and self.interrupt_helper != null and
+        self.line_helper != null and self.exchange_helper != null and
+        self.prepare_helper != null and self.call_preface[0] != null;
+}
+
+fn prefaceSpanOwned(self: anytype, start: u32, finish: u32) bool {
+    const owner = self.plan.instructionBlock(start) orelse return false;
+    var cursor = start;
+    while (cursor <= finish) : (cursor += 1) {
+        if ((self.plan.instructionBlock(cursor) orelse return false) != owner)
+            return false;
+        if (self.plan.clusterAt(cursor) != null)
+            return false;
+    }
+    return true;
+}
+
+/// A constant load is a planned cluster. That cluster is the load itself, so the tail may own it.
+fn prefaceConstantLoadOwned(self: anytype, owner: u32, start: u32, finish: u32) bool {
+    var cursor = start;
+    while (cursor <= finish) : (cursor += 1) {
+        if ((self.plan.instructionBlock(cursor) orelse return false) != owner)
+            return false;
+        if (self.plan.clusterAt(cursor)) |cluster| {
+            if (cluster.kind != .constant_load or cluster.start != start or cluster.finish != finish)
+                return false;
+        }
+    }
+    return true;
+}
+
+fn i32Immediate(value: u32) Error!i32 {
+    return std.math.cast(i32, value) orelse Error.ResourceLimit;
+}
+
+fn prefaceCapturesAt(self: anytype, start: u32, range_finish: u32, move: bool) Error!?PrefaceCaptures {
+    if (start > range_finish)
+        return null;
+    if ((try self.instruction(start)).command != .fallback_dupclosure)
+        return null;
+    const pattern = model.dupClosurePattern(self.snapshot, self.function, self.proto, start) catch return null;
+    const captured = switch (pattern) {
+        .closed => return null,
+        .captured => |found| found,
+    };
+    if (captured.capture_count < 1 or captured.capture_count > 3)
+        return null;
+    const finish = std.math.add(u32, start, captured.capture_count) catch return Error.ResourceLimit;
+    if (finish > range_finish or !prefaceSpanOwned(self, start, finish))
+        return null;
+    if (self.call_preface[callPrefaceIndex(move, false, captured.capture_count)] == null and
+        self.call_preface[callPrefaceIndex(move, true, captured.capture_count)] == null)
+        return null;
+    var tail = PrefaceCaptures{
+        .count = captured.capture_count,
+        .destination = captured.destination,
+        .child_id = std.math.add(u32, self.function_id_base, captured.child_proto_id) catch return Error.ResourceLimit,
+        .kinds = .{ 0, 0, 0 },
+        .sources = .{ 0, 0, 0 },
+    };
+    var index: u32 = 0;
+    while (index < captured.capture_count) : (index += 1) {
+        const capture = try model.markerCapture(
+            self.snapshot,
+            self.function,
+            self.proto,
+            captured.marker_start + index,
+            false,
+        );
+        tail.kinds[index] = @intFromEnum(capture.kind);
+        tail.sources[index] = capture.source;
+    }
+    return tail;
+}
+
+/// Interrupt, saved-pc line, and a fixed ordinary Lua call. A following constant load and
+/// one to three dupclosure captures join when that exact helper exists.
+/// Generic-for, string-method, and ipairs stay on the prepare-on-miss path.
+pub noinline fn callPrefaceAt(self: anytype, start: u32, range_finish: u32) Error!?CallPreface {
+    if (!prefaceHelpersReady(self))
+        return null;
+    if (start + 2 > range_finish or start + 2 >= self.function.instruction_count)
+        return null;
+    const interrupt = try self.instruction(start);
+    const saved = try self.instruction(start + 1);
+    const call = try self.instruction(start + 2);
+    if (interrupt.command != .interrupt or saved.command != .set_savedpc or call.command != .call)
+        return null;
+    const owner = self.plan.instructionBlock(start) orelse return null;
+    if (!prefaceSpanOwned(self, start, start + 2))
+        return null;
+
+    const interrupt_continuation = self.callContinuation(start) orelse return null;
+    const call_continuation = self.callContinuation(start + 2) orelse return null;
+    if (interrupt.operand_count != 1 or saved.operand_count != 1 or call.operand_count != 3)
+        return null;
+    const interrupt_line = try self.sourceLine(try self.uintConstant(try self.operand(interrupt, 0)));
+    const saved_pc = try self.savedPc(saved);
+    if (saved_pc == 0)
+        return Error.InvalidOperandType;
+    const call_line = try self.sourceLine(saved_pc - 1);
+
+    const function_register = try self.vmRegisterIndex(try self.operand(call, 0));
+    const parameter_count = try self.intConstant(try self.operand(call, 1));
+    const result_count = try self.intConstant(try self.operand(call, 2));
+    if (parameter_count < -1 or result_count < -1)
+        return Error.UnsupportedControlFlow;
+    if (parameter_count < 0 or result_count < 0)
+        return null;
+    const parameter_count_u32: u32 = @intCast(parameter_count);
+    const result_count_u32: u32 = @intCast(result_count);
+    if (parameter_count_u32 >= @as(u32, self.proto.max_stack_size) - function_register)
+        return Error.UnsupportedControlFlow;
+    if (result_count_u32 > @as(u32, self.proto.max_stack_size) - function_register)
+        return Error.UnsupportedControlFlow;
+    if (try syntheticIpairsApplies(self, function_register, parameter_count, result_count))
+        return null;
+    if (try self.stringMethodShape(start + 2, function_register, parameter_count, result_count) != null)
+        return null;
+
+    var preface = CallPreface{
+        .start = start,
+        .finish = start + 2,
+        .interrupt_line = interrupt_line,
+        .interrupt_continuation = interrupt_continuation.continuation_id,
+        .call_line = call_line,
+        .call_continuation = call_continuation.continuation_id,
+        .func_offset = try slotByteOffset(function_register),
+        .arg_bytes = (parameter_count + 1) * tvalue_size,
+        .result_count = result_count,
+        .move = null,
+        .constant = null,
+        .captures = null,
+    };
+
+    // A register move often sits between the call and the constant load. Take it only when
+    // that lets the constant load or the captures join the same straight-line helper.
+    const moved = try prefaceMoveAt(self, start + 3, range_finish, owner);
+    const load_at: u32 = if (moved) |copy| copy.finish + 1 else start + 3;
+    var took_move = false;
+    if (self.call_preface[callPrefaceIndex(moved != null, true, 0)] != null) {
+        if (try self.constantLoadPatternAt(load_at)) |load| {
+            if (load.finish <= range_finish and prefaceConstantLoadOwned(self, owner, load.start, load.finish) and
+                load.start < self.slots.len and self.slots[load.start].shape == .tvalue)
+            {
+                took_move = moved != null;
+                preface.constant = .{
+                    .load_id = load.start,
+                    .destination = load.destination,
+                    .constant_id = load.constant_id,
+                };
+                preface.finish = load.finish;
+            }
+        }
+    }
+    const capture_at: u32 = if (preface.constant != null)
+        preface.finish + 1
+    else if (moved) |copy|
+        copy.finish + 1
+    else
+        start + 3;
+    if (try prefaceCapturesAt(self, capture_at, range_finish, moved != null and capture_at != start + 3)) |tail| {
+        const same_block = if (self.plan.instructionBlock(capture_at)) |found| found == owner else false;
+        const aliases = if (preface.constant) |load| load.destination == tail.destination else false;
+        const use_move = took_move or (moved != null and capture_at != start + 3);
+        const helper = self.call_preface[callPrefaceIndex(use_move, preface.constant != null, tail.count)];
+        if (same_block and !aliases and helper != null) {
+            took_move = use_move;
+            preface.captures = tail;
+            preface.finish = capture_at + tail.count;
+        }
+    }
+    if (took_move) {
+        const copy = moved orelse return Error.UnsupportedCommand;
+        preface.move = copy;
+        if (preface.finish < copy.finish)
+            preface.finish = copy.finish;
+    }
+    const capture_count: u32 = if (preface.captures) |tail| tail.count else 0;
+    if (self.call_preface[callPrefaceIndex(preface.move != null, preface.constant != null, capture_count)] == null)
+        return null;
+    return preface;
+}
+
+fn prefaceMoveAt(self: anytype, start: u32, range_finish: u32, owner: u32) Error!?PrefaceMove {
+    if (start + 1 > range_finish or start + 1 >= self.function.instruction_count)
+        return null;
+    const load = try self.instruction(start);
+    const store = try self.instruction(start + 1);
+    if (load.command != .load_tvalue or load.operand_count != 1 or
+        store.command != .store_tvalue or store.operand_count != 2)
+        return null;
+    if (!prefaceSpanOwned(self, start, start + 1))
+        return null;
+    if ((self.plan.instructionBlock(start) orelse return null) != owner)
+        return null;
+    const source = try self.operand(load, 0);
+    const destination = try self.operand(store, 0);
+    const stored = try self.operand(store, 1);
+    if (source.kind != .vm_reg or source.value >= self.proto.max_stack_size or
+        destination.kind != .vm_reg or destination.value >= self.proto.max_stack_size or
+        stored.kind != .instruction or stored.value != start)
+        return null;
+    return .{
+        .source = source.value,
+        .destination = destination.value,
+        .finish = start + 1,
+    };
+}
+
+fn emitPrefaceImmediate(self: anytype, value: u32) Error!void {
+    try self.body.i32Const(self.allocator, try i32Immediate(value));
+}
+
+fn emitPackedBits(self: anytype, value: u32) Error!void {
+    try self.body.i32Const(self.allocator, @bitCast(value));
+}
+
+fn packLineContinuation(line: u32, continuation: u32) Error!u32 {
+    if (line > abi.aot_line_mask or continuation > abi.aot_continuation_mask)
+        return Error.ResourceLimit;
+    return line | (continuation << abi.aot_continuation_shift);
+}
+
+fn packLowHigh(low: u32, high: u32) Error!u32 {
+    if (low > 0xffff or high > 0xffff)
+        return Error.ResourceLimit;
+    return low | (high << 16);
+}
+
+/// A one-register move whose load is used only by the following store.
+/// The helper reads both registers through L->base. The load allocates no read here.
+pub fn emitRegisterMove(self: anytype, start: u32, range_finish: u32) Error!?u32 {
+    const helper = self.move_reg orelse return null;
+    if (self.plan.closureContaining(start) != null)
+        return null;
+    if (try self.isDupClosureCapture(start))
+        return null;
+    const owner = self.plan.instructionBlock(start) orelse return null;
+    const copy = (try prefaceMoveAt(self, start, range_finish, owner)) orelse return null;
+    if (self.plan.closureContaining(copy.finish) != null)
+        return null;
+    if (try self.isDupClosureCapture(copy.finish))
+        return null;
+    const uses = self.plan.instructionUses(start) orelse return null;
+    if (uses != 1)
+        return null;
+    try self.body.localGet(self.allocator, 0);
+    try emitPackedBits(self, try packLowHigh(copy.source, copy.destination));
+    try self.body.call(self.allocator, helper);
+    return copy.finish;
+}
+
+pub noinline fn emitFusedCallPreface(self: anytype, preface: CallPreface) Error!void {
+    const capture_count: u32 = if (preface.captures) |tail| tail.count else 0;
+    const helper = self.call_preface[callPrefaceIndex(preface.move != null, preface.constant != null, capture_count)] orelse
+        return Error.UnsupportedCommand;
+    try self.body.localGet(self.allocator, 0);
+    try emitPackedBits(self, try packLineContinuation(preface.interrupt_line, preface.interrupt_continuation));
+    try emitPackedBits(self, try packLineContinuation(preface.call_line, preface.call_continuation));
+    try self.body.i32Const(self.allocator, preface.func_offset);
+    try self.body.i32Const(self.allocator, preface.arg_bytes);
+    try self.body.i32Const(self.allocator, preface.result_count);
+    if (preface.move) |copy| {
+        try emitPackedBits(self, try packLowHigh(copy.source, copy.destination));
+    }
+    if (preface.constant) |load| {
+        try emitPrefaceImmediate(self, load.destination);
+        try emitPrefaceImmediate(self, load.constant_id);
+    }
+    if (preface.captures) |tail| {
+        try emitPrefaceImmediate(self, tail.destination);
+        try emitPrefaceImmediate(self, tail.child_id);
+        var index: u32 = 0;
+        while (index < tail.count) : (index += 1)
+            try emitPackedBits(self, try packLowHigh(tail.sources[index], tail.kinds[index]));
+    }
+    try self.body.call(self.allocator, helper);
+    // Non-zero is the status this function returns. The abort block sits outside the dispatcher loop.
+    try self.body.localTee(self.allocator, self.status_local);
+    try self.body.branchIf(self.allocator, self.loop_branch_depth + 1);
+    try self.emitReloadBase();
+    if (preface.constant) |load| {
+        const uses = self.plan.instructionUses(load.load_id) orelse return Error.InvalidInstructionResult;
+        if (uses > 1) {
+            if (load.load_id >= self.slots.len or self.slots[load.load_id].shape != .tvalue)
+                return Error.InvalidInstructionResult;
+            const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = load.destination };
+            try self.emitTValuePart(published, false);
+            try self.body.localSet(self.allocator, self.slots[load.load_id].first);
+            try self.emitTValuePart(published, true);
+            try self.body.localSet(self.allocator, self.slots[load.load_id].second);
+        }
+    }
+}
+
 pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     const continuation = self.callContinuation(instruction_id);
     try self.requireOperandCount(instruction_value, 3);
@@ -1570,32 +2707,40 @@ pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: 
     // Room for a fixed Lua frame is decided by the guard. prepare_compiled_call remains the other arm.
     if (parameter_count >= 0 and result_count >= 0) {
         const arg_bytes: i32 = (parameter_count + 1) * tvalue_size;
-        try emitFastLuaGuard(self, function_register, arg_bytes);
-        try self.body.localGet(self.allocator, self.status_local);
-        try self.body.ifVoid(self.allocator);
-        try emitFastLuaInvoke(self, arg_bytes, result_count, continuation, abi.lua_callinfo_native, false);
-        try self.body.else_(self.allocator);
-        if (try emitSyntheticIpairs(self, function_register, parameter_count, result_count, continuation)) {
-            // The miss arm calls prepare. A hit already published inext, the table, and 0.
-        } else if (try self.stringMethodShape(instruction_id, function_register, parameter_count, result_count)) |shape| {
-            try self.emitStringMethodGuards(shape);
+        if (self.fast_lua_call) |helper| {
+            const continuation_id: i32 = if (continuation) |resumable|
+                std.math.cast(i32, resumable.continuation_id) orelse return Error.ResourceLimit
+            else
+                0;
+            // String-method and ipairs hits still return the guard miss. Every other fixed call prepares inside the helper.
+            const prepare_on_miss: i32 = if (self.prepare_helper != null and
+                !try syntheticIpairsApplies(self, function_register, parameter_count, result_count) and
+                (try self.stringMethodShape(instruction_id, function_register, parameter_count, result_count)) == null)
+                1
+            else
+                0;
+            try emitFastLuaCallSite(self, helper, try slotByteOffset(function_register), arg_bytes, result_count, abi.lua_callinfo_native, continuation_id, prepare_on_miss);
+            if (prepare_on_miss != 0) {
+                try emitOutlinedFastLuaResult(self, continuation);
+            } else {
+                try self.body.localGet(self.allocator, self.status_local);
+                try self.body.i32Const(self.allocator, fast_lua_guard_miss);
+                try self.body.i32Eq(self.allocator);
+                try self.body.ifVoid(self.allocator);
+                try emitCallMiss(self, instruction_id, function_register, parameter_count, result_count, continuation);
+                try self.body.else_(self.allocator);
+                try emitOutlinedFastLuaResult(self, continuation);
+                try self.body.end(self.allocator);
+            }
+        } else {
+            try emitFastLuaGuard(self, function_register, arg_bytes);
             try self.body.localGet(self.allocator, self.status_local);
             try self.body.ifVoid(self.allocator);
-            try self.emitStringMethodOperation(shape, continuation);
+            try emitFastLuaInvoke(self, arg_bytes, result_count, continuation, abi.lua_callinfo_native, false, false);
             try self.body.else_(self.allocator);
-            // The fused namecall left the method nil. A table fast path stored a function and must be kept.
-            try self.body.localGet(self.allocator, self.base_local);
-            try self.body.i32Load(self.allocator, 2, function_register * abi.tvalue_size + tvalue_tag_offset);
-            try self.body.i32Const(self.allocator, lua_tag_function);
-            try self.body.i32Eq(self.allocator);
-            try self.body.i32Eqz(self.allocator);
-            try self.body.ifVoid(self.allocator);
-            try self.emitResolveDeferredNamecall(function_register, shape.receiver, shape.key_constant);
+            try emitCallMiss(self, instruction_id, function_register, parameter_count, result_count, continuation);
             try self.body.end(self.allocator);
-            try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
-            try self.body.end(self.allocator);
-        } else try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
-        try self.body.end(self.allocator);
+        }
     } else {
         try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
     }
@@ -1755,7 +2900,11 @@ pub noinline fn emitGenericForProtocol(self: anytype, pattern: model.GenericIter
     try emitCopyStackSlot(self, pattern.base + 5, pattern.base + 2);
     try emitCopyStackSlot(self, pattern.base + 4, pattern.base + 1);
     try emitCopyStackSlot(self, pattern.base + 3, pattern.base);
-    try emitFastLuaGuard(self, pattern.base + 3, arg_bytes);
+    if (self.fast_lua_call != null) {
+        // The room checks passed. The shared call owns the closure guard.
+        try self.body.i32Const(self.allocator, 1);
+        try self.body.localSet(self.allocator, self.status_local);
+    } else try emitFastLuaGuard(self, pattern.base + 3, arg_bytes);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
@@ -1764,18 +2913,52 @@ pub noinline fn emitGenericForProtocol(self: anytype, pattern: model.GenericIter
     try self.body.ifVoid(self.allocator);
     try emitSaveCallerCi(self);
     const iterator_flags = abi.lua_callinfo_native | abi.lua_callinfo_return;
-    try emitFastLuaInvoke(
-        self,
-        arg_bytes,
-        @intCast(pattern.variable_count),
-        continuation,
-        iterator_flags,
-        true,
-    );
-    if (stay)
-        try emitGenericForStay(self, pattern)
-    else
-        try emitGenericForPublish(self, pattern);
+    if (self.fast_lua_call) |helper| {
+        const variable_count: i32 = @intCast(pattern.variable_count);
+        const continuation_id = std.math.cast(i32, continuation.continuation_id) orelse return Error.ResourceLimit;
+        try emitFastLuaCallSite(self, helper, try slotByteOffset(pattern.base + 3), arg_bytes, variable_count, iterator_flags, continuation_id, 0);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Const(self.allocator, fast_lua_guard_miss);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitGenericForHelper(self, pattern, continuation);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Const(self.allocator, status_yielded);
+        try self.body.i32Eq(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try emitMarkIteratorYield(self);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.return_(self.allocator);
+        try self.body.end(self.allocator);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.emitReloadBase();
+        if (stay)
+            try emitGenericForStay(self, pattern)
+        else
+            try emitGenericForPublish(self, pattern);
+        try self.body.else_(self.allocator);
+        try self.body.localGet(self.allocator, self.status_local);
+        try self.body.return_(self.allocator);
+        try self.body.end(self.allocator);
+        try self.body.end(self.allocator);
+    } else {
+        try emitFastLuaInvoke(
+            self,
+            arg_bytes,
+            @intCast(pattern.variable_count),
+            continuation,
+            iterator_flags,
+            true,
+            false,
+        );
+        if (stay)
+            try emitGenericForStay(self, pattern)
+        else
+            try emitGenericForPublish(self, pattern);
+    }
     try self.body.else_(self.allocator);
     try emitGenericForHelper(self, pattern, continuation);
     try self.body.end(self.allocator);

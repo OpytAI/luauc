@@ -456,6 +456,10 @@ pub noinline fn emitDecodedGlobalImport(
 fn emitCachedImportHit(self: anytype, destination: u32, import_id: u32) Error!void {
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
+    // A package larger than the inline sibling chain leaves the hit flag clear.
+    // The caller then uses get_global.
+    if (self.interrupt_helper != null)
+        return;
     const index_i32 = std.math.cast(i32, import_id) orelse return;
     const slot_addend = std.math.cast(i32, std.math.mul(u32, import_id, tvalue_size) catch return) orelse return;
 

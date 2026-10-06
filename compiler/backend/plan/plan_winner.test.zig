@@ -113,6 +113,8 @@ fn nopCommands(comptime n: usize) [n]snapshot_v1.IrCommand {
 
 test "overlapping clusters prefer constant_truthy over table_alloc" {
     var commands = nopCommands(6);
+    commands[2] = .load_tvalue;
+    commands[3] = .select_if_truthy;
     const ctx = Mock{
         .function = .{ .instruction_count = commands.len },
         .commands = &commands,
@@ -155,18 +157,18 @@ test "each cluster priority wins when earlier families miss" {
     };
     try std.testing.expectEqual(@as(usize, 13), kinds.len);
     const start_commands = [_]snapshot_v1.IrCommand{
-        .nop,
+        .load_tvalue,
         .load_tag,
-        .nop,
-        .nop,
+        abi.ir_cmd_get_arr_addr,
+        .load_tvalue,
         .load_tag,
         .check_gc,
         abi.ir_cmd_get_slot_node_addr,
-        .nop,
-        .nop,
+        .load_tvalue,
+        .load_pointer,
         abi.ir_cmd_check_readonly,
         abi.ir_cmd_table_len,
-        .nop,
+        .set_savedpc,
         .nop,
     };
     const covered = Range{ .start = 0, .finish = 3 };
@@ -175,7 +177,17 @@ test "each cluster priority wins when earlier families miss" {
     while (priority < kinds.len) : (priority += 1) {
         var commands = nopCommands(4);
         commands[0] = start_commands[priority];
-        commands[1] = abi.ir_cmd_table_len;
+        commands[1] = switch (priority) {
+            0 => .select_if_truthy,
+            1, 4 => .check_tag,
+            2 => .load_tvalue,
+            3, 7 => .store_tvalue,
+            5 => abi.ir_cmd_new_userdata,
+            6 => abi.ir_cmd_check_slot_match,
+            9 => abi.ir_cmd_table_len,
+            11 => abi.ir_cmd_concat,
+            else => .nop,
+        };
         var ctx = Mock{
             .function = .{ .instruction_count = commands.len },
             .commands = &commands,
@@ -203,6 +215,7 @@ test "table insert-append records the TABLE_LEN decoder cursor" {
     var commands = nopCommands(6);
     commands[0] = abi.ir_cmd_check_readonly;
     commands[1] = abi.ir_cmd_table_len;
+    commands[2] = .add_int;
     const ctx = Mock{
         .function = .{ .instruction_count = commands.len },
         .commands = &commands,

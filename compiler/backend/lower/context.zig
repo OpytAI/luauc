@@ -24,6 +24,21 @@ const admission = @import("luauc_backend_admission");
 pub const max_inline_direct_siblings = control.max_inline_direct_siblings;
 pub const max_direct_dispatch_arms = control.max_direct_dispatch_arms;
 pub const emitDirectDispatchTrampoline = control.emitDirectDispatchTrampoline;
+pub const emitFastLuaCall = control.emitFastLuaCall;
+pub const emitFastInterrupt = control.emitFastInterrupt;
+pub const emitFastExchange = control.emitFastExchange;
+pub const emitFastLine = control.emitFastLine;
+pub const emitPreparedCallHelper = control.emitPreparedCallHelper;
+pub const emitCallPreface = control.emitCallPreface;
+pub const emitMoveReg = control.emitMoveReg;
+pub const ScalarPublish = scalar.ScalarPublish;
+pub const emitPublishBoolean = scalar.emitPublishBoolean;
+pub const emitPublishNumber = scalar.emitPublishNumber;
+pub const emitPublishInteger = scalar.emitPublishInteger;
+pub const callPrefaceIndex = control.callPrefaceIndex;
+pub const call_preface_count = control.call_preface_count;
+pub const max_uniform_capture_run = closures.max_uniform_capture_run;
+pub const emitUniformCaptureRun = closures.emitUniformCaptureRun;
 
 const StringKeyPool = model.StringKeyPool;
 const ValueSlot = model.ValueSlot;
@@ -36,6 +51,9 @@ pub const Context = struct {
     function: snapshot_v1.IrFunction,
     plan: *FunctionPlan,
     slots: []const ValueSlot,
+    // Set when this entry has stored the instruction local. A continuation
+    // starts with the set cleared: a yield dropped the caller's wasm locals.
+    instruction_produced: []bool,
     builtin_number_sources: []u32,
     coverage_site_ids: []const u32,
     body: *wasm.Body,
@@ -57,6 +75,19 @@ pub const Context = struct {
     self_function: wasm.FunctionRef,
     sibling_functions: []const wasm.FunctionRef = &.{},
     sibling_trampoline: ?wasm.FunctionRef = null,
+    fast_lua_call: ?wasm.FunctionRef = null,
+    interrupt_helper: ?wasm.FunctionRef = null,
+    exchange_helper: ?wasm.FunctionRef = null,
+    line_helper: ?wasm.FunctionRef = null,
+    prepare_helper: ?wasm.FunctionRef = null,
+    // Index is callPrefaceIndex(constant, capture_count). Null keeps that shape inline.
+    call_preface: [call_preface_count]?wasm.FunctionRef = .{null} ** call_preface_count,
+    // Index is the capture count. A same-kind run of that length is one call.
+    capture_run: [max_uniform_capture_run + 1]?wasm.FunctionRef = .{null} ** (max_uniform_capture_run + 1),
+    // One register-to-register TValue copy. Null keeps the load and the store inline.
+    move_reg: ?wasm.FunctionRef = null,
+    // Boolean, number, and integer publishes. Null keeps each pair inline.
+    scalar_publish: scalar.ScalarPublish = .{},
     planned_function_id: u32,
     exchange_continuation: ?wasm.FunctionRef,
     set_location: ?wasm.FunctionRef,
@@ -127,6 +158,8 @@ pub const Context = struct {
     // Set while a straight-line loop copies a specialized block into the wasm loop.
     // The block body runs and falls through; the rejoin branch stays on the dispatch path.
     rejoin_fallthrough: bool = false,
+    // Copied into a direct-loop header. The block is not its own dispatch case.
+    straight_inlined: []const bool = &.{},
     status_local: u32,
     continuation_local: u32,
     table_index_local: u32,
@@ -555,6 +588,10 @@ pub const Context = struct {
     pub const emitExchangeContinuation = control.emitExchangeContinuation;
     pub const emitUnexpectedContinuationReturn = control.emitUnexpectedContinuationReturn;
     pub const emitClearContinuation = control.emitClearContinuation;
+    pub const callPrefaceAt = control.callPrefaceAt;
+    pub const emitFusedCallPreface = control.emitFusedCallPreface;
+    pub const emitRegisterMove = control.emitRegisterMove;
+    pub const emitScalarPublish = scalar.emitScalarPublish;
     pub const emitCall = control.emitCall;
     pub const stringMethodShape = string_method.stringMethodShape;
     pub const noteElidedStringSubs = string_method.noteElidedStringSubs;
@@ -596,5 +633,6 @@ pub const Context = struct {
     pub const emitInstruction = dispatch.emitInstruction;
     pub const emitInstructionRange = dispatch.emitInstructionRange;
     pub const emitBlock = dispatch.emitBlock;
+    pub const planStraightLine = dispatch.planStraightLine;
     pub const emitCallContinuation = dispatch.emitCallContinuation;
 };

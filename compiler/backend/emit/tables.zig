@@ -183,6 +183,13 @@ fn emitSlotMatchHelper(self: anytype, key_constant: u32) Error!void {
 // A null pointer, a non-table, or a non-string constant keeps the runtime helper,
 // which reports the same provenance error as the native slot lookup.
 pub fn emitSlotNodeFromTable(self: anytype, key_constant: u32) Error!void {
+    // A package larger than the inline sibling chain uses slot_node_addr.
+    // The helper returns the same main-position node the probe below computes.
+    if (self.interrupt_helper != null) {
+        try self.body.localTee(self.allocator, self.call_aux_local);
+        try emitSlotNodeHelper(self, key_constant);
+        return;
+    }
     try self.body.localTee(self.allocator, self.call_aux_local);
     try self.body.ifI32(self.allocator);
     try self.body.localGet(self.allocator, self.call_aux_local);
@@ -208,6 +215,12 @@ pub fn emitSlotNodeFromTable(self: anytype, key_constant: u32) Error!void {
 
 // The node pointer is on the stack. A non-zero result means the key matches and the value is not nil.
 pub fn emitSlotMatchFromNode(self: anytype, key_constant: u32) Error!void {
+    // A package larger than the inline sibling chain uses node_slot_match.
+    if (self.interrupt_helper != null) {
+        try self.body.localTee(self.allocator, self.call_closure_local);
+        try emitSlotMatchHelper(self, key_constant);
+        return;
+    }
     try self.body.localTee(self.allocator, self.call_closure_local);
     try self.body.ifI32(self.allocator);
     try emitProtoConstantString(self, key_constant);
@@ -458,6 +471,9 @@ fn emitAfterMainPositionMiss(self: anytype, destination: u32, publish_nil: bool)
 
 // Main-position hit copies the TValue. Every other outcome uses the string-key helper once.
 fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []const u8, key_constant: ?u32) Error!void {
+    // A package larger than the inline sibling chain uses table_get_string.
+    if (self.interrupt_helper != null)
+        return emitStringGetHelper(self, destination, table, key);
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
     if (key_constant) |index| {
@@ -571,6 +587,9 @@ pub fn emitInlineRegisterStringGet(self: anytype, destination: u32, table: u32, 
 pub fn emitInlineEnvGet(self: anytype, destination: u32, key_constant: u32) Error!void {
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
+    // A package larger than the inline sibling chain leaves the hit flag clear. The caller uses get_global.
+    if (self.interrupt_helper != null)
+        return;
 
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
@@ -722,6 +741,9 @@ pub fn emitStringSlotSetOrHelper(
     key: []const u8,
     key_constant: ?u32,
 ) Error!void {
+    // A package larger than the inline sibling chain uses table_set_string.
+    if (self.interrupt_helper != null)
+        return emitStringSetHelper(self, table, value, key);
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
     if (key_constant) |index| {
@@ -1045,6 +1067,9 @@ fn emitIndexMethodHit(self: anytype, destination: u32, source: u32, key_index: u
 pub fn emitInlineNonTableNamecall(self: anytype, destination: u32, source: u32, key_index: u32) Error!void {
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
+    // A package larger than the inline sibling chain leaves the hit flag clear. The caller uses namecall_plain.
+    if (self.interrupt_helper != null)
+        return;
     if (destination + 1 >= self.proto.max_stack_size)
         return;
     try emitRegisterBelowTop(self, source);
@@ -1086,6 +1111,9 @@ pub fn emitInlineNonTableNamecall(self: anytype, destination: u32, source: u32, 
 pub fn emitInlineNamecallProbe(self: anytype, source: u32, destination: u32, key_constant: u32) Error!void {
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
+    // A package larger than the inline sibling chain leaves the hit flag clear. The caller uses namecall_plain.
+    if (self.interrupt_helper != null)
+        return;
     try emitRegisterBelowTop(self, source);
     try emitRegisterBelowTop(self, destination);
     try emitRegisterBelowTop(self, destination + 1);
@@ -1128,6 +1156,9 @@ pub fn emitInlineNamecallProbe(self: anytype, source: u32, destination: u32, key
 
 // A vector lane publishes a number. A table hit copies the main-position slot. Everything else uses the helper.
 pub fn emitStringKeyGet(self: anytype, destination: u32, table: u32, key: []const u8, key_constant: ?u32) Error!void {
+    // A package larger than the inline sibling chain uses table_get_string, including x/y/z.
+    if (self.interrupt_helper != null)
+        return emitStringSlotOrHelper(self, destination, table, key, key_constant);
     const lane = vectorFieldLane(key) orelse return emitStringSlotOrHelper(self, destination, table, key, key_constant);
     try self.emitReloadBase();
     try emitRegisterBelowTop(self, table);
@@ -2913,6 +2944,15 @@ fn emitTableLenSearch(self: anytype, dest_reg: u32) Error!void {
 // way the pin does. A metatable, a null array, or an array past the offset
 // limit stays on table_len.
 pub noinline fn emitPlainTableLen(self: anytype, dest_reg: u32, table_reg: u32) Error!void {
+    // A package larger than the inline sibling chain uses table_len. That helper is luaH_getn for a plain table.
+    if (self.interrupt_helper != null) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(dest_reg));
+        try self.body.i32Const(self.allocator, @intCast(table_reg));
+        try self.body.call(self.allocator, self.table_len orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+        return;
+    }
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
 
@@ -3102,6 +3142,9 @@ fn emitInlineStringLength(self: anytype, destination: u32, source: u32) Error!vo
 /// `#` reads the value tag in wasm. A string length is a load. A table with no
 /// metatable uses the table-length helper. Every other value uses `do_len`.
 pub noinline fn emitRegisterLength(self: anytype, destination: u32, source: u32) Error!void {
+    // A package larger than the inline sibling chain uses do_len. That helper covers a string, a table, and a metamethod.
+    if (self.interrupt_helper != null)
+        return emitDoLenRegisters(self, destination, source);
     try self.body.localGet(self.allocator, self.base_local);
     try self.body.i32Load(self.allocator, 2, source * tvalue_size + tvalue_tag_offset);
     try self.body.i32Const(self.allocator, lua_tag_string);

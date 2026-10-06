@@ -558,74 +558,85 @@ pub noinline fn emitInstructionRange(self: anytype, start: u32, finish: u32, blo
 fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snapshot_v1.IrBlock, progress: *u32) Error!bool {
     var terminated = false;
     var instruction_id = start;
+    // These three match the block, not the cursor. One lookup serves every instruction in the range.
+    const string_table = try self.stringTablePattern(block);
+    const dynamic_length = try self.dynamicLengthPattern(block);
+    const array_operation = try self.semanticArrayOperation(block);
     while (instruction_id <= finish) : (instruction_id += 1) {
         progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
+        const command = (try self.instruction(instruction_id)).command;
         if (self.plan.clusterAt(instruction_id) == null) {
-            if (try self.bypassedPlainLenGuard(instruction_id)) |table_len_id| {
-                instruction_id = table_len_id - 1;
-                continue;
-            }
-            if (try self.lengthSequenceAt(instruction_id)) |sequence| {
-                // A planned cluster already owns this length. Keep that lowering.
-                var occupied = false;
-                var cursor = sequence.start;
-                while (cursor <= sequence.finish) : (cursor += 1) {
-                    if (self.plan.clusterAt(cursor) != null) {
-                        occupied = true;
-                        break;
-                    }
-                }
-                if (!occupied) {
-                    try self.emitSavedPcLocation(sequence.marker);
-                    try self.emitRegisterLength(sequence.destination, sequence.source);
-                    try self.publishLengthSlot(sequence.start + 5, sequence.destination);
-                    self.plan.noteLoweredRange(self.snapshot, self.function, sequence.start, sequence.finish);
-                    instruction_id = sequence.finish;
+            if (command == .load_tag) {
+                if (try self.bypassedPlainLenGuard(instruction_id)) |table_len_id| {
+                    instruction_id = table_len_id - 1;
                     continue;
                 }
-            }
-            if (try self.freshTableLenPattern(instruction_id)) |pattern| {
-                try self.emitFreshTableLen(pattern);
-                self.plan.noteLoweredRange(self.snapshot, self.function, instruction_id, pattern.finish);
-                instruction_id = pattern.finish;
-                continue;
-            }
-            if (try self.linearizedNumericTableSetAt(instruction_id)) |pattern| {
-                try self.emitInlineGenericTableSet(pattern.pattern);
-                self.plan.noteLoweredRange(self.snapshot, self.function, pattern.pattern.start, pattern.finish);
-                instruction_id = pattern.finish;
-                continue;
+                if (try self.lengthSequenceAt(instruction_id)) |sequence| {
+                    // A planned cluster already owns this length. Keep that lowering.
+                    var occupied = false;
+                    var cursor = sequence.start;
+                    while (cursor <= sequence.finish) : (cursor += 1) {
+                        if (self.plan.clusterAt(cursor) != null) {
+                            occupied = true;
+                            break;
+                        }
+                    }
+                    if (!occupied) {
+                        try self.emitSavedPcLocation(sequence.marker);
+                        try self.emitRegisterLength(sequence.destination, sequence.source);
+                        try self.publishLengthSlot(sequence.start + 5, sequence.destination);
+                        self.plan.noteLoweredRange(self.snapshot, self.function, sequence.start, sequence.finish);
+                        instruction_id = sequence.finish;
+                        continue;
+                    }
+                }
+                if (try self.linearizedNumericTableSetAt(instruction_id)) |pattern| {
+                    try self.emitInlineGenericTableSet(pattern.pattern);
+                    self.plan.noteLoweredRange(self.snapshot, self.function, pattern.pattern.start, pattern.finish);
+                    instruction_id = pattern.finish;
+                    continue;
+                }
+            } else if (command == ir_cmd_table_len) {
+                if (try self.freshTableLenPattern(instruction_id)) |pattern| {
+                    try self.emitFreshTableLen(pattern);
+                    self.plan.noteLoweredRange(self.snapshot, self.function, instruction_id, pattern.finish);
+                    instruction_id = pattern.finish;
+                    continue;
+                }
             }
         }
         if (self.plan.clusterAt(instruction_id)) |_| {
             terminated = try self.emitInstruction(instruction_id, block.kind);
             continue;
         }
-        if (try self.globalHeadPatternAt(instruction_id, block)) |pattern| {
-            try self.publishEscapedSlotNodes(pattern.start, block.finish);
-            try self.emitGlobalOperation(pattern);
-            try self.body.branch(self.allocator, self.loop_branch_depth);
-            instruction_id = block.finish;
-            terminated = true;
-            continue;
-        }
-        const fastcall_pattern = if (try self.fastcallPatternAt(instruction_id, block)) |found|
-            found
-        else
-            try self.fixedContiguousFastcallPatternAt(instruction_id, block);
-        if (fastcall_pattern) |pattern| {
-            try self.emitFastcallCluster(pattern);
-            if (self.rejoin_fallthrough and pattern.isStringByteRegister() and pattern.finish == block.finish) {
-                instruction_id = pattern.finish - 1;
+        if (command == .load_env) {
+            if (try self.globalHeadPatternAt(instruction_id, block)) |pattern| {
+                try self.publishEscapedSlotNodes(pattern.start, block.finish);
+                try self.emitGlobalOperation(pattern);
+                try self.body.branch(self.allocator, self.loop_branch_depth);
+                instruction_id = block.finish;
+                terminated = true;
                 continue;
             }
-            instruction_id = block.finish;
-            terminated = true;
-            continue;
         }
-        const command = (try self.instruction(instruction_id)).command;
+        if (command == .check_safe_env or command == .set_savedpc) {
+            const fastcall_pattern = if (try self.fastcallPatternAt(instruction_id, block)) |found|
+                found
+            else
+                try self.fixedContiguousFastcallPatternAt(instruction_id, block);
+            if (fastcall_pattern) |pattern| {
+                try self.emitFastcallCluster(pattern);
+                if (self.rejoin_fallthrough and pattern.isStringByteRegister() and pattern.finish == block.finish) {
+                    instruction_id = pattern.finish - 1;
+                    continue;
+                }
+                instruction_id = block.finish;
+                terminated = true;
+                continue;
+            }
+        }
         if (command == ir_cmd_get_type or command == ir_cmd_get_typeof) {
             const pattern = (try self.typeNamePattern(instruction_id, command == ir_cmd_get_typeof)) orelse
                 return Error.UnsupportedControlFlow;
@@ -633,15 +644,17 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
             instruction_id = pattern.finish;
             continue;
         }
-        if (try self.staticRequireTarget(instruction_id, block)) |require| {
-            switch (require.kind) {
-                .package => try self.emitStaticRequire(require.interrupt_id, require.destination, require.module_id),
-                .host => try self.emitHostModuleRequire(require.interrupt_id, require.destination, require.name),
+        if (command == .nop or command == .check_safe_env or command == .get_cached_import) {
+            if (try self.staticRequireTarget(instruction_id, block)) |require| {
+                switch (require.kind) {
+                    .package => try self.emitStaticRequire(require.interrupt_id, require.destination, require.module_id),
+                    .host => try self.emitHostModuleRequire(require.interrupt_id, require.destination, require.name),
+                }
+                instruction_id = require.end;
+                continue;
             }
-            instruction_id = require.end;
-            continue;
         }
-        if (try self.stringTablePattern(block)) |pattern| {
+        if (string_table) |pattern| {
             if (instruction_id == pattern.start) {
                 // Always rejoin. The fused loop suppresses only the block emitter's rejoin.
                 try self.publishEscapedSlotNodes(pattern.start, block.finish);
@@ -654,24 +667,30 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 continue;
             }
         }
-        if (try self.inlineStringGetPatternAt(instruction_id, block)) |pattern| {
-            try self.publishEscapedSlotNodes(pattern.start, instruction_id + 6);
-            try self.emitStringTableHelper(pattern);
-            instruction_id += 6;
-            continue;
+        if (command == .load_tag) {
+            if (try self.inlineStringGetPatternAt(instruction_id, block)) |pattern| {
+                try self.publishEscapedSlotNodes(pattern.start, instruction_id + 6);
+                try self.emitStringTableHelper(pattern);
+                instruction_id += 6;
+                continue;
+            }
         }
-        if (try self.inlineStringSetPatternAt(instruction_id, block)) |operation| {
-            try self.publishEscapedSlotNodes(operation.pattern.start, operation.finish);
-            try self.emitStringTableHelper(operation.pattern);
-            instruction_id = operation.finish;
-            continue;
+        if (command == .load_tag or command == .load_tvalue or command == ir_cmd_get_slot_node_addr) {
+            if (try self.inlineStringSetPatternAt(instruction_id, block)) |operation| {
+                try self.publishEscapedSlotNodes(operation.pattern.start, operation.finish);
+                try self.emitStringTableHelper(operation.pattern);
+                instruction_id = operation.finish;
+                continue;
+            }
         }
-        if (try self.guardedLiteralFieldSetPatternAt(instruction_id)) |pattern| {
-            try self.emitLiteralFieldSet(pattern);
-            instruction_id = pattern.finish;
-            continue;
+        if (command == .load_tag) {
+            if (try self.guardedLiteralFieldSetPatternAt(instruction_id)) |pattern| {
+                try self.emitLiteralFieldSet(pattern);
+                instruction_id = pattern.finish;
+                continue;
+            }
         }
-        if (try self.dynamicLengthPattern(block)) |pattern| {
+        if (dynamic_length) |pattern| {
             if (instruction_id == pattern.start) {
                 try self.emitDynamicLength(pattern);
                 try self.body.branch(self.allocator, self.loop_branch_depth);
@@ -680,7 +699,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 continue;
             }
         }
-        if (try self.semanticArrayOperation(block)) |operation| {
+        if (array_operation) |operation| {
             if (instruction_id == operation.pattern.start) {
                 try self.emitArrayOperation(operation.pattern, operation.kind);
                 try self.body.branch(self.allocator, self.loop_branch_depth);
@@ -689,8 +708,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 continue;
             }
         }
-        const stepped = (try self.instruction(instruction_id)).command;
-        const numeric_head = switch (stepped) {
+        const numeric_head = switch (command) {
             .load_double, .add_num, .sub_num, .mul_num, .div_num => true,
             else => false,
         };
@@ -730,6 +748,28 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                 return Error.UnsupportedControlFlow;
             }
         }
+        if (command == .interrupt) {
+            if (try self.callPrefaceAt(instruction_id, finish)) |preface| {
+                try self.emitFusedCallPreface(preface);
+                self.plan.noteLoweredRange(self.snapshot, self.function, preface.start, preface.finish);
+                instruction_id = preface.finish;
+                continue;
+            }
+        }
+        if (command == .load_tvalue) {
+            if (try self.emitRegisterMove(instruction_id, finish)) |move_finish| {
+                self.plan.noteLoweredRange(self.snapshot, self.function, instruction_id, move_finish);
+                instruction_id = move_finish;
+                continue;
+            }
+        }
+        if (command == .store_int or command == .store_double or command == .store_int64) {
+            if (try self.emitScalarPublish(instruction_id, finish)) |publish_finish| {
+                self.plan.noteLoweredRange(self.snapshot, self.function, instruction_id, publish_finish);
+                instruction_id = publish_finish;
+                continue;
+            }
+        }
         terminated = try self.emitInstruction(instruction_id, block.kind);
     }
     return terminated;
@@ -742,6 +782,10 @@ pub noinline fn emitBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlo
         return;
     if (try emitDirectLoopBlock(self, block_id))
         return;
+    try emitPlannedBlock(self, block_id, block);
+}
+
+fn emitPlannedBlock(self: anytype, block_id: u32, block: snapshot_v1.IrBlock) Error!void {
     switch (self.plan.blockKind(block_id)) {
         .string_equality => {
             const pattern = (try self.stringEqualityPattern(block)) orelse return Error.UnsupportedControlFlow;
@@ -823,6 +867,13 @@ fn emitDispatchBlock(self: anytype, block: snapshot_v1.IrBlock) Error!void {
         return Error.InvalidBlockTermination;
 }
 pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuation) Error!void {
+    // This arm runs only after the function returns. The caller's wasm locals
+    // are zero. A load counts as captured only when this arm emits it again.
+    const saved = try self.allocator.alloc(bool, self.instruction_produced.len);
+    defer self.allocator.free(saved);
+    @memcpy(saved, self.instruction_produced);
+    @memset(self.instruction_produced, false);
+    defer @memcpy(self.instruction_produced, saved);
     switch (continuation.action) {
         .call_suffix => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
@@ -1373,4 +1424,157 @@ fn lowerDirectLoop(self: anytype, loop: DirectLoop) Error!void {
         try self.body.branch(self.allocator, 0);
     }
     try self.body.end(self.allocator);
+}
+
+fn blockOpensWithInterrupt(self: anytype, block: snapshot_v1.IrBlock) bool {
+    if (block.isEmpty() or block.start > block.finish or block.finish >= self.function.instruction_count)
+        return true;
+    const opened = self.instruction(block.start) catch return true;
+    return opened.command == .interrupt;
+}
+
+fn liveArm(self: anytype, block_id: u32) Error!bool {
+    const block = try self.snapshot.irBlock(self.function, block_id);
+    const ordinary_fallback = if (block.kind == .fallback)
+        try self.supportsOrdinaryCallFallback(block)
+    else
+        false;
+    const bypassed = if (ordinary_fallback)
+        false
+    else
+        try admission.isBypassedEmissionBlock(self, block_id, block);
+    if (bypassed)
+        return false;
+    if (block.kind.isCompilable() and !block.isEmpty())
+        return true;
+    if (block.kind == .fallback)
+        return try self.supportsFallback(block);
+    return false;
+}
+
+fn noteLiveEdge(
+    pred_count: []u32,
+    pred_one: []u32,
+    stamp: []u32,
+    generation: u32,
+    source: u32,
+    target: u32,
+) Error!void {
+    if (target >= pred_count.len)
+        return Error.UnsupportedControlFlow;
+    if (stamp[target] == generation)
+        return;
+    stamp[target] = generation;
+    if (pred_count[target] == 0)
+        pred_one[target] = source;
+    pred_count[target] = std.math.add(u32, pred_count[target], 1) catch return Error.ResourceLimit;
+}
+
+fn noteOperandEdges(
+    self: anytype,
+    block: snapshot_v1.IrBlock,
+    pred_count: []u32,
+    pred_one: []u32,
+    stamp: []u32,
+    generation: u32,
+    source: u32,
+) Error!void {
+    if (block.isEmpty() or block.start > block.finish or block.finish >= self.function.instruction_count)
+        return;
+    var instruction_id = block.start;
+    while (instruction_id <= block.finish) : (instruction_id += 1) {
+        const inst = try self.instruction(instruction_id);
+        var operand_id: u32 = 0;
+        while (operand_id < inst.operand_count) : (operand_id += 1) {
+            const operand_value = try self.operand(inst, operand_id);
+            if (operand_value.kind != .block)
+                continue;
+            try noteLiveEdge(pred_count, pred_one, stamp, generation, source, operand_value.value);
+        }
+    }
+}
+
+fn straightFollower(
+    self: anytype,
+    follower: u32,
+    previous: u32,
+    pred_count: []const u32,
+    pred_one: []const u32,
+    inlined: []const bool,
+) Error!bool {
+    if (follower == previous or follower >= self.function.block_count or follower >= pred_count.len)
+        return false;
+    if (follower == self.function.entry_block)
+        return false;
+    if (follower < inlined.len and inlined[follower])
+        return false;
+    if (pred_count[follower] != 1 or pred_one[follower] != previous)
+        return false;
+    const kind = self.plan.blockKind(follower);
+    if (kind == .generic_iteration or kind == .specialized_ipairs)
+        return false;
+    const block = try self.snapshot.irBlock(self.function, follower);
+    if (!try loopBlockAdmitted(self, follower, block))
+        return false;
+    if (blockOpensWithInterrupt(self, block))
+        return false;
+    if (try findDirectLoop(self, follower)) |_|
+        return false;
+    return true;
+}
+
+pub fn planStraightLine(self: anytype, inlined: []bool) Error!void {
+    const block_count = self.function.block_count;
+    if (inlined.len < block_count)
+        return Error.UnsupportedControlFlow;
+    if (block_count == 0)
+        return;
+
+    const pred_count = try self.allocator.alloc(u32, block_count);
+    defer self.allocator.free(pred_count);
+    const pred_one = try self.allocator.alloc(u32, block_count);
+    defer self.allocator.free(pred_one);
+    const stamp = try self.allocator.alloc(u32, block_count);
+    defer self.allocator.free(stamp);
+    @memset(pred_count, 0);
+    @memset(pred_one, 0);
+    @memset(stamp, 0);
+
+    var generation: u32 = 1;
+    var source: u32 = 0;
+    while (source < block_count) : (source += 1) {
+        if (!try liveArm(self, source))
+            continue;
+        const block = try self.snapshot.irBlock(self.function, source);
+        // A specialized helper transfers to its rejoin. The fallback and the unread fast edge do not.
+        if (try fallthroughStep(self, source, block)) |step| {
+            if (step.specialized and try rangeStaysInside(self, block, step.open_end)) {
+                try noteLiveEdge(pred_count, pred_one, stamp, generation, source, step.next);
+                generation = if (generation == std.math.maxInt(u32)) 1 else generation + 1;
+                continue;
+            }
+        }
+        try noteOperandEdges(self, block, pred_count, pred_one, stamp, generation, source);
+        generation = if (generation == std.math.maxInt(u32)) 1 else generation + 1;
+    }
+
+    // A direct loop already copies its body. Drop the body arm while each block's only
+    // live predecessor is the previous block of that loop.
+    source = 0;
+    while (source < block_count) : (source += 1) {
+        if (inlined[source] or !try liveArm(self, source))
+            continue;
+        const loop = (try findDirectLoop(self, source)) orelse continue;
+        var index: u8 = 1;
+        var previous = loop.blocks[0];
+        while (index < loop.count) : (index += 1) {
+            const follower = loop.blocks[index];
+            if (!loopKindAdmitted(self.plan.blockKind(follower)))
+                break;
+            if (!try straightFollower(self, follower, previous, pred_count, pred_one, inlined))
+                break;
+            inlined[follower] = true;
+            previous = follower;
+        }
+    }
 }

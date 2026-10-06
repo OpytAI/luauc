@@ -1,6 +1,7 @@
 const std = @import("std");
 const snapshot_v1 = @import("frontend_snapshot_v1");
 const model = @import("luauc_backend_model");
+const abi = @import("luauc_backend_runtime_abi");
 
 const Error = model.Error;
 
@@ -46,33 +47,43 @@ pub fn collectCallFacts(allocator: std.mem.Allocator, ctx: anytype) Error!CallFa
         const block = try ctx.snapshot.irBlock(ctx.function, block_id);
         if (block.isEmpty())
             continue;
-        if (try ctx.genericIterationPattern(block)) |pattern|
-            try iterations.append(allocator, .{
-                .block_id = block_id,
-                .base = pattern.base,
-                .aux = pattern.aux,
-                .repeat_target = pattern.repeat_target,
-                .exit_target = pattern.exit_target,
-                .fallback_target = pattern.fallback_target orelse snapshot_v1.no_id,
-            });
-        if (try ctx.genericIterationFallbackPattern(block)) |pattern|
-            try iterations.append(allocator, .{
-                .block_id = block_id,
-                .base = pattern.base,
-                .aux = pattern.aux,
-                .repeat_target = pattern.repeat_target,
-                .exit_target = pattern.exit_target,
-                .fallback_target = snapshot_v1.no_id,
-            });
-        if (try ctx.specializedIpairsPattern(block)) |pattern|
-            try iterations.append(allocator, .{
-                .block_id = block_id,
-                .base = pattern.base,
-                .aux = pattern.aux,
-                .repeat_target = pattern.repeat_target,
-                .exit_target = pattern.exit_target,
-                .fallback_target = pattern.fallback_target orelse snapshot_v1.no_id,
-            });
+        const compilable = block.kind.isCompilable();
+        const span = block.finish - block.start;
+        const head = (try ctx.instruction(block.start)).command;
+        const tail = (try ctx.instruction(block.finish)).command;
+        if (compilable and span == 3 and head == .interrupt and tail == abi.ir_cmd_forgloop) {
+            if (try ctx.genericIterationPattern(block)) |pattern|
+                try iterations.append(allocator, .{
+                    .block_id = block_id,
+                    .base = pattern.base,
+                    .aux = pattern.aux,
+                    .repeat_target = pattern.repeat_target,
+                    .exit_target = pattern.exit_target,
+                    .fallback_target = pattern.fallback_target orelse snapshot_v1.no_id,
+                });
+        }
+        if (block.kind == .fallback and span == 1 and head == .set_savedpc and tail == abi.ir_cmd_forgloop_fallback) {
+            if (try ctx.genericIterationFallbackPattern(block)) |pattern|
+                try iterations.append(allocator, .{
+                    .block_id = block_id,
+                    .base = pattern.base,
+                    .aux = pattern.aux,
+                    .repeat_target = pattern.repeat_target,
+                    .exit_target = pattern.exit_target,
+                    .fallback_target = snapshot_v1.no_id,
+                });
+        }
+        if (compilable and span == 8 and head == .interrupt and tail == .jump_eq_tag) {
+            if (try ctx.specializedIpairsPattern(block)) |pattern|
+                try iterations.append(allocator, .{
+                    .block_id = block_id,
+                    .base = pattern.base,
+                    .aux = pattern.aux,
+                    .repeat_target = pattern.repeat_target,
+                    .exit_target = pattern.exit_target,
+                    .fallback_target = pattern.fallback_target orelse snapshot_v1.no_id,
+                });
+        }
         const fastcall_pattern = if (try ctx.fastcallPatternAt(block.start, block)) |found|
             found
         else

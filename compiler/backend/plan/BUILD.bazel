@@ -27,6 +27,7 @@ zig_library(
     deps = [
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:model",
+        "//compiler/model:runtime_abi",
     ],
 )
 
@@ -38,6 +39,7 @@ zig_library(
     deps = [
         "//compiler/ir:frontend_snapshot_v1",
         "//compiler/model:model",
+        "//compiler/model:runtime_abi",
     ],
 )
 

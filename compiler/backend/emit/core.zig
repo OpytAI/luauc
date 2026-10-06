@@ -23,6 +23,7 @@ const lua_tag_integer = abi.lua_tag_integer;
 const lua_tag_vector = abi.lua_tag_vector;
 const lua_tag_string = abi.lua_tag_string;
 const lua_tag_table = abi.lua_tag_table;
+const status_internal_error = abi.status_internal_error;
 
 pub fn instruction(self: anytype, id: u32) Error!snapshot_v1.IrInstruction {
     return self.snapshot.irInstruction(self.function, id);
@@ -108,6 +109,16 @@ pub noinline fn emitCacheConstantArray(self: anytype) Error!void {
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
+    // A large package reads Proto.k only through this local. A failed frame check
+    // used to repeat the closure walk at every constant. Reject that frame once.
+    if (self.interrupt_helper != null) {
+        try self.body.localGet(self.allocator, self.constant_array_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.i32Const(self.allocator, status_internal_error);
+        try self.body.return_(self.allocator);
+        try self.body.end(self.allocator);
+    }
 }
 pub fn requireSingleBytecodeBlockRange(self: anytype, start: u32, finish: u32) Error!void {
     return requireSingleBytecodeBlockRangeFor(self.snapshot, self.function, start, finish);
@@ -1359,6 +1370,13 @@ pub noinline fn emitVmConstantAddress(self: anytype, operand_value: snapshot_v1.
     // The entry cache proves this frame's Proto.k. The walk remains if that cache missed.
     const byte_offset = std.math.mul(u32, operand_value.value, tvalue_size) catch
         return Error.ResourceLimit;
+    // A large package already rejected a zero cache at entry. The address is the cached base plus the slot.
+    if (self.interrupt_helper != null) {
+        try self.body.localGet(self.allocator, self.constant_array_local);
+        try self.body.i32Const(self.allocator, @intCast(byte_offset));
+        try self.body.opcode(self.allocator, 0x6a); // i32.add
+        return;
+    }
     try self.body.localGet(self.allocator, self.constant_array_local);
     try self.body.ifI32(self.allocator);
     try self.body.localGet(self.allocator, self.constant_array_local);

@@ -159,6 +159,15 @@ fn lowerFunction(
     reserved: ?wasm.FunctionRef,
     siblings: []const wasm.FunctionRef,
     sibling_trampoline: ?wasm.FunctionRef,
+    fast_lua_call: ?wasm.FunctionRef,
+    interrupt_helper: ?wasm.FunctionRef,
+    prepare_helper: ?wasm.FunctionRef,
+    exchange_helper: ?wasm.FunctionRef,
+    line_helper: ?wasm.FunctionRef,
+    call_preface: [backend_context.call_preface_count]?wasm.FunctionRef,
+    capture_run: [backend_context.max_uniform_capture_run + 1]?wasm.FunctionRef,
+    move_reg: ?wasm.FunctionRef,
+    scalar_publish: backend_context.ScalarPublish,
 ) Error!wasm.FunctionRef {
     diagnostics.enterFunction(function_id);
     diagnostics.trace("lower");
@@ -188,6 +197,9 @@ fn lowerFunction(
     const slots = try allocator.alloc(ValueSlot, function.instruction_count);
     defer allocator.free(slots);
     @memset(slots, .{});
+    const instruction_produced = try allocator.alloc(bool, function.instruction_count);
+    defer allocator.free(instruction_produced);
+    @memset(instruction_produced, false);
     const builtin_number_sources = try allocator.alloc(u32, function.instruction_count);
     defer allocator.free(builtin_number_sources);
     @memset(builtin_number_sources, std.math.maxInt(u32));
@@ -283,6 +295,7 @@ fn lowerFunction(
         .function = function,
         .plan = &plan,
         .slots = slots,
+        .instruction_produced = instruction_produced,
         .builtin_number_sources = builtin_number_sources,
         .coverage_site_ids = coverage_site_ids,
         .body = &body,
@@ -304,6 +317,15 @@ fn lowerFunction(
         .self_function = if (reserved) |ref| ref else try object.pendingFunctionRef(imports.generated_type),
         .sibling_functions = siblings,
         .sibling_trampoline = sibling_trampoline,
+        .fast_lua_call = fast_lua_call,
+        .interrupt_helper = interrupt_helper,
+        .exchange_helper = exchange_helper,
+        .line_helper = line_helper,
+        .prepare_helper = prepare_helper,
+        .call_preface = call_preface,
+        .capture_run = capture_run,
+        .move_reg = move_reg,
+        .scalar_publish = scalar_publish,
         .planned_function_id = std.math.add(u32, function_id_base, function_id) catch return Error.ResourceLimit,
         .exchange_continuation = imports.exchange_continuation,
         .set_location = imports.set_location,
@@ -487,7 +509,21 @@ fn lowerFunction(
         try body.localSet(allocator, context.dispatch_local);
         try body.end(allocator);
     }
+    // Outside the dispatcher loop, so loop-branch depths stay the same.
+    // A fused preface leaves a non-zero status in status_local and branches here.
+    const abort_epilogue = context.interrupt_helper != null;
+    if (abort_epilogue)
+        try body.block(allocator);
     try body.loop(allocator);
+
+    const straight_inlined = try allocator.alloc(bool, function.block_count);
+    defer allocator.free(straight_inlined);
+    @memset(straight_inlined, false);
+    context.planStraightLine(straight_inlined) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "straight line");
+        return err;
+    };
+    context.straight_inlined = straight_inlined;
 
     const DispatchCase = union(enum) { block: u32, continuation: u32 };
     var cases: std.ArrayList(DispatchCase) = .empty;
@@ -517,10 +553,15 @@ fn lowerFunction(
             }
         else
             false;
-        const emit_block = (block.kind.isCompilable() and !block.isEmpty() and !bypassed) or
-            (block.kind == .fallback and !bypassed and fallback_supported);
+        const straight_inlined_block = block_id < context.straight_inlined.len and context.straight_inlined[block_id];
+        const emit_block = !straight_inlined_block and
+            ((block.kind.isCompilable() and !block.isEmpty() and !bypassed) or
+                (block.kind == .fallback and !bypassed and fallback_supported));
         if (emit_block) {
             try cases.append(allocator, .{ .block = block_id });
+            max_dispatch = @max(max_dispatch, block_id);
+        } else if (straight_inlined_block) {
+            // The arm is copied into its predecessor. Keep the id in range so a stale dispatch returns.
             max_dispatch = @max(max_dispatch, block_id);
         }
     }
@@ -591,7 +632,14 @@ fn lowerFunction(
     try context.emitStatusReturn(status_internal_error);
     try body.end(allocator);
     try body.end(allocator);
-    try body.i32Const(allocator, status_internal_error);
+    if (abort_epilogue) {
+        try body.i32Const(allocator, status_internal_error);
+        try body.return_(allocator);
+        try body.end(allocator);
+        try body.localGet(allocator, context.status_local);
+    } else {
+        try body.i32Const(allocator, status_internal_error);
+    }
     try body.finish(allocator);
     try checkFunctionBodyLimit(body.bytes.items.len);
 
@@ -616,6 +664,181 @@ fn directDispatchTrampoline(
         object,
         imports.generated_type,
         siblings,
+    );
+}
+
+fn packageFastLuaCall(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    siblings: []const wasm.FunctionRef,
+    trampoline: ?wasm.FunctionRef,
+    prepare_helper: ?wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return null;
+    const finish = imports.finish_compiled_call orelse return null;
+    const check_gc = imports.check_gc orelse return null;
+    return try backend_context.emitFastLuaCall(
+        allocator,
+        object,
+        imports.generated_type,
+        trampoline,
+        finish,
+        check_gc,
+        prepare_helper,
+    );
+}
+
+fn packageFastInterrupt(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    siblings: []const wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return null;
+    return try backend_context.emitFastInterrupt(allocator, object, imports.interrupt);
+}
+
+fn packageFastExchange(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    siblings: []const wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return null;
+    return try backend_context.emitFastExchange(allocator, object);
+}
+
+fn packageFastLine(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    siblings: []const wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return null;
+    return try backend_context.emitFastLine(allocator, object);
+}
+
+fn emptyCallPreface() [backend_context.call_preface_count]?wasm.FunctionRef {
+    return .{null} ** backend_context.call_preface_count;
+}
+
+fn emptyCaptureRuns() [backend_context.max_uniform_capture_run + 1]?wasm.FunctionRef {
+    return .{null} ** (backend_context.max_uniform_capture_run + 1);
+}
+
+fn packageScalarPublish(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    siblings: []const wasm.FunctionRef,
+) Error!backend_context.ScalarPublish {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return .{};
+    return .{
+        .boolean = try backend_context.emitPublishBoolean(allocator, object),
+        .number = try backend_context.emitPublishNumber(allocator, object),
+        .integer = try backend_context.emitPublishInteger(allocator, object),
+    };
+}
+
+fn packageMoveReg(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    siblings: []const wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return null;
+    return try backend_context.emitMoveReg(allocator, object);
+}
+
+fn packageCaptureRuns(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    siblings: []const wasm.FunctionRef,
+) Error![backend_context.max_uniform_capture_run + 1]?wasm.FunctionRef {
+    var helpers = emptyCaptureRuns();
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return helpers;
+    const capture = imports.dupclosure_capture orelse return helpers;
+    var count: u32 = 2;
+    while (count <= backend_context.max_uniform_capture_run) : (count += 1)
+        helpers[count] = try backend_context.emitUniformCaptureRun(allocator, object, capture, count);
+    return helpers;
+}
+
+fn packageCallPreface(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    siblings: []const wasm.FunctionRef,
+    interrupt_helper: ?wasm.FunctionRef,
+    exchange_helper: ?wasm.FunctionRef,
+    line_helper: ?wasm.FunctionRef,
+    prepare_helper: ?wasm.FunctionRef,
+    fast_lua_call: ?wasm.FunctionRef,
+) Error![backend_context.call_preface_count]?wasm.FunctionRef {
+    var preface = emptyCallPreface();
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return preface;
+    const interrupt = interrupt_helper orelse return preface;
+    const exchange = exchange_helper orelse return preface;
+    const line = line_helper orelse return preface;
+    const fast = fast_lua_call orelse return preface;
+    if (prepare_helper == null)
+        return preface;
+    var move_flag: u32 = 0;
+    while (move_flag <= 1) : (move_flag += 1) {
+        var capture_count: u32 = 0;
+        while (capture_count <= 3) : (capture_count += 1) {
+            var constant_flag: u32 = 0;
+            while (constant_flag <= 1) : (constant_flag += 1) {
+                const move = move_flag != 0;
+                const constant = constant_flag != 0;
+                if (constant and imports.load_constant == null)
+                    continue;
+                if (capture_count != 0 and imports.dupclosure_capture == null)
+                    continue;
+                const index = backend_context.callPrefaceIndex(move, constant, capture_count);
+                preface[index] = try backend_context.emitCallPreface(
+                    allocator,
+                    object,
+                    interrupt,
+                    line,
+                    exchange,
+                    fast,
+                    imports.load_constant,
+                    imports.dupclosure_capture,
+                    move,
+                    constant,
+                    capture_count,
+                );
+            }
+        }
+    }
+    return preface;
+}
+
+fn packagePreparedCall(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    imports: runtime_imports.RuntimeImports,
+    siblings: []const wasm.FunctionRef,
+    trampoline: ?wasm.FunctionRef,
+) Error!?wasm.FunctionRef {
+    if (siblings.len <= backend_context.max_inline_direct_siblings)
+        return null;
+    const prepare = imports.prepare_compiled_call orelse return null;
+    const finish = imports.finish_compiled_call orelse return null;
+    return try backend_context.emitPreparedCallHelper(
+        allocator,
+        object,
+        imports.generated_type,
+        trampoline,
+        prepare,
+        finish,
     );
 }
 
@@ -673,7 +896,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
-    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, &.{}, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null);
+    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, &.{}, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null, null, null, null, null, null, emptyCallPreface(), emptyCaptureRuns(), null, .{});
     try emitStringKeyData(&object, string_keys);
     return object.emit();
 }
@@ -704,6 +927,25 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
         function_refs[function_id] = try reserveNamedFunction(allocator, &object, imports, function_id);
 
     const trampoline = try directDispatchTrampoline(allocator, &object, imports, function_refs);
+    const interrupt_helper = try packageFastInterrupt(allocator, &object, imports, function_refs);
+    const exchange_helper = try packageFastExchange(allocator, &object, function_refs);
+    const line_helper = try packageFastLine(allocator, &object, function_refs);
+    const prepare_helper = try packagePreparedCall(allocator, &object, imports, function_refs, trampoline);
+    const fast_lua_call = try packageFastLuaCall(allocator, &object, imports, function_refs, trampoline, prepare_helper);
+    const call_preface = try packageCallPreface(
+        allocator,
+        &object,
+        imports,
+        function_refs,
+        interrupt_helper,
+        exchange_helper,
+        line_helper,
+        prepare_helper,
+        fast_lua_call,
+    );
+    const capture_run = try packageCaptureRuns(allocator, &object, imports, function_refs);
+    const move_reg = try packageMoveReg(allocator, &object, function_refs);
+    const scalar_publish = try packageScalarPublish(allocator, &object, function_refs);
     function_id = 0;
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{function_id});
@@ -723,6 +965,15 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
             function_refs[function_id],
             function_refs,
             trampoline,
+            fast_lua_call,
+            interrupt_helper,
+            prepare_helper,
+            exchange_helper,
+            line_helper,
+            call_preface,
+            capture_run,
+            move_reg,
+            scalar_publish,
         );
     }
     try emitStringKeyData(&object, string_keys);
@@ -1245,6 +1496,25 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
     }
 
     const trampoline = try directDispatchTrampoline(allocator, &object, imports, function_refs);
+    const interrupt_helper = try packageFastInterrupt(allocator, &object, imports, function_refs);
+    const exchange_helper = try packageFastExchange(allocator, &object, function_refs);
+    const line_helper = try packageFastLine(allocator, &object, function_refs);
+    const prepare_helper = try packagePreparedCall(allocator, &object, imports, function_refs, trampoline);
+    const fast_lua_call = try packageFastLuaCall(allocator, &object, imports, function_refs, trampoline, prepare_helper);
+    const call_preface = try packageCallPreface(
+        allocator,
+        &object,
+        imports,
+        function_refs,
+        interrupt_helper,
+        exchange_helper,
+        line_helper,
+        prepare_helper,
+        fast_lua_call,
+    );
+    const capture_run = try packageCaptureRuns(allocator, &object, imports, function_refs);
+    const move_reg = try packageMoveReg(allocator, &object, function_refs);
+    const scalar_publish = try packageScalarPublish(allocator, &object, function_refs);
     module_id = 0;
     while (module_id < package.module_count) : (module_id += 1) {
         const module = try package.module(module_id);
@@ -1272,6 +1542,15 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
                 function_refs[@intCast(global_function_id)],
                 function_refs,
                 trampoline,
+                fast_lua_call,
+                interrupt_helper,
+                prepare_helper,
+                exchange_helper,
+                line_helper,
+                call_preface,
+                capture_run,
+                move_reg,
+                scalar_publish,
             );
         }
     }

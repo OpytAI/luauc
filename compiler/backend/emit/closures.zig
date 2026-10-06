@@ -51,6 +51,52 @@ pub noinline fn emitCaptureCall(self: anytype, destination: u32, child_id: u32, 
     try self.body.i32Const(self.allocator, @intFromBool(check_gc));
     try self.body.call(self.allocator, self.newclosure_capture orelse return Error.UnsupportedCommand);
 }
+pub const max_uniform_capture_run: u32 = 8;
+
+/// One straight-line copy for a same-kind capture run. Index is 0..count-1.
+/// `check_gc` applies only to the last capture. Mixed kinds stay on the single capture call.
+pub fn emitUniformCaptureRun(
+    allocator: std.mem.Allocator,
+    object: *wasm.Object,
+    dupclosure_capture: wasm.FunctionRef,
+    count: u32,
+) Error!wasm.FunctionRef {
+    if (count < 2 or count > max_uniform_capture_run)
+        return Error.UnsupportedControlFlow;
+    var params: [13]wasm.ValueType = .{.i32} ** 13;
+    const param_count: usize = 5 + @as(usize, count);
+    const no_results = [_]wasm.ValueType{};
+    const function_type = try object.addType(.{ .params = params[0..param_count], .results = &no_results });
+    var body = try wasm.Body.init(allocator, &.{});
+    defer body.deinit(allocator);
+    var index: u32 = 0;
+    while (index < count) : (index += 1) {
+        try body.localGet(allocator, 0);
+        try body.localGet(allocator, 1);
+        try body.localGet(allocator, 2);
+        try body.i32Const(allocator, @intCast(index));
+        try body.localGet(allocator, 3);
+        try body.localGet(allocator, 5 + index);
+        if (index + 1 == count)
+            try body.localGet(allocator, 4)
+        else
+            try body.i32Const(allocator, 0);
+        try body.call(allocator, dupclosure_capture);
+    }
+    try body.finish(allocator);
+    const name = switch (count) {
+        2 => "luauc_runtime_v1_dupclosure_run_2",
+        3 => "luauc_runtime_v1_dupclosure_run_3",
+        4 => "luauc_runtime_v1_dupclosure_run_4",
+        5 => "luauc_runtime_v1_dupclosure_run_5",
+        6 => "luauc_runtime_v1_dupclosure_run_6",
+        7 => "luauc_runtime_v1_dupclosure_run_7",
+        8 => "luauc_runtime_v1_dupclosure_run_8",
+        else => unreachable,
+    };
+    return object.defineFunction(name, function_type, wasm.symbol.visibility_hidden, body);
+}
+
 pub noinline fn emitDupClosureCapture(
     self: anytype,
     destination: u32,
@@ -99,22 +145,65 @@ pub noinline fn emitDupClosure(self: anytype, instruction_id: u32) Error!void {
         .captured => |captured| {
             const global_child_id = std.math.add(u32, self.function_id_base, captured.child_proto_id) catch
                 return Error.ResourceLimit;
-            var capture_index: u32 = 0;
-            while (capture_index < captured.capture_count) : (capture_index += 1) {
-                const capture = try markerCapture(
+            if (captured.capture_count > 255)
+                return Error.ResourceLimit;
+            var captures: [255]Capture = undefined;
+            var loaded: u32 = 0;
+            while (loaded < captured.capture_count) : (loaded += 1) {
+                captures[loaded] = try markerCapture(
                     self.snapshot,
                     self.function,
                     self.proto,
-                    captured.marker_start + capture_index,
+                    captured.marker_start + loaded,
                     false,
                 );
-                try self.emitDupClosureCapture(
-                    captured.destination,
-                    global_child_id,
-                    capture_index,
-                    capture,
-                    capture_index + 1 == captured.capture_count,
-                );
+            }
+            var capture_index: u32 = 0;
+            while (capture_index < captured.capture_count) {
+                const kind = captures[capture_index].kind;
+                if (kind == .reference)
+                    return self.emitDupClosureCapture(
+                        captured.destination,
+                        global_child_id,
+                        capture_index,
+                        captures[capture_index],
+                        capture_index + 1 == captured.capture_count,
+                    );
+                var run: u32 = 1;
+                while (capture_index + run < captured.capture_count and
+                    run < max_uniform_capture_run and
+                    captures[capture_index + run].kind == kind)
+                {
+                    run += 1;
+                }
+                if (run >= 2) {
+                    if (self.capture_run[run]) |helper| {
+                        const check_gc: i32 = @intFromBool(capture_index + run == captured.capture_count);
+                        try self.body.localGet(self.allocator, 0);
+                        try self.body.i32Const(self.allocator, @intCast(captured.destination));
+                        try self.body.i32Const(self.allocator, @intCast(global_child_id));
+                        try self.body.i32Const(self.allocator, @intCast(@intFromEnum(kind)));
+                        try self.body.i32Const(self.allocator, check_gc);
+                        var source_index: u32 = 0;
+                        while (source_index < run) : (source_index += 1)
+                            try self.body.i32Const(self.allocator, @intCast(captures[capture_index + source_index].source));
+                        try self.body.call(self.allocator, helper);
+                        capture_index += run;
+                        continue;
+                    }
+                }
+                var single: u32 = 0;
+                while (single < run) : (single += 1) {
+                    const at = capture_index + single;
+                    try self.emitDupClosureCapture(
+                        captured.destination,
+                        global_child_id,
+                        at,
+                        captures[at],
+                        at + 1 == captured.capture_count,
+                    );
+                }
+                capture_index += run;
             }
         },
     }
