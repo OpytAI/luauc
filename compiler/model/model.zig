@@ -257,6 +257,8 @@ pub const ValueSlot = struct {
     shape: ValueShape = .none,
     first: u32 = snapshot_v1.no_id,
     second: u32 = snapshot_v1.no_id,
+    // VM register that still holds this result. `no_id` means the wasm local is the copy.
+    resident: u32 = snapshot_v1.no_id,
 };
 
 pub const CaptureKind = enum(u32) {

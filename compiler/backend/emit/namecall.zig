@@ -502,7 +502,9 @@ pub noinline fn emitConcat(self: anytype, pattern: ConcatPattern) Error!void {
     const uses = self.plan.instructionUses(load_id) orelse return Error.InvalidInstructionResult;
     if (uses <= 1)
         return;
-    if (load_id >= self.slots.len or self.slots[load_id].shape != .tvalue)
+    if (load_id >= self.slots.len or self.slots[load_id].shape == .none)
+        return;
+    if (self.slots[load_id].shape != .tvalue)
         return Error.InvalidInstructionResult;
     const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };
     try self.emitTValuePart(published, false);

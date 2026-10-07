@@ -2211,6 +2211,7 @@ export async function executeBufferScalarMatrixPackage() {
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_dupclosure_capture", "function"],
+    ["env", "luauc_runtime_v1_get_upvalue", "function"],
     ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
     ["env", "luauc_runtime_v1_new_table", "function"],
@@ -2787,6 +2788,7 @@ export async function executeCapturedCallPackage() {
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_newclosure_capture", "function"],
+    ["env", "luauc_runtime_v1_get_upvalue", "function"],
     ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
     ["env", "luauc_runtime_v1_check_gc", "function"],
@@ -3045,6 +3047,7 @@ export async function executeReferenceCapturePackage() {
     ["env", "luauc_runtime_v1_do_arith", "function"],
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_newclosure_capture", "function"],
+    ["env", "luauc_runtime_v1_get_upvalue", "function"],
     ["env", "luauc_runtime_v1_set_upvalue", "function"],
     ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_prep_varargs", "function"],
@@ -3235,7 +3238,6 @@ export async function executeReferenceCapturePackage() {
     returned = observeReturn(view, state, returned);
     if (status !== 0 || returned?.tag !== 3 || returned.value !== expected)
       throw new Error(`${name}: accumulator(${delta}) failed with ${status}/${JSON.stringify(returned)}, expected ${expected}`);
-    upvalueReads++;
   };
 
   const factory = runRoot();
@@ -3487,4 +3489,3 @@ export async function executeProtoIdentityControlPackageShape() {
   }
   return { objectSize: firstObject.length, functionCount: shape.functionCount };
 }
-

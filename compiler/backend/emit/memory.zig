@@ -679,7 +679,7 @@ pub noinline fn emitGetHashNodeAddr(
         return Error.UnsupportedControlFlow;
     const table = try self.operand(instruction_value, 0);
     if (table.kind != .instruction or table.value >= self.slots.len or
-        self.slots[table.value].shape != .pointer)
+        (self.slots[table.value].shape != .pointer and self.residentRegister(table.value) == null))
         return Error.InvalidOperandType;
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(family.source));
@@ -720,7 +720,7 @@ pub noinline fn emitGetSlotNodeAddr(
         null;
     if (register_pointer == null and
         (table.kind != .instruction or table.value >= self.slots.len or
-            self.slots[table.value].shape != .pointer))
+            (self.slots[table.value].shape != .pointer and self.residentRegister(table.value) == null)))
     {
         const producer_cmd: u32 = if (table.kind == .instruction) blk: {
             const produced = self.instruction(table.value) catch break :blk 999;
@@ -924,7 +924,7 @@ pub noinline fn emitTryCallFastGetTm(
     try self.requireOperandCount(instruction_value, 3);
     const table = try self.operand(instruction_value, 0);
     if (table.kind != .instruction or table.value >= self.slots.len or
-        self.slots[table.value].shape != .pointer)
+        (self.slots[table.value].shape != .pointer and self.residentRegister(table.value) == null))
         return Error.InvalidOperandType;
     try self.body.localGet(self.allocator, 0);
     try self.emitPointerValue(table);
@@ -968,10 +968,9 @@ pub noinline fn emitCheckReadonly(self: anytype, instruction_value: snapshot_v1.
         try self.freshTableRegister(table.value)
     else
         null;
-    if (fresh == null and
-        (table.kind != .instruction or table.value >= self.slots.len or
-            self.slots[table.value].shape != .pointer or
-            try self.loadedPointerRegister(table) == null))
+    const pointer_slot = table.kind == .instruction and table.value < self.slots.len and
+        (self.slots[table.value].shape == .pointer or self.residentRegister(table.value) != null);
+    if (fresh == null and (!pointer_slot or try self.loadedPointerRegister(table) == null))
         return Error.InvalidOperandType;
 
     if (failure.kind == .vm_exit)

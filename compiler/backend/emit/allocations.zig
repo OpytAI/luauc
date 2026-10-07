@@ -219,7 +219,9 @@ pub noinline fn emitConstantLoad(self: anytype, pattern: ConstantLoadPattern) Er
     const uses = self.plan.instructionUses(pattern.start) orelse return Error.InvalidInstructionResult;
     if (uses <= 1)
         return;
-    if (pattern.start >= self.slots.len or self.slots[pattern.start].shape != .tvalue)
+    if (pattern.start >= self.slots.len or self.slots[pattern.start].shape == .none)
+        return;
+    if (self.slots[pattern.start].shape != .tvalue)
         return Error.InvalidInstructionResult;
     const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };
     try self.emitTValuePart(published, false);
@@ -327,7 +329,9 @@ pub noinline fn emitConstantTruthyFallback(self: anytype, pattern: ConstantTruth
     const uses = self.plan.instructionUses(result_id) orelse return Error.InvalidInstructionResult;
     if (uses <= 1)
         return;
-    if (result_id >= self.slots.len or self.slots[result_id].shape != .tvalue)
+    if (result_id >= self.slots.len or self.slots[result_id].shape == .none)
+        return;
+    if (self.slots[result_id].shape != .tvalue)
         return Error.InvalidInstructionResult;
     const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = pattern.destination };
     try self.emitTValuePart(published, false);

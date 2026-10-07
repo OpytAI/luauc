@@ -2514,7 +2514,8 @@ pub noinline fn callPrefaceAt(self: anytype, start: u32, range_finish: u32) Erro
     if (self.call_preface[callPrefaceIndex(moved != null, true, 0)] != null) {
         if (try self.constantLoadPatternAt(load_at)) |load| {
             if (load.finish <= range_finish and prefaceConstantLoadOwned(self, owner, load.start, load.finish) and
-                load.start < self.slots.len and self.slots[load.start].shape == .tvalue)
+                load.start < self.slots.len and
+                (self.slots[load.start].shape == .tvalue or self.slots[load.start].shape == .none))
             {
                 took_move = moved != null;
                 preface.constant = .{
@@ -2655,7 +2656,7 @@ pub noinline fn emitFusedCallPreface(self: anytype, preface: CallPreface) Error!
     try self.emitReloadBase();
     if (preface.constant) |load| {
         const uses = self.plan.instructionUses(load.load_id) orelse return Error.InvalidInstructionResult;
-        if (uses > 1) {
+        if (uses > 1 and (load.load_id >= self.slots.len or self.slots[load.load_id].shape != .none)) {
             if (load.load_id >= self.slots.len or self.slots[load.load_id].shape != .tvalue)
                 return Error.InvalidInstructionResult;
             const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = load.destination };

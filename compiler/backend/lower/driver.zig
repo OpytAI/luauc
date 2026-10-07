@@ -42,7 +42,6 @@ pub const br_table_case_limit: u32 = 65536;
 pub const function_body_limit: usize = 8 * 1024 * 1024;
 pub const i32_ge_u: u8 = 0x4f;
 
-
 pub const DispatchMode = enum { flat, paged };
 
 pub fn dispatchMode(case_count: u32, block_plus_cont: u32) Error!DispatchMode {
@@ -62,6 +61,7 @@ fn markUniformNumericRuns(
     proto: snapshot_v1.Proto,
     plan: *FunctionPlan,
     folded: []bool,
+    anchor: []bool,
 ) Error!void {
     var scan_id: u32 = 0;
     while (scan_id < function.instruction_count) {
@@ -115,6 +115,8 @@ fn markUniformNumericRuns(
             if (covered != run.accumulator)
                 folded[covered] = true;
         }
+        if (run.accumulator < anchor.len)
+            anchor[run.accumulator] = true;
         scan_id = run.finish + 1;
     }
 }
@@ -142,6 +144,291 @@ pub fn emitPagedBrTable(
     try body.localGet(allocator, dispatch_local);
     try body.brTable(allocator, paged[0..@min(labels.len, br_table_page_size)], paged_default);
     try body.end(allocator);
+}
+
+const use_cross: u8 = 2;
+const use_escaped: u8 = 4;
+
+// A command that neither writes a VM register nor calls the runtime.
+// Anything else can change a register, so a resident load keeps its wasm local.
+fn commandMayWriteRegisters(command: snapshot_v1.IrCommand) bool {
+    return switch (command) {
+        .nop, .substitute, .mark_used, .mark_dead => false,
+        .load_tag, .load_pointer, .load_double, .load_int, .load_int64, .load_float, .load_tvalue, .load_env => false,
+        .add_int, .sub_int, .sexti8_int, .sexti16_int => false,
+        .add_int64, .sub_int64, .mul_int64, .div_int64, .idiv_int64, .udiv_int64, .rem_int64, .urem_int64, .mod_int64 => false,
+        .add_num, .sub_num, .mul_num, .div_num, .idiv_num, .mod_num, .muladd_num, .min_num, .max_num, .unm_num => false,
+        .floor_num, .ceil_num, .round_num, .sqrt_num, .abs_num, .sign_num => false,
+        .add_float, .sub_float, .mul_float, .div_float, .min_float, .max_float, .unm_float => false,
+        .floor_float, .ceil_float, .sqrt_float, .abs_float, .sign_float => false,
+        .select_num, .select_int64, .select_vec, .select_if_truthy => false,
+        .add_vec, .sub_vec, .mul_vec, .div_vec, .idiv_vec, .muladd_vec, .unm_vec, .min_vec, .max_vec => false,
+        .floor_vec, .ceil_vec, .abs_vec, .dot_vec, .extract_vec => false,
+        .cmp_int, .cmp_int64, .cmp_tag, .cmp_split_tvalue => false,
+        .int_to_num, .int64_to_num, .uint_to_num, .uint_to_float, .num_to_int, .num_to_int64, .num_to_uint => false,
+        .float_to_num, .num_to_float, .float_to_vec, .tag_vector, .truncate_uint => false,
+        .bitand_int64, .bitxor_int64, .bitor_int64, .bitnot_int64, .bitlshift_int64, .bitrshift_int64 => false,
+        .bitarshift_int64, .bitlrotate_int64, .bitrrotate_int64, .bitcountlz_int64, .bitcountrz_int64, .byteswap_int64 => false,
+        .bitand_uint, .bitxor_uint, .bitor_uint, .bitnot_uint, .bitlshift_uint, .bitrshift_uint => false,
+        .bitarshift_uint, .bitlrotate_uint, .bitrrotate_uint, .bitcountlz_uint, .bitcountrz_uint, .byteswap_uint => false,
+        .check_tag, .check_cmp_num, .check_cmp_int, .check_cmp_int64 => false,
+        else => true,
+    };
+}
+
+fn clusterDropsSlots(kind: FunctionPlan.ClusterKind) bool {
+    return switch (kind) {
+        .constant_truthy, .inline_const_table_get, .inline_array_get, .semantic_table_reload => true,
+        .inline_generic_table_set, .literal_field_set, .constant_load, .dup_table => true,
+        .table_insert_append, .plain_len, .concat, .table_alloc => true,
+        .userdata_alloc, .integer_create, .linearized_pow, .type_name => false,
+    };
+}
+
+fn residentRegisterOperand(
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    instruction_id: u32,
+) Error!?u32 {
+    const instruction = try snapshot.irInstruction(function, instruction_id);
+    // A numeric-run anchor keeps its f64 local. The loop writes that local, and
+    // a later reader expects the computed value rather than the first register load.
+    switch (instruction.command) {
+        .load_tag, .load_int, .load_int64, .load_double, .load_pointer, .load_tvalue => {
+            if (instruction.operand_count != 1)
+                return null;
+        },
+        .load_float => {
+            if (instruction.operand_count != 2)
+                return null;
+        },
+        else => return null,
+    }
+    const source = try snapshot.irOperand(instruction, 0);
+    if (source.kind != .vm_reg)
+        return null;
+    return source.value;
+}
+
+const LocalPools = struct {
+    allocator: std.mem.Allocator,
+    locals: *std.ArrayList(wasm.Local),
+    next_local: u32 = 16,
+    types: std.ArrayList(wasm.ValueType) = .empty,
+    release_next: std.ArrayList(u32) = .empty,
+    i32s: std.ArrayList(u32) = .empty,
+    i64s: std.ArrayList(u32) = .empty,
+    f32s: std.ArrayList(u32) = .empty,
+    f64s: std.ArrayList(u32) = .empty,
+
+    fn deinit(self: *LocalPools) void {
+        self.types.deinit(self.allocator);
+        self.release_next.deinit(self.allocator);
+        self.i32s.deinit(self.allocator);
+        self.i64s.deinit(self.allocator);
+        self.f32s.deinit(self.allocator);
+        self.f64s.deinit(self.allocator);
+    }
+
+    fn pool(self: *LocalPools, value_type: wasm.ValueType) *std.ArrayList(u32) {
+        return switch (value_type) {
+            .i32 => &self.i32s,
+            .i64 => &self.i64s,
+            .f32 => &self.f32s,
+            .f64 => &self.f64s,
+        };
+    }
+
+    fn take(self: *LocalPools, value_type: wasm.ValueType) Error!u32 {
+        const free = self.pool(value_type);
+        if (free.items.len != 0) {
+            const index = free.items[free.items.len - 1];
+            free.items.len -= 1;
+            return index;
+        }
+        if (self.next_local >= max_lowered_locals)
+            return Error.ResourceLimit;
+        const index = self.next_local;
+        self.next_local += 1;
+        try self.locals.append(self.allocator, .{ .count = 1, .value_type = value_type });
+        while (self.types.items.len <= index)
+            try self.types.append(self.allocator, value_type);
+        self.types.items[index] = value_type;
+        return index;
+    }
+
+    fn recycle(self: *LocalPools, index: u32) Error!void {
+        if (index >= self.types.items.len)
+            return Error.ResourceLimit;
+        try self.pool(self.types.items[index]).append(self.allocator, index);
+    }
+
+    fn schedule(self: *LocalPools, release_head: []u32, index: u32, at: u32) Error!void {
+        if (at >= release_head.len)
+            return;
+        while (self.release_next.items.len <= index)
+            try self.release_next.append(self.allocator, snapshot_v1.no_id);
+        self.release_next.items[index] = release_head[at];
+        release_head[at] = index;
+    }
+
+    fn freeReleased(self: *LocalPools, release_head: []u32, instruction_id: u32) Error!void {
+        var index = release_head[instruction_id];
+        release_head[instruction_id] = snapshot_v1.no_id;
+        while (index != snapshot_v1.no_id) {
+            const next = if (index < self.release_next.items.len)
+                self.release_next.items[index]
+            else
+                snapshot_v1.no_id;
+            if (index < self.release_next.items.len)
+                self.release_next.items[index] = snapshot_v1.no_id;
+            try self.recycle(index);
+            index = next;
+        }
+    }
+};
+
+fn numberValueLocals(
+    allocator: std.mem.Allocator,
+    snapshot: snapshot_v1.Snapshot,
+    function: snapshot_v1.IrFunction,
+    plan: *const FunctionPlan,
+    slots: []ValueSlot,
+    builtin_number_sources: []const u32,
+    numeric_anchor: []const bool,
+    locals: *std.ArrayList(wasm.Local),
+) Error!void {
+    const count = function.instruction_count;
+    const first_use = try allocator.alloc(u32, count);
+    defer allocator.free(first_use);
+    @memset(first_use, snapshot_v1.no_id);
+    const last_use = try allocator.alloc(u32, count);
+    defer allocator.free(last_use);
+    @memset(last_use, snapshot_v1.no_id);
+    const use_flags = try allocator.alloc(u8, count);
+    defer allocator.free(use_flags);
+    @memset(use_flags, 0);
+    const seen_uses = try allocator.alloc(u32, count);
+    defer allocator.free(seen_uses);
+    @memset(seen_uses, 0);
+
+    const prior_clobber = try allocator.alloc(u32, count);
+    defer allocator.free(prior_clobber);
+    var clobber_end: u32 = 0;
+    var user_id: u32 = 0;
+    while (user_id < count) : (user_id += 1) {
+        const instruction = try snapshot.irInstruction(function, user_id);
+        prior_clobber[user_id] = clobber_end;
+        if (commandMayWriteRegisters(instruction.command) or
+            builtin_number_sources[user_id] != std.math.maxInt(u32))
+            clobber_end = user_id + 1;
+        var operand_index: u32 = 0;
+        while (operand_index < instruction.operand_count) : (operand_index += 1) {
+            const operand = try snapshot.irOperand(instruction, operand_index);
+            if (operand.kind != .instruction or operand.value >= count)
+                continue;
+            const source = operand.value;
+            if (first_use[source] == snapshot_v1.no_id)
+                first_use[source] = user_id;
+            seen_uses[source] += 1;
+            last_use[source] = user_id;
+            const source_block = plan.instructionBlock(source);
+            const user_block = plan.instructionBlock(user_id);
+            if (source_block == null or user_block == null or source_block.? != user_block.?)
+                use_flags[source] |= use_cross;
+            if (plan.clusterAt(source)) |cluster| {
+                if (user_id < cluster.start or user_id > cluster.finish)
+                    use_flags[source] |= use_escaped;
+            }
+        }
+    }
+
+    var instruction_id: u32 = 0;
+    while (instruction_id < count) : (instruction_id += 1) {
+        const cluster = plan.clusterAt(instruction_id) orelse continue;
+        if (!clusterDropsSlots(cluster.kind) or (use_flags[instruction_id] & use_escaped) != 0)
+            continue;
+        slots[instruction_id].shape = .none;
+        slots[instruction_id].resident = snapshot_v1.no_id;
+    }
+
+    instruction_id = 0;
+    while (instruction_id < count) : (instruction_id += 1) {
+        if (slots[instruction_id].shape == .none)
+            continue;
+        if (instruction_id < numeric_anchor.len and numeric_anchor[instruction_id])
+            continue;
+        const planned_uses = plan.instructionUses(instruction_id) orelse 0;
+        const only_user = first_use[instruction_id];
+        if (planned_uses == 0 or seen_uses[instruction_id] != planned_uses or
+            only_user == snapshot_v1.no_id or only_user <= instruction_id)
+            continue;
+        if ((use_flags[instruction_id] & use_cross) != 0)
+            continue;
+        const block = plan.instructionBlock(instruction_id) orelse continue;
+        if ((plan.instructionBlock(last_use[instruction_id]) orelse continue) != block)
+            continue;
+        if (plan.closureContaining(instruction_id) != null)
+            continue;
+        if (instruction_id < builtin_number_sources.len and
+            builtin_number_sources[instruction_id] != std.math.maxInt(u32))
+            continue;
+        const register = (try residentRegisterOperand(snapshot, function, instruction_id)) orelse continue;
+        // Every use sits in this block before the first register write or runtime call.
+        if (prior_clobber[last_use[instruction_id]] > instruction_id + 1)
+            continue;
+        slots[instruction_id].shape = .none;
+        slots[instruction_id].resident = register;
+        slots[instruction_id].first = snapshot_v1.no_id;
+        slots[instruction_id].second = snapshot_v1.no_id;
+    }
+
+    // Parameters are 0 and 1. Base through the call scratch occupy 2..15.
+    // Instruction results start at 16, and same-block ranges reuse one local.
+    try locals.append(allocator, .{ .count = 5, .value_type = .i32 });
+    try locals.append(allocator, .{ .count = 9, .value_type = .i32 });
+    var pools = LocalPools{ .allocator = allocator, .locals = locals };
+    defer pools.deinit();
+    const release_head = try allocator.alloc(u32, count + 1);
+    defer allocator.free(release_head);
+    @memset(release_head, snapshot_v1.no_id);
+
+    instruction_id = 0;
+    while (instruction_id < count) : (instruction_id += 1) {
+        try pools.freeReleased(release_head, instruction_id);
+        const shape = slots[instruction_id].shape;
+        if (shape == .none)
+            continue;
+        const value_type: wasm.ValueType = switch (shape) {
+            .none => unreachable,
+            .i32, .pointer => .i32,
+            .i64, .tvalue => .i64,
+            .f32 => .f32,
+            .f64 => .f64,
+        };
+        const parts: u32 = if (shape == .tvalue) 2 else 1;
+        const first = try pools.take(value_type);
+        const second = if (parts == 2) try pools.take(value_type) else snapshot_v1.no_id;
+        slots[instruction_id].first = first;
+        slots[instruction_id].second = second;
+
+        const flags = use_flags[instruction_id];
+        const block = plan.instructionBlock(instruction_id);
+        const last = last_use[instruction_id];
+        const backward = first_use[instruction_id] != snapshot_v1.no_id and first_use[instruction_id] < instruction_id;
+        const same_block = last == snapshot_v1.no_id or
+            (block != null and plan.instructionBlock(last) == block);
+        const share = (flags & use_cross) == 0 and !backward and block != null and same_block;
+        if (!share)
+            continue;
+        const end = if (last == snapshot_v1.no_id) instruction_id else last;
+        const release_at = std.math.add(u32, end, 1) catch continue;
+        if (release_at >= count)
+            continue;
+        try pools.schedule(release_head, first, release_at);
+        if (parts == 2)
+            try pools.schedule(release_head, second, release_at);
+    }
 }
 
 fn lowerFunction(
@@ -216,15 +503,13 @@ fn lowerFunction(
         }
     }
 
-    var locals: std.ArrayList(wasm.Local) = .empty;
-    defer locals.deinit(allocator);
-    try locals.append(allocator, .{ .count = 5, .value_type = .i32 });
-    var next_local: u32 = 7; // parameters 0/1; base, dispatcher, helper status, continuation, table index are 2..6.
-
     const numeric_folded = try allocator.alloc(bool, function.instruction_count);
     defer allocator.free(numeric_folded);
     @memset(numeric_folded, false);
-    try markUniformNumericRuns(snapshot, function, proto, &plan, numeric_folded);
+    const numeric_anchor = try allocator.alloc(bool, function.instruction_count);
+    defer allocator.free(numeric_anchor);
+    @memset(numeric_anchor, false);
+    try markUniformNumericRuns(snapshot, function, proto, &plan, numeric_folded, numeric_anchor);
 
     var instruction_id: u32 = 0;
     while (instruction_id < function.instruction_count) : (instruction_id += 1) {
@@ -233,60 +518,11 @@ fn lowerFunction(
         if (numeric_folded[instruction_id])
             shape = .none;
         slots[instruction_id].shape = shape;
-        switch (shape) {
-            .none => {},
-            .i32 => {
-                if (next_local >= max_lowered_locals)
-                    return Error.ResourceLimit;
-                slots[instruction_id].first = next_local;
-                next_local += 1;
-                try locals.append(allocator, .{ .count = 1, .value_type = .i32 });
-            },
-            .pointer => {
-                if (next_local >= max_lowered_locals)
-                    return Error.ResourceLimit;
-                slots[instruction_id].first = next_local;
-                next_local += 1;
-                try locals.append(allocator, .{ .count = 1, .value_type = .i32 });
-            },
-            .i64 => {
-                if (next_local >= max_lowered_locals)
-                    return Error.ResourceLimit;
-                slots[instruction_id].first = next_local;
-                next_local += 1;
-                try locals.append(allocator, .{ .count = 1, .value_type = .i64 });
-            },
-            .f32 => {
-                if (next_local >= max_lowered_locals)
-                    return Error.ResourceLimit;
-                slots[instruction_id].first = next_local;
-                next_local += 1;
-                try locals.append(allocator, .{ .count = 1, .value_type = .f32 });
-            },
-            .f64 => {
-                if (next_local >= max_lowered_locals)
-                    return Error.ResourceLimit;
-                slots[instruction_id].first = next_local;
-                next_local += 1;
-                try locals.append(allocator, .{ .count = 1, .value_type = .f64 });
-            },
-            .tvalue => {
-                if (next_local > max_lowered_locals - 2)
-                    return Error.ResourceLimit;
-                slots[instruction_id].first = next_local;
-                slots[instruction_id].second = next_local + 1;
-                next_local += 2;
-                try locals.append(allocator, .{ .count = 2, .value_type = .i64 });
-            },
-        }
     }
-    if (next_local > max_lowered_locals - 9)
-        return Error.ResourceLimit;
-    const call_func_local = next_local;
-    next_local += 9;
-    try locals.append(allocator, .{ .count = 9, .value_type = .i32 });
+    // Call scratch stays at 7..15. Instruction locals are numbered after planning.
+    const call_func_local: u32 = 7;
 
-    var body = try wasm.Body.init(allocator, locals.items);
+    var body: wasm.Body = .{};
     defer body.deinit(allocator);
     var context = Context{
         .allocator = allocator,
@@ -488,6 +724,24 @@ fn lowerFunction(
                 return Error.UnsupportedCommand;
         }
     }
+
+    var locals: std.ArrayList(wasm.Local) = .empty;
+    defer locals.deinit(allocator);
+    numberValueLocals(
+        allocator,
+        snapshot,
+        function,
+        &plan,
+        slots,
+        builtin_number_sources,
+        numeric_anchor,
+        &locals,
+    ) catch |err| {
+        diagnostics.recordPhase(@errorName(err), "value locals");
+        return err;
+    };
+    body.deinit(allocator);
+    body = try wasm.Body.init(allocator, locals.items);
 
     try context.emitReloadBase();
     try context.emitCacheConstantArray();

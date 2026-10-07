@@ -39,6 +39,8 @@ pub noinline fn emitInstructionResultSet(self: anytype, instruction_id: u32) Err
         self.instruction_produced[instruction_id] = true;
 }
 pub noinline fn emitLoadTag(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    if (self.residentRegister(instruction_id) != null)
+        return;
     try self.requireOperandCount(instruction_value, 1);
     const source = try self.operand(instruction_value, 0);
     if (source.kind == .instruction) {
@@ -65,6 +67,8 @@ pub noinline fn emitLoadTag(self: anytype, instruction_id: u32, instruction_valu
     try self.emitInstructionResultSet(instruction_id);
 }
 pub noinline fn emitLoadI32(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    if (self.residentRegister(instruction_id) != null)
+        return;
     try self.requireOperandCount(instruction_value, 1);
     const source = try self.operand(instruction_value, 0);
     if (instruction_value.command == .load_pointer) {
@@ -99,6 +103,8 @@ pub noinline fn emitLoadI32(self: anytype, instruction_id: u32, instruction_valu
     try self.emitInstructionResultSet(instruction_id);
 }
 pub noinline fn emitLoadI64(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    if (self.residentRegister(instruction_id) != null)
+        return;
     try self.requireOperandCount(instruction_value, 1);
     const source = try self.operand(instruction_value, 0);
     if (source.kind == .vm_const) {
@@ -111,6 +117,8 @@ pub noinline fn emitLoadI64(self: anytype, instruction_id: u32, instruction_valu
     try self.emitInstructionResultSet(instruction_id);
 }
 pub noinline fn emitLoadFloat(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    if (self.residentRegister(instruction_id) != null)
+        return;
     try self.requireOperandCount(instruction_value, 2);
     const source = try self.operand(instruction_value, 0);
     const offset_operand = try self.operand(instruction_value, 1);
@@ -206,6 +214,8 @@ pub fn classifyBuiltinNumberLoads(self: anytype) Error!void {
     }
 }
 pub noinline fn emitLoadDouble(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
+    if (self.residentRegister(instruction_id) != null)
+        return;
     try self.requireOperandCount(instruction_value, 1);
     const source = try self.operand(instruction_value, 0);
     if (source.kind == .vm_const) {
@@ -230,6 +240,8 @@ pub noinline fn emitLoadTValue(self: anytype, instruction_id: u32, instruction_v
         if (capture_source.kind != .vm_reg and capture_source.kind != .vm_const)
             return;
     }
+    if (self.residentRegister(instruction_id) != null)
+        return;
     if (instruction_id + 1 < self.function.instruction_count and
         (try self.instruction(instruction_id + 1)).command == .set_upvalue)
         _ = self.setUpvaluePattern(instruction_id + 1) catch |err| {
@@ -650,7 +662,28 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
             return;
         }
     }
-    if (source.kind != .instruction or source.value >= self.slots.len or self.slots[source.value].shape != .tvalue)
+    if (source.kind == .instruction) {
+        if (self.residentRegister(source.value)) |register| {
+            const producer = try self.instruction(source.value);
+            if (producer.command == .load_tvalue and producer.operand_count == 1 and
+                destination.kind == .vm_reg and instruction_value.operand_count == 2)
+            {
+                if (self.move_reg) |helper| {
+                    if (register > 0xffff or destination.value > 0xffff)
+                        return Error.ResourceLimit;
+                    try self.body.localGet(self.allocator, 0);
+                    try self.body.i32Const(self.allocator, @bitCast(register | (destination.value << 16)));
+                    try self.body.call(self.allocator, helper);
+                    return;
+                }
+                try self.emitCopyTValueRegisters(destination.value, register);
+                return;
+            }
+        }
+    }
+    const resident_source = source.kind == .instruction and self.residentRegister(source.value) != null;
+    if (!resident_source and
+        (source.kind != .instruction or source.value >= self.slots.len or self.slots[source.value].shape != .tvalue))
         return Error.InvalidOperandType;
     const address_offset = if (instruction_value.operand_count == 3)
         try self.tvalueByteOffset(instruction_value, 2)
@@ -684,10 +717,10 @@ pub noinline fn emitStoreTValue(self: anytype, instruction_id: u32, instruction_
         try self.vmRegisterOffset(destination, address_offset)
     else
         address_offset;
-    try self.body.localGet(self.allocator, self.slots[source.value].first);
+    try self.emitTValuePart(source, false);
     try self.body.i64Store(self.allocator, 3, destination_offset);
     try self.emitTValueAddress(destination);
-    try self.body.localGet(self.allocator, self.slots[source.value].second);
+    try self.emitTValuePart(source, true);
     try self.body.i64Store(self.allocator, 3, destination_offset + 8);
 }
 
@@ -1107,6 +1140,22 @@ pub fn vectorSlot(self: anytype, operand_value: snapshot_v1.IrOperand) Error!Val
     return slot;
 }
 pub noinline fn emitVectorLaneBits(self: anytype, operand_value: snapshot_v1.IrOperand, lane: u32) Error!void {
+    if (lane >= tvalue_lane_count)
+        return Error.InvalidOperandType;
+    if (operand_value.kind == .instruction) {
+        if (self.residentRegister(operand_value.value) != null) {
+            const producer = try self.instruction(operand_value.value);
+            if (producer.command != .load_tvalue or producer.operand_count != 1)
+                return Error.InvalidInstructionResult;
+            try self.emitTValuePart(operand_value, lane >= 2);
+            if (lane == 1 or lane == 3) {
+                try self.body.i64Const(self.allocator, 32);
+                try self.body.opcode(self.allocator, 0x88); // i64.shr_u
+            }
+            try self.body.opcode(self.allocator, 0xa7); // i32.wrap_i64
+            return;
+        }
+    }
     const slot = try self.vectorSlot(operand_value);
     switch (lane) {
         0 => try self.body.localGet(self.allocator, slot.first),
@@ -1271,11 +1320,18 @@ pub noinline fn emitTagVector(self: anytype, instruction_id: u32, instruction_va
     try self.requireOperandCount(instruction_value, 1);
     if (instruction_id >= self.slots.len or self.slots[instruction_id].shape != .tvalue)
         return Error.InvalidInstructionResult;
-    const source = try self.vectorSlot(try self.operand(instruction_value, 0));
+    const source_operand = try self.operand(instruction_value, 0);
     const destination = self.slots[instruction_id];
-    try self.body.localGet(self.allocator, source.first);
-    try self.body.localSet(self.allocator, destination.first);
-    try self.body.localGet(self.allocator, source.second);
+    if (source_operand.kind == .instruction and self.residentRegister(source_operand.value) != null) {
+        try self.emitTValuePart(source_operand, false);
+        try self.body.localSet(self.allocator, destination.first);
+        try self.emitTValuePart(source_operand, true);
+    } else {
+        const source = try self.vectorSlot(source_operand);
+        try self.body.localGet(self.allocator, source.first);
+        try self.body.localSet(self.allocator, destination.first);
+        try self.body.localGet(self.allocator, source.second);
+    }
     try self.body.i64Const(self.allocator, 0xffff_ffff);
     try self.body.opcode(self.allocator, 0x83); // i64.and
     try self.body.i64Const(self.allocator, lua_tag_vector << 32);

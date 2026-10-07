@@ -53,7 +53,7 @@ pub noinline fn emitCaptureCall(self: anytype, destination: u32, child_id: u32, 
 }
 pub const max_uniform_capture_run: u32 = 8;
 
-/// One straight-line copy for a same-kind capture run. Index is 0..count-1.
+/// One straight-line copy for a same-kind capture run at the supplied starting index.
 /// `check_gc` applies only to the last capture. Mixed kinds stay on the single capture call.
 pub fn emitUniformCaptureRun(
     allocator: std.mem.Allocator,
@@ -63,8 +63,8 @@ pub fn emitUniformCaptureRun(
 ) Error!wasm.FunctionRef {
     if (count < 2 or count > max_uniform_capture_run)
         return Error.UnsupportedControlFlow;
-    var params: [13]wasm.ValueType = .{.i32} ** 13;
-    const param_count: usize = 5 + @as(usize, count);
+    var params: [14]wasm.ValueType = .{.i32} ** 14;
+    const param_count: usize = 6 + @as(usize, count);
     const no_results = [_]wasm.ValueType{};
     const function_type = try object.addType(.{ .params = params[0..param_count], .results = &no_results });
     var body = try wasm.Body.init(allocator, &.{});
@@ -74,9 +74,11 @@ pub fn emitUniformCaptureRun(
         try body.localGet(allocator, 0);
         try body.localGet(allocator, 1);
         try body.localGet(allocator, 2);
+        try body.localGet(allocator, 5);
         try body.i32Const(allocator, @intCast(index));
+        try body.opcode(allocator, 0x6a);
         try body.localGet(allocator, 3);
-        try body.localGet(allocator, 5 + index);
+        try body.localGet(allocator, 6 + index);
         if (index + 1 == count)
             try body.localGet(allocator, 4)
         else
@@ -184,6 +186,7 @@ pub noinline fn emitDupClosure(self: anytype, instruction_id: u32) Error!void {
                         try self.body.i32Const(self.allocator, @intCast(global_child_id));
                         try self.body.i32Const(self.allocator, @intCast(@intFromEnum(kind)));
                         try self.body.i32Const(self.allocator, check_gc);
+                        try self.body.i32Const(self.allocator, @intCast(capture_index));
                         var source_index: u32 = 0;
                         while (source_index < run) : (source_index += 1)
                             try self.body.i32Const(self.allocator, @intCast(captures[capture_index + source_index].source));

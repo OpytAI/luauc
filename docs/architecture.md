@@ -22,6 +22,11 @@ module records, source locations, the selected runtime pack, and a `luauc.link.v
 It contains no parser, compiler, bytecode executor, runtime compiler, opcode-dispatch fallback, or
 sidecar dependency. Unknown IR, object, profile, feature, import, or relocation shapes fail closed.
 
+Ordinary execution and coroutine resumption share admitted continuation suffixes. The normal
+path transfers to the same generated wasm block instead of copying the remainder of the source
+block at every call. Admission proves that the suffix can reconstruct its values from the Luau
+frame. See [the compiler size review](compiler-size-review.md) for measurements and limits.
+
 ## Ownership
 
 - Pinned Luau owns language compilation and runtime semantics.

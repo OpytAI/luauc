@@ -1218,6 +1218,39 @@ pub noinline fn emitStoreSplitTValue(
         else => return Error.UnsupportedOperand,
     }
 }
+pub fn residentRegister(self: anytype, instruction_id: u32) ?u32 {
+    if (instruction_id >= self.slots.len)
+        return null;
+    const resident = self.slots[instruction_id].resident;
+    if (resident == snapshot_v1.no_id)
+        return null;
+    return resident;
+}
+
+fn emitResidentI32(self: anytype, register: u32, field: u32) Error!void {
+    const register_operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i32Load(self.allocator, 2, try self.vmRegisterOffset(register_operand, field));
+}
+
+fn emitResidentI64(self: anytype, register: u32, field: u32) Error!void {
+    const register_operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.i64Load(self.allocator, 3, try self.vmRegisterOffset(register_operand, field));
+}
+
+fn emitResidentF32(self: anytype, register: u32, field: u32) Error!void {
+    const register_operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f32Load(self.allocator, 2, try self.vmRegisterOffset(register_operand, field));
+}
+
+fn emitResidentF64(self: anytype, register: u32, field: u32) Error!void {
+    const register_operand = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = register };
+    try self.body.localGet(self.allocator, self.base_local);
+    try self.body.f64Load(self.allocator, 3, try self.vmRegisterOffset(register_operand, field));
+}
+
 pub noinline fn emitI32Value(self: anytype, operand_value: snapshot_v1.IrOperand) Error!void {
     switch (operand_value.kind) {
         .constant => {
@@ -1231,6 +1264,16 @@ pub noinline fn emitI32Value(self: anytype, operand_value: snapshot_v1.IrOperand
             try self.body.i32Const(self.allocator, integer);
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                const field: u32 = switch (producer.command) {
+                    .load_tag => tvalue_tag_offset,
+                    .load_int => 0,
+                    else => return Error.InvalidInstructionResult,
+                };
+                try emitResidentI32(self, register, field);
+                return;
+            }
             if (operand_value.value >= self.slots.len) {
                 diagnostics.trace("i32 len");
                 return Error.InvalidInstructionResult;
@@ -1264,6 +1307,13 @@ pub noinline fn emitPointerValue(self: anytype, operand_value: snapshot_v1.IrOpe
             try self.body.i32Const(self.allocator, 0);
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                if (producer.command != .load_pointer)
+                    return Error.InvalidInstructionResult;
+                try emitResidentI32(self, register, 0);
+                return;
+            }
             if (operand_value.value < self.slots.len and
                 self.slots[operand_value.value].shape == .pointer)
             {
@@ -1409,6 +1459,13 @@ pub noinline fn emitI64Value(self: anytype, operand_value: snapshot_v1.IrOperand
             try self.body.i64Const(self.allocator, value.int64Value() orelse return Error.InvalidOperandType);
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                if (producer.command != .load_int64)
+                    return Error.InvalidInstructionResult;
+                try emitResidentI64(self, register, 0);
+                return;
+            }
             if (operand_value.value >= self.slots.len) {
                 diagnostics.trace("i64 len");
                 return Error.InvalidInstructionResult;
@@ -1439,6 +1496,20 @@ pub noinline fn emitF32Value(self: anytype, operand_value: snapshot_v1.IrOperand
             try self.body.f32Const(self.allocator, @floatCast(value.doubleValue() orelse return Error.InvalidOperandType));
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                if (producer.command != .load_float or producer.operand_count != 2)
+                    return Error.InvalidInstructionResult;
+                const offset_operand = try self.operand(producer, 1);
+                if (offset_operand.kind != .constant)
+                    return Error.InvalidOperandType;
+                const offset = (try self.constant(offset_operand.value)).intValue() orelse
+                    return Error.InvalidOperandType;
+                if (offset < 0 or offset > 8)
+                    return Error.InvalidOperandType;
+                try emitResidentF32(self, register, @intCast(offset));
+                return;
+            }
             if (operand_value.value >= self.slots.len)
                 return Error.InvalidInstructionResult;
             const slot = self.slots[operand_value.value];
@@ -1465,6 +1536,26 @@ pub noinline fn emitNumberPayload(self: anytype, operand_value: snapshot_v1.IrOp
             try self.body.f64Const(self.allocator, number);
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                switch (producer.command) {
+                    .load_double => {
+                        try emitResidentF64(self, register, 0);
+                        return;
+                    },
+                    .load_int => {
+                        try emitResidentI32(self, register, 0);
+                        try self.body.opcode(self.allocator, 0xb7); // f64.convert_i32_s
+                        return;
+                    },
+                    .load_int64 => {
+                        try emitResidentI64(self, register, 0);
+                        try self.body.opcode(self.allocator, 0xb9); // f64.convert_i64_s
+                        return;
+                    },
+                    else => return Error.InvalidInstructionResult,
+                }
+            }
             if (operand_value.value >= self.slots.len)
                 return Error.InvalidInstructionResult;
             const slot = self.slots[operand_value.value];
@@ -1501,6 +1592,13 @@ pub noinline fn emitF64Value(self: anytype, operand_value: snapshot_v1.IrOperand
             try self.body.f64Const(self.allocator, value.doubleValue() orelse return Error.InvalidOperandType);
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                if (producer.command != .load_double)
+                    return Error.InvalidInstructionResult;
+                try emitResidentF64(self, register, 0);
+                return;
+            }
             if (operand_value.value >= self.slots.len) {
                 diagnostics.trace("f64 len");
                 return Error.InvalidInstructionResult;
@@ -1546,6 +1644,13 @@ pub noinline fn emitTValuePart(self: anytype, operand_value: snapshot_v1.IrOpera
             try self.body.i64Load(self.allocator, 3, offset);
         },
         .instruction => {
+            if (self.residentRegister(operand_value.value)) |register| {
+                const producer = try self.instruction(operand_value.value);
+                if (producer.command != .load_tvalue or producer.operand_count != 1)
+                    return Error.InvalidInstructionResult;
+                try emitResidentI64(self, register, if (high) 8 else 0);
+                return;
+            }
             const slot = try self.tvalueSlot(operand_value);
             try self.body.localGet(self.allocator, if (high) slot.second else slot.first);
         },

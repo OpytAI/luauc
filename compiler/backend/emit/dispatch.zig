@@ -566,6 +566,40 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
+        if (instruction_id < self.continuation_indices.len) {
+            const continuation_index = self.continuation_indices[instruction_id];
+            if (continuation_index < self.call_continuations.len) {
+                const continuation = self.call_continuations[continuation_index];
+                switch (continuation.action) {
+                    .interrupt_suffix => |suffix| {
+                        if (suffix.block_finish == finish) {
+                            try self.body.i32Const(self.allocator, @intCast(continuation.dispatch_id));
+                            try self.body.localSet(self.allocator, self.dispatch_local);
+                            try self.body.branch(self.allocator, self.loop_branch_depth);
+                            return true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+        if (instruction_id > start and instruction_id - 1 < self.continuation_indices.len) {
+            const continuation_index = self.continuation_indices[instruction_id - 1];
+            if (continuation_index < self.call_continuations.len) {
+                const continuation = self.call_continuations[continuation_index];
+                switch (continuation.action) {
+                    .call_suffix => |suffix| {
+                        if (suffix.suffix_start == instruction_id and suffix.block_finish == finish) {
+                            try self.body.i32Const(self.allocator, @intCast(continuation.dispatch_id));
+                            try self.body.localSet(self.allocator, self.dispatch_local);
+                            try self.body.branch(self.allocator, self.loop_branch_depth);
+                            return true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
         const command = (try self.instruction(instruction_id)).command;
         if (self.plan.clusterAt(instruction_id) == null) {
             if (command == .load_tag) {
@@ -743,7 +777,9 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
                     }
                 }
             }
-            if (instruction_id < self.slots.len and self.slots[instruction_id].shape == .none) {
+            if (instruction_id < self.slots.len and self.slots[instruction_id].shape == .none and
+                self.residentRegister(instruction_id) == null)
+            {
                 diagnostics.trace("num none");
                 return Error.UnsupportedControlFlow;
             }

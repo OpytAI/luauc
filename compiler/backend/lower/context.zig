@@ -214,6 +214,7 @@ pub const Context = struct {
     pub const emitStoreSplitTValue = core.emitStoreSplitTValue;
     pub const emitLoadEnv = core.emitLoadEnv;
     pub const emitVmConstantAddress = core.emitVmConstantAddress;
+    pub const residentRegister = core.residentRegister;
     pub const emitI32Value = core.emitI32Value;
     pub const emitPointerValue = core.emitPointerValue;
     pub const vmConstantTag = core.vmConstantTag;
