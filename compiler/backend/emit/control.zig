@@ -905,7 +905,7 @@ pub noinline fn emitReturn(self: anytype, instruction_value: snapshot_v1.IrInstr
     };
 
     // MULTRET reads L->top in the host. close_upvalues(L, 0) rejects a zero-sized frame.
-    if (return_count < 0 or self.close_upvalues == null or self.proto.max_stack_size == 0) {
+    if (self.interrupt_helper != null or return_count < 0 or self.close_upvalues == null or self.proto.max_stack_size == 0) {
         try self.body.localGet(self.allocator, 0);
         try self.body.i32Const(self.allocator, @intCast(source_register));
         try self.body.i32Const(self.allocator, @intCast(return_count));
@@ -2163,6 +2163,8 @@ fn syntheticIpairsApplies(
     parameter_count: i32,
     result_count: i32,
 ) Error!bool {
+    if (self.interrupt_helper != null)
+        return false;
     if (parameter_count != 1 or result_count != 3)
         return false;
     if (try ipairsImportId(self) == null)
@@ -2800,8 +2802,13 @@ fn emitGenericForHelper(self: anytype, pattern: model.GenericIterationPattern, c
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
     try self.emitClearContinuation(continuation.continuation_id);
-    try self.emitReloadBase();
-    try self.emitGenericIterationFinish(pattern);
+    if (self.interrupt_helper != null) {
+        try self.body.i32Const(self.allocator, @intCast(continuation.dispatch_id));
+        try self.body.localSet(self.allocator, self.dispatch_local);
+    } else {
+        try self.emitReloadBase();
+        try self.emitGenericIterationFinish(pattern);
+    }
     try self.body.else_(self.allocator);
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.return_(self.allocator);
@@ -2864,7 +2871,7 @@ fn emitGenericForStay(self: anytype, pattern: model.GenericIterationPattern) Err
 }
 
 pub noinline fn emitGenericForProtocol(self: anytype, pattern: model.GenericIterationPattern, continuation: CallContinuation, stay: bool) Error!void {
-    if (!genericForFrameFits(self, pattern)) {
+    if (self.interrupt_helper != null or !genericForFrameFits(self, pattern)) {
         try emitGenericForHelper(self, pattern, continuation);
         return;
     }

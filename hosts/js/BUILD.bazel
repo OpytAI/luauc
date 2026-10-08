@@ -22,6 +22,22 @@ js_test(
     },
 )
 
+js_test(
+    name = "shared_lowering_test",
+    data = [
+        ":host",
+        "//compiler:compiler_wasm",
+        "//profiles/embed:embed_v1_profile",
+        "//profiles/embed:embed_v1_pack",
+    ],
+    entry_point = "shared_lowering.test.mjs",
+    env = {
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+    },
+)
+
 js_binary(
     name = "luauc",
     data = [":host"],
@@ -91,5 +107,21 @@ js_test(
         "LUAUC_PROTO_IDENTITY": "$(rlocationpath //conformance/sources:proto_identity)",
         "LUAUC_USERDATA_HOOKS": "$(rlocationpath //conformance/sources:userdata_hooks)",
         "LUAUC_PINNED_INTERPRETER": "$(rlocationpath //conformance/interpreter:pinned_interpreter)",
+    },
+)
+js_test(
+    name = "runtime_pruning_test",
+    data = [
+        "runtime_pruning.test.mjs",
+        ":host",
+        "//compiler:compiler_wasm",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+    ],
+    entry_point = "runtime_pruning.test.mjs",
+    env = {
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
     },
 )

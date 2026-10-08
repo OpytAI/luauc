@@ -3,7 +3,7 @@
   "generator_version": "luauc-runtime-symbols-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "4f422eb1ebec170e704d16b6f7e51ddac3383d11b40f81ca7d322c70b397dbb4",
+  "frontend_contract_digest": "254652880aa0967cfcb192da1a8bb062ae82d6adc767e0d5aea044b675c4efd0",
   "input_sha256": {
     "runtime_symbols_bzl": "fdc6ba8d60cf45e7ef8036d0f9efedf145e3d4442457496414c6f6a1fc4dcc20",
     "aot_runtime_v1_h": "bff763a7788afe71e604a0364b46825bb79fa7b04cf0e9c735d345b672baaa00",
@@ -207,5 +207,5 @@
     "match": "symbol_name",
     "note": "Generated objects export this data symbol; the linker matches it by name, not as a pack function export. Object import modules are rewritten to generated_runtime_module before resolution."
   },
-  "canonical_hash": "153eaa88dac01d73f735e269d697a215a46efb8abad4af9c1b27f5c689a71f52"
+  "canonical_hash": "538d4ba98199ef654bf77510bbe90558f6a160d2fa957c8b9e2b88c29c695d2c"
 }

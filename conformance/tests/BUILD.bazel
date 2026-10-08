@@ -3,7 +3,7 @@ load(":defs.bzl", "SOURCE_ENV", "family_js_test")
 
 js_library(
     name = "harness",
-    srcs = ["harness.mjs"],
+    srcs = ["harness.mjs", "linearized_graphs.json"],
     visibility = ["//visibility:public"],
 )
 

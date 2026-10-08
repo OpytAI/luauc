@@ -28,6 +28,7 @@ pub const emitFastLuaCall = control.emitFastLuaCall;
 pub const emitFastInterrupt = control.emitFastInterrupt;
 pub const emitFastExchange = control.emitFastExchange;
 pub const emitFastLine = control.emitFastLine;
+pub const emitConstantArrayHelper = core.emitConstantArrayHelper;
 pub const emitPreparedCallHelper = control.emitPreparedCallHelper;
 pub const emitCallPreface = control.emitCallPreface;
 pub const emitMoveReg = control.emitMoveReg;
@@ -54,6 +55,7 @@ pub const Context = struct {
     // Set when this entry has stored the instruction local. A continuation
     // starts with the set cleared: a yield dropped the caller's wasm locals.
     instruction_produced: []bool,
+    interrupt_entry: u32 = snapshot_v1.no_id,
     builtin_number_sources: []u32,
     coverage_site_ids: []const u32,
     body: *wasm.Body,
@@ -77,6 +79,7 @@ pub const Context = struct {
     sibling_trampoline: ?wasm.FunctionRef = null,
     fast_lua_call: ?wasm.FunctionRef = null,
     interrupt_helper: ?wasm.FunctionRef = null,
+    constant_array_helper: ?wasm.FunctionRef = null,
     exchange_helper: ?wasm.FunctionRef = null,
     line_helper: ?wasm.FunctionRef = null,
     prepare_helper: ?wasm.FunctionRef = null,

@@ -17,28 +17,79 @@ pub const StringKeyPool = struct {
 
     bytes: std.ArrayList(u8) = .empty,
     entries: std.ArrayList(Entry) = .empty,
+    index: std.HashMapUnmanaged(Entry, void, IndexContext, 80) = .empty,
+
+    const IndexContext = struct {
+        bytes: []const u8,
+
+        pub fn hash(self: @This(), entry: Entry) u64 {
+            return std.hash.Wyhash.hash(0, self.bytes[entry.offset..][0..entry.length]);
+        }
+
+        pub fn eql(self: @This(), left: Entry, right: Entry) bool {
+            return std.mem.eql(u8, self.bytes[left.offset..][0..left.length], self.bytes[right.offset..][0..right.length]);
+        }
+    };
+
+    const LookupContext = struct {
+        bytes: []const u8,
+
+        pub fn hash(_: @This(), key: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, key);
+        }
+
+        pub fn eql(self: @This(), key: []const u8, entry: Entry) bool {
+            return std.mem.eql(u8, key, self.bytes[entry.offset..][0..entry.length]);
+        }
+    };
 
     pub fn deinit(self: *StringKeyPool, allocator: std.mem.Allocator) void {
+        self.index.deinit(allocator);
         self.bytes.deinit(allocator);
         self.entries.deinit(allocator);
         self.* = .{};
     }
 
     pub fn intern(self: *StringKeyPool, allocator: std.mem.Allocator, key: []const u8) Error!Entry {
-        for (self.entries.items) |entry| {
-            const start: usize = @intCast(entry.offset);
-            const end = std.math.add(usize, start, entry.length) catch return Error.ResourceLimit;
-            if (std.mem.eql(u8, self.bytes.items[start..end], key))
-                return entry;
-        }
+        if (self.index.getKeyAdapted(key, LookupContext{ .bytes = self.bytes.items })) |entry|
+            return entry;
         if (key.len > std.math.maxInt(u32) or self.bytes.items.len > std.math.maxInt(u32) - key.len)
             return Error.ResourceLimit;
         const entry = Entry{ .offset = @intCast(self.bytes.items.len), .length = @intCast(key.len) };
-        try self.bytes.appendSlice(allocator, key);
-        try self.entries.append(allocator, entry);
+        try self.bytes.ensureUnusedCapacity(allocator, key.len);
+        try self.entries.ensureUnusedCapacity(allocator, 1);
+        try self.index.ensureUnusedCapacityContext(allocator, 1, .{ .bytes = self.bytes.items });
+        self.bytes.appendSliceAssumeCapacity(key);
+        self.entries.appendAssumeCapacity(entry);
+        self.index.putAssumeCapacityNoClobberContext(entry, {}, .{ .bytes = self.bytes.items });
         return entry;
     }
 };
+
+fn exerciseStringPool(allocator: std.mem.Allocator) !void {
+    var pool = StringKeyPool{};
+    defer pool.deinit(allocator);
+    const empty = try pool.intern(allocator, "");
+    const binary = try pool.intern(allocator, "a\x00b");
+    var buffer: [4]u8 = undefined;
+    for (0..2048) |index| {
+        std.mem.writeInt(u32, &buffer, @intCast(index), .little);
+        const entry = try pool.intern(allocator, &buffer);
+        try std.testing.expectEqual(@as(u32, @intCast(3 + index * 4)), entry.offset);
+    }
+    try std.testing.expectEqual(empty, try pool.intern(allocator, ""));
+    try std.testing.expectEqual(binary, try pool.intern(allocator, "a\x00b"));
+    for (0..2048) |index| {
+        std.mem.writeInt(u32, &buffer, @intCast(index), .little);
+        const entry = try pool.intern(allocator, &buffer);
+        try std.testing.expectEqual(@as(u32, @intCast(3 + index * 4)), entry.offset);
+    }
+    try std.testing.expectEqual(@as(usize, 2050), pool.entries.items.len);
+}
+
+test "string pool preserves insertion order across growth and allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseStringPool, .{});
+}
 
 pub fn aotArithmeticOperation(upstream_operation: i32) ?i32 {
     if (upstream_operation < upstream_tm_add or upstream_operation > upstream_tm_unm)

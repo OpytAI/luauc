@@ -1006,10 +1006,6 @@ bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &
         }
         totalInstructions += builder.function.instructions.size();
 
-        // This is the target-neutral prefix of pinned upstream lowerFunction. The frontend options
-        // are pinned to upstream defaults: DebugCodegenOptSize=false, so linearization is always
-        // enabled here. The instruction/block limits above are likewise contract values. There are
-        // no fixture-dependent switches and no native-backend passes.
         killUnusedBlocks(builder.function);
 
         size_t liveBlocks = 0;
@@ -1028,7 +1024,6 @@ bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &
 
         computeCfgInfo(builder.function);
         constPropInBlockChains(builder);
-        createLinearBlocks(builder);
         restoreStrippedTableOwnership(builder.function);
         computeCfgBlockEdges(builder.function);
         updateUseCounts(builder.function);

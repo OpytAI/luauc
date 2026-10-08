@@ -626,9 +626,6 @@ pub noinline fn emitSafeEnvCheck(self: anytype, instruction_id: u32) Error!void 
     const failure = try self.operand(instruction_value, 0);
     if (failure.kind != .block and failure.kind != .vm_exit)
         return Error.InvalidOperandType;
-    // Same three results as luauc_runtime_v1_check_safe_env: internal error when the closure has
-    // no environment, unsupported when safeenv is clear, OK otherwise. The active frame is this
-    // function, so the check is the environment pointer and its safeenv byte.
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Load(self.allocator, 2, lua_state_ci_offset);
     try self.body.i32Load(self.allocator, 2, callinfo_func_offset);
@@ -637,54 +634,19 @@ pub noinline fn emitSafeEnvCheck(self: anytype, instruction_id: u32) Error!void 
     try self.body.localTee(self.allocator, self.status_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try self.body.i32Const(self.allocator, status_internal_error);
-    try self.body.localSet(self.allocator, self.status_local);
-    try self.body.else_(self.allocator);
+    try self.emitStatusReturn(status_internal_error);
+    try self.body.end(self.allocator);
     try self.body.localGet(self.allocator, self.status_local);
     try self.body.i32Load8U(self.allocator, 0, table_safeenv_offset);
     try self.body.i32Eqz(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try self.body.i32Const(self.allocator, status_unsupported_type);
-    try self.body.localSet(self.allocator, self.status_local);
-    try self.body.else_(self.allocator);
-    try self.body.i32Const(self.allocator, status_ok);
-    try self.body.localSet(self.allocator, self.status_local);
-    try self.body.end(self.allocator);
-    try self.body.end(self.allocator);
-    try self.emitReloadBase();
-
-    // vm_exit has no compiled slow arm. An unsafe environment returns its status.
-    // A safe environment falls through into the guarded IR.
+    try self.body.localTee(self.allocator, self.status_local);
     if (failure.kind == .vm_exit) {
-        try self.body.localGet(self.allocator, self.status_local);
-        try self.body.i32Eqz(self.allocator);
         try self.body.ifVoid(self.allocator);
-        try self.body.else_(self.allocator);
-        try self.body.localGet(self.allocator, self.status_local);
-        try self.body.return_(self.allocator);
+        try self.emitStatusReturn(status_unsupported_type);
         try self.body.end(self.allocator);
-        return;
+    } else {
+        try self.emitGuardFailure(failure);
     }
-
-    // The runtime returns only OK, UNSUPPORTED_TYPE (take the compiled slow arm), or a fatal
-    // status. Preserve fatal statuses and route ordinary unsafe environments through the same
-    // guard target produced by the pinned frontend.
-    try self.body.localGet(self.allocator, self.status_local);
-    try self.body.i32Eqz(self.allocator);
-    try self.body.localGet(self.allocator, self.status_local);
-    try self.body.i32Const(self.allocator, status_unsupported_type);
-    try self.body.i32Eq(self.allocator);
-    try self.body.opcode(self.allocator, 0x72); // i32.or
-    try self.body.i32Eqz(self.allocator);
-    try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, self.status_local);
-    try self.body.return_(self.allocator);
-    try self.body.end(self.allocator);
-
-    try self.body.localGet(self.allocator, self.status_local);
-    try self.body.i32Const(self.allocator, status_unsupported_type);
-    try self.body.i32Eq(self.allocator);
-    try self.emitGuardFailure(failure);
 }
 pub noinline fn emitAdjustStackConstant(self: anytype, destination: u32, count: u32) Error!void {
     const end = std.math.add(u32, destination, count) catch return Error.ResourceLimit;

@@ -72,6 +72,26 @@ pub noinline fn emitCacheConstantArray(self: anytype) Error!void {
         return;
     const count_i32 = std.math.cast(i32, count) orelse return Error.ResourceLimit;
     const function_id = std.math.cast(i32, self.planned_function_id) orelse return Error.ResourceLimit;
+    if (self.constant_array_helper) |helper| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, function_id);
+        try self.body.i32Const(self.allocator, count_i32);
+        try self.body.call(self.allocator, helper);
+        try self.body.localSet(self.allocator, self.constant_array_local);
+    } else {
+        try emitConstantArrayProbe(self, function_id, count_i32);
+    }
+    if (self.interrupt_helper != null) {
+        try self.body.localGet(self.allocator, self.constant_array_local);
+        try self.body.i32Eqz(self.allocator);
+        try self.body.ifVoid(self.allocator);
+        try self.body.i32Const(self.allocator, status_internal_error);
+        try self.body.return_(self.allocator);
+        try self.body.end(self.allocator);
+    }
+}
+
+fn emitConstantArrayProbe(self: anytype, function_id: ?i32, count: ?i32) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Load(self.allocator, 2, abi.lua_state_ci_offset);
     try self.body.i32Load(self.allocator, 2, abi.callinfo_func_offset);
@@ -92,12 +112,18 @@ pub noinline fn emitCacheConstantArray(self: anytype) Error!void {
     try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, self.call_aux_local);
     try self.body.i32Load(self.allocator, 2, abi.proto_function_id_offset);
-    try self.body.i32Const(self.allocator, function_id);
+    if (function_id) |value|
+        try self.body.i32Const(self.allocator, value)
+    else
+        try self.body.localGet(self.allocator, 1);
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, self.call_meta_local);
     try self.body.i32Load(self.allocator, 2, abi.proto_sizek_offset);
-    try self.body.i32Const(self.allocator, count_i32);
+    if (count) |value|
+        try self.body.i32Const(self.allocator, value)
+    else
+        try self.body.localGet(self.allocator, 2);
     try self.body.i32Eq(self.allocator);
     try self.body.ifVoid(self.allocator);
     try self.body.localGet(self.allocator, self.call_meta_local);
@@ -109,16 +135,26 @@ pub noinline fn emitCacheConstantArray(self: anytype) Error!void {
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
     try self.body.end(self.allocator);
-    // A large package reads Proto.k only through this local. A failed frame check
-    // used to repeat the closure walk at every constant. Reject that frame once.
-    if (self.interrupt_helper != null) {
-        try self.body.localGet(self.allocator, self.constant_array_local);
-        try self.body.i32Eqz(self.allocator);
-        try self.body.ifVoid(self.allocator);
-        try self.body.i32Const(self.allocator, status_internal_error);
-        try self.body.return_(self.allocator);
-        try self.body.end(self.allocator);
-    }
+}
+
+pub fn emitConstantArrayHelper(allocator: std.mem.Allocator, object: *wasm.Object) Error!wasm.FunctionRef {
+    const params = [_]wasm.ValueType{.i32} ** 3;
+    const results = [_]wasm.ValueType{.i32};
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
+    const locals = [_]wasm.Local{.{ .count = 3, .value_type = .i32 }};
+    var body = try wasm.Body.init(allocator, &locals);
+    defer body.deinit(allocator);
+    const context = .{
+        .body = &body,
+        .allocator = allocator,
+        .call_meta_local = @as(u32, 3),
+        .call_aux_local = @as(u32, 4),
+        .constant_array_local = @as(u32, 5),
+    };
+    try emitConstantArrayProbe(context, null, null);
+    try body.localGet(allocator, 5);
+    try body.finish(allocator);
+    return object.defineFunction("luauc_runtime_v1_constant_array", function_type, wasm.symbol.visibility_hidden, body);
 }
 pub fn requireSingleBytecodeBlockRange(self: anytype, start: u32, finish: u32) Error!void {
     return requireSingleBytecodeBlockRangeFor(self.snapshot, self.function, start, finish);

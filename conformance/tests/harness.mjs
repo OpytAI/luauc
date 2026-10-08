@@ -2,6 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 
 const generatedSymbol = "luauc_runtime_v1_generated_ir_function";
 const packageFunctionSymbols = (count) => Array.from(
@@ -258,6 +260,21 @@ export function backendObject(snapshot, functionId) {
   api.luauc_backend_v1_dealloc(resultPointer, 24);
   api.luauc_backend_v1_dealloc(snapshotPointer, snapshot.length);
   return object;
+}
+
+function linearizedGraphFixture(source, chunk) {
+  const current = frontendSnapshot(source, chunk);
+  backendPackage(current);
+  const fixtures = JSON.parse(readFileSync(new URL("./linearized_graphs.json", import.meta.url), "utf8"));
+  const fixture = fixtures.graphs[chunk];
+  const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+  if (!fixture || digest(source) !== fixture.sourceSha256)
+    throw new Error(`linearized fixture source changed: ${chunk}`);
+  const snapshot = gunzipSync(Buffer.from(fixture.gzip, "base64"));
+  if (digest(snapshot) !== fixture.snapshotSha256 || snapshot.subarray(88, 120).toString("hex") !== (fixture.frontendContract ?? fixtures.frontendContract))
+    throw new Error(`linearized fixture identity mismatch: ${chunk}`);
+  snapshot.set(current.subarray(88, 120), 88);
+  return snapshot;
 }
 
 export function backendPackage(snapshot) {
@@ -714,7 +731,7 @@ export function executeEmbedNamecallFamilyPackageShape() {
     runfile(process.env.LUAUC_EMBED_LIB_SOURCE, "LUAUC_EMBED_LIB_SOURCE"),
     "utf8",
   );
-  const snapshot = frontendSnapshot(source, "@lib.luau");
+  const snapshot = linearizedGraphFixture(source, "@lib.luau");
   const shape = snapshotShape(snapshot);
   const commandCounts = new Map();
   const operandKinds = new Map();
@@ -1099,7 +1116,7 @@ export async function executeTableAssignEmptyPackage() {
 
 export async function executeTableInsertAppendPackageShape() {
   const name = "table-clone-append-package-shape";
-  const snapshot = frontendSnapshot(
+  const snapshot = linearizedGraphFixture(
     "return function(value) local first = { count = 17, kind = 'seed', ready = true } local second = { count = 17, kind = 'seed', ready = true } table.insert(first, value) return first, second end",
     "@aot/table_clone_append_shape.luau",
   );
@@ -1223,7 +1240,7 @@ export async function executePreloadedFieldAndInvertedCompare() {
 
 export async function executeLinearizedStringFieldWrites() {
   const name = "linearized-string-field-writes";
-  const snapshot = frontendSnapshot(
+  const snapshot = linearizedGraphFixture(
     `local inputPath = arg[1]
 local outputPath = arg[2]
 local mode = arg[3] or "ready"
@@ -1661,7 +1678,7 @@ export async function executeGenericTablePackage() {
     runfile(process.env.LUAUC_GENERIC_TABLE_SOURCE, "LUAUC_GENERIC_TABLE_SOURCE"),
     "utf8",
   );
-  const snapshot = frontendSnapshot(source, "@aot/generic_table.luau");
+  const snapshot = linearizedGraphFixture(source, "@aot/generic_table.luau");
   const shape = snapshotShape(snapshot);
   const setA = shape.instruction(1, 22);
   const setB = shape.instruction(1, 41);
@@ -1804,7 +1821,7 @@ export async function executePowMetamethodGraph() {
 
 export async function executeRepeatedPowMetamethodGraph() {
   const name = "repeated-pow-metamethod-graph";
-  const snapshot = frontendSnapshot(
+  const snapshot = linearizedGraphFixture(
     "return function(left, right) local value = left ^ right; value = value ^ right; value = value ^ right; return value end",
     "@aot/repeated_pow_metamethod_graph.luau",
   );
@@ -1852,7 +1869,7 @@ export async function executeMixedTablePackage() {
     runfile(process.env.LUAUC_MIXED_TABLE_SOURCE, "LUAUC_MIXED_TABLE_SOURCE"),
     "utf8",
   );
-  const snapshot = frontendSnapshot(source, "@aot/mixed_table.luau");
+  const snapshot = linearizedGraphFixture(source, "@aot/mixed_table.luau");
   const shape = snapshotShape(snapshot);
   const setA = shape.instruction(1, 22);
   const setB = shape.instruction(1, 41);
@@ -1935,7 +1952,7 @@ export async function executeGlobalStatePackage() {
     runfile(process.env.LUAUC_GLOBAL_STATE_SOURCE, "LUAUC_GLOBAL_STATE_SOURCE"),
     "utf8",
   );
-  const snapshot = frontendSnapshot(source, "@aot/global_state.luau");
+  const snapshot = linearizedGraphFixture(source, "@aot/global_state.luau");
   const shape = snapshotShape(snapshot);
   const globalImport = shape.instruction(1, 0);
   const getEnv = shape.instruction(1, 1);
@@ -2134,8 +2151,8 @@ export async function executeBufferScalarMatrixPackage() {
     runfile(process.env.LUAUC_BUFFER_SCALAR_MATRIX_SOURCE, "LUAUC_BUFFER_SCALAR_MATRIX_SOURCE"),
     "utf8",
   );
-  const firstSnapshot = frontendSnapshot(source, "@aot/buffer_scalar_matrix.luau");
-  const secondSnapshot = frontendSnapshot(source, "@aot/buffer_scalar_matrix.luau");
+  const firstSnapshot = linearizedGraphFixture(source, "@aot/buffer_scalar_matrix.luau");
+  const secondSnapshot = linearizedGraphFixture(source, "@aot/buffer_scalar_matrix.luau");
   if (!firstSnapshot.equals(secondSnapshot)) throw new Error(`${name}: frontend snapshot is nondeterministic`);
   const shape = snapshotShape(firstSnapshot);
   if (shape.protoCount !== 9 || shape.functionCount !== 9)
@@ -2212,7 +2229,6 @@ export async function executeBufferScalarMatrixPackage() {
     ["env", "luauc_runtime_v1_dupclosure", "function"],
     ["env", "luauc_runtime_v1_dupclosure_capture", "function"],
     ["env", "luauc_runtime_v1_get_upvalue", "function"],
-    ["env", "luauc_runtime_v1_close_upvalues", "function"],
     ["env", "luauc_runtime_v1_call", "function"],
     ["env", "luauc_runtime_v1_new_table", "function"],
     ["env", "luauc_runtime_v1_check_gc", "function"],

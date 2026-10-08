@@ -2,15 +2,15 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "9f168821d26774b9d116bd6d6d45af70e949dca6ee241a171c2db8cfe27042a2",
+  "compiler_build_digest": "ffced4d5d2d7e41b9a45594e8f4a91fd439e2481eead98a3d881a9c23f13cae8",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "4f422eb1ebec170e704d16b6f7e51ddac3383d11b40f81ca7d322c70b397dbb4",
+  "frontend_contract_digest": "254652880aa0967cfcb192da1a8bb062ae82d6adc767e0d5aea044b675c4efd0",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,
-    "partial": 201,
+    "partial": 196,
     "unimplemented": 0,
-    "frontend_unreachable": 15
+    "frontend_unreachable": 20
   },
   "commands": [
     {
@@ -50,7 +50,6 @@
         "forwarded_capture",
         "generic_iteration",
         "generic_table",
-        "global_state",
         "mixed_table",
         "natural_bit32",
         "natural_buffer",
@@ -82,7 +81,6 @@
         "forwarded_capture",
         "generic_iteration",
         "generic_table",
-        "global_state",
         "mixed_table",
         "natural_bit32",
         "natural_buffer",
@@ -469,7 +467,6 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -1296,7 +1293,6 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -1915,8 +1911,10 @@
         "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
+        "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location"
       ],
@@ -1928,18 +1926,9 @@
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:333; CodeGen/src/IrLoweringA64.cpp:570",
       "census_sources": [
-        "buffer_scalar_matrix",
-        "call_graph",
         "captured_call",
-        "dynamic_hash_table",
         "embed_lib",
-        "fast_builtins",
         "forwarded_capture",
-        "generic_table",
-        "global_state",
-        "mixed_table",
-        "natural_bit32",
-        "natural_integer",
         "table_churn",
         "table_clone_append",
         "table_namecall",
@@ -1949,18 +1938,9 @@
         "any"
       ],
       "lowered_sources": [
-        "buffer_scalar_matrix",
-        "call_graph",
         "captured_call",
-        "dynamic_hash_table",
         "embed_lib",
-        "fast_builtins",
         "forwarded_capture",
-        "generic_table",
-        "global_state",
-        "mixed_table",
-        "natural_bit32",
-        "natural_integer",
         "table_churn",
         "table_clone_append",
         "table_namecall",
@@ -1971,14 +1951,11 @@
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance/tests:buffers_test",
-        "//conformance:runtime_measurement_test",
         "//conformance/tests:calls_test",
-        "//conformance/tests:tables_test",
         "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:builtins_test",
         "//conformance/tests:closures_test",
-        "//conformance/tests:natural_sources_test",
+        "//conformance:runtime_measurement_test",
+        "//conformance/tests:tables_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -1998,21 +1975,30 @@
         }
       ],
       "runtime_symbols": [
+        "luauc_runtime_v1_barrier_table_forward",
         "luauc_runtime_v1_check_gc",
+        "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_compare_any",
+        "luauc_runtime_v1_dup_table",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
+        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_get_string"
+        "luauc_runtime_v1_slot_node_addr",
+        "luauc_runtime_v1_table_get_string",
+        "luauc_runtime_v1_table_insert_append",
+        "luauc_runtime_v1_table_len",
+        "luauc_runtime_v1_table_set_string"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -2022,7 +2008,6 @@
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:402; CodeGen/src/IrLoweringA64.cpp:612",
       "census_sources": [
-        "buffer_scalar_matrix",
         "embed_lib",
         "fast_builtins",
         "table_churn",
@@ -2032,7 +2017,6 @@
         "any"
       ],
       "lowered_sources": [
-        "buffer_scalar_matrix",
         "embed_lib",
         "fast_builtins",
         "table_churn",
@@ -2043,7 +2027,6 @@
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance/tests:buffers_test",
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:builtins_test",
         "//conformance:runtime_measurement_test",
@@ -2818,8 +2801,8 @@
       "command": "SEXTI8_INT",
       "value": 34,
       "class": "direct",
-      "status": "partial",
-      "reachability": "census",
+      "status": "frontend_unreachable",
+      "reachability": "none",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -2827,27 +2810,7 @@
           "id": "any"
         }
       ],
-      "runtime_symbols": [
-        "luauc_runtime_v1_buffer_bounds_error",
-        "luauc_runtime_v1_builtin_number",
-        "luauc_runtime_v1_builtin_type_error",
-        "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_safe_env",
-        "luauc_runtime_v1_close_upvalues",
-        "luauc_runtime_v1_do_arith",
-        "luauc_runtime_v1_dupclosure",
-        "luauc_runtime_v1_exchange_continuation",
-        "luauc_runtime_v1_fastcall",
-        "luauc_runtime_v1_finish_compiled_call",
-        "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_prep_varargs",
-        "luauc_runtime_v1_prepare_compiled_call",
-        "luauc_runtime_v1_require_static",
-        "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_get_string"
-      ],
+      "runtime_symbols": [],
       "wasm_features": [],
       "may_allocate": false,
       "may_raise": false,
@@ -2855,28 +2818,18 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:583; CodeGen/src/IrLoweringA64.cpp:773",
-      "census_sources": [
-        "natural_buffer"
-      ],
-      "census_forms": [
-        "any"
-      ],
-      "lowered_sources": [
-        "natural_buffer"
-      ],
-      "executed_gates": [
-        "//conformance:runtime_measurement_test"
-      ],
-      "tests": [
-        "//conformance/tests:natural_sources_test"
-      ]
+      "census_sources": [],
+      "census_forms": [],
+      "lowered_sources": [],
+      "executed_gates": [],
+      "tests": []
     },
     {
       "command": "SEXTI16_INT",
       "value": 35,
       "class": "direct",
-      "status": "partial",
-      "reachability": "census",
+      "status": "frontend_unreachable",
+      "reachability": "none",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -2884,27 +2837,7 @@
           "id": "any"
         }
       ],
-      "runtime_symbols": [
-        "luauc_runtime_v1_buffer_bounds_error",
-        "luauc_runtime_v1_builtin_number",
-        "luauc_runtime_v1_builtin_type_error",
-        "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_safe_env",
-        "luauc_runtime_v1_close_upvalues",
-        "luauc_runtime_v1_do_arith",
-        "luauc_runtime_v1_dupclosure",
-        "luauc_runtime_v1_exchange_continuation",
-        "luauc_runtime_v1_fastcall",
-        "luauc_runtime_v1_finish_compiled_call",
-        "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_prep_varargs",
-        "luauc_runtime_v1_prepare_compiled_call",
-        "luauc_runtime_v1_require_static",
-        "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_get_string"
-      ],
+      "runtime_symbols": [],
       "wasm_features": [],
       "may_allocate": false,
       "may_raise": false,
@@ -2912,21 +2845,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:588; CodeGen/src/IrLoweringA64.cpp:778",
-      "census_sources": [
-        "natural_buffer"
-      ],
-      "census_forms": [
-        "any"
-      ],
-      "lowered_sources": [
-        "natural_buffer"
-      ],
-      "executed_gates": [
-        "//conformance:runtime_measurement_test"
-      ],
-      "tests": [
-        "//conformance/tests:natural_sources_test"
-      ]
+      "census_sources": [],
+      "census_forms": [],
+      "lowered_sources": [],
+      "executed_gates": [],
+      "tests": []
     },
     {
       "command": "ADD_NUM",
@@ -3252,7 +3175,6 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -5789,8 +5711,8 @@
       "command": "EXTRACT_VEC",
       "value": 81,
       "class": "direct",
-      "status": "partial",
-      "reachability": "census",
+      "status": "frontend_unreachable",
+      "reachability": "none",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -5798,43 +5720,7 @@
           "id": "any"
         }
       ],
-      "runtime_symbols": [
-        "luauc_runtime_v1_barrier_table_forward",
-        "luauc_runtime_v1_builtin_number",
-        "luauc_runtime_v1_builtin_type_error",
-        "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_readonly",
-        "luauc_runtime_v1_check_safe_env",
-        "luauc_runtime_v1_close_upvalues",
-        "luauc_runtime_v1_compare_any",
-        "luauc_runtime_v1_do_arith",
-        "luauc_runtime_v1_dup_table",
-        "luauc_runtime_v1_dupclosure",
-        "luauc_runtime_v1_dupclosure_capture",
-        "luauc_runtime_v1_exchange_continuation",
-        "luauc_runtime_v1_fastcall",
-        "luauc_runtime_v1_finish_compiled_call",
-        "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_libm",
-        "luauc_runtime_v1_load_constant",
-        "luauc_runtime_v1_new_table",
-        "luauc_runtime_v1_new_table_deferred",
-        "luauc_runtime_v1_node_slot_match",
-        "luauc_runtime_v1_prep_varargs",
-        "luauc_runtime_v1_prepare_compiled_call",
-        "luauc_runtime_v1_require_static",
-        "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_list",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_get_string",
-        "luauc_runtime_v1_table_insert_append",
-        "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_type_name"
-      ],
+      "runtime_symbols": [],
       "wasm_features": [],
       "may_allocate": false,
       "may_raise": false,
@@ -5842,21 +5728,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1449; CodeGen/src/IrLoweringA64.cpp:1261",
-      "census_sources": [
-        "fast_builtins"
-      ],
-      "census_forms": [
-        "any"
-      ],
-      "lowered_sources": [
-        "fast_builtins"
-      ],
-      "executed_gates": [
-        "//conformance:runtime_measurement_test"
-      ],
-      "tests": [
-        "//conformance/tests:builtins_test"
-      ]
+      "census_sources": [],
+      "census_forms": [],
+      "lowered_sources": [],
+      "executed_gates": [],
+      "tests": []
     },
     {
       "command": "NOT_ANY",
@@ -6323,7 +6199,6 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -6606,7 +6481,6 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -8176,8 +8050,8 @@
       "command": "TRUNCATE_UINT",
       "value": 117,
       "class": "direct",
-      "status": "partial",
-      "reachability": "census",
+      "status": "frontend_unreachable",
+      "reachability": "none",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -8185,27 +8059,7 @@
           "id": "any"
         }
       ],
-      "runtime_symbols": [
-        "luauc_runtime_v1_buffer_bounds_error",
-        "luauc_runtime_v1_builtin_number",
-        "luauc_runtime_v1_builtin_type_error",
-        "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_safe_env",
-        "luauc_runtime_v1_close_upvalues",
-        "luauc_runtime_v1_do_arith",
-        "luauc_runtime_v1_dupclosure",
-        "luauc_runtime_v1_exchange_continuation",
-        "luauc_runtime_v1_fastcall",
-        "luauc_runtime_v1_finish_compiled_call",
-        "luauc_runtime_v1_get_global",
-        "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_prep_varargs",
-        "luauc_runtime_v1_prepare_compiled_call",
-        "luauc_runtime_v1_require_static",
-        "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_table_get_string"
-      ],
+      "runtime_symbols": [],
       "wasm_features": [],
       "may_allocate": false,
       "may_raise": false,
@@ -8213,21 +8067,11 @@
       "safepoint": false,
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2009; CodeGen/src/IrLoweringA64.cpp:2005",
-      "census_sources": [
-        "natural_buffer"
-      ],
-      "census_forms": [
-        "any"
-      ],
-      "lowered_sources": [
-        "natural_buffer"
-      ],
-      "executed_gates": [
-        "//conformance:runtime_measurement_test"
-      ],
-      "tests": [
-        "//conformance/tests:natural_sources_test"
-      ]
+      "census_sources": [],
+      "census_forms": [],
+      "lowered_sources": [],
+      "executed_gates": [],
+      "tests": []
     },
     {
       "command": "ADJUST_STACK_TO_REG",
@@ -9782,8 +9626,8 @@
       "command": "CHECK_NODE_VALUE",
       "value": 139,
       "class": "guard_slowpath",
-      "status": "partial",
-      "reachability": "census",
+      "status": "frontend_unreachable",
+      "reachability": "none",
       "general_arm": true,
       "cluster_only": false,
       "forms": [
@@ -9791,27 +9635,7 @@
           "id": "any"
         }
       ],
-      "runtime_symbols": [
-        "luauc_runtime_v1_barrier_table_forward",
-        "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_value",
-        "luauc_runtime_v1_check_readonly",
-        "luauc_runtime_v1_close_upvalues",
-        "luauc_runtime_v1_do_arith",
-        "luauc_runtime_v1_dupclosure",
-        "luauc_runtime_v1_exchange_continuation",
-        "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_new_table",
-        "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
-        "luauc_runtime_v1_prep_varargs",
-        "luauc_runtime_v1_return",
-        "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_table_get_string",
-        "luauc_runtime_v1_table_set_string"
-      ],
+      "runtime_symbols": [],
       "wasm_features": [],
       "may_allocate": false,
       "may_raise": false,
@@ -9819,27 +9643,11 @@
       "safepoint": false,
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2374; CodeGen/src/IrLoweringA64.cpp:2472",
-      "census_sources": [
-        "dynamic_hash_table",
-        "embed_lib"
-      ],
-      "census_forms": [
-        "any"
-      ],
-      "lowered_sources": [
-        "dynamic_hash_table",
-        "embed_lib"
-      ],
-      "executed_gates": [
-        "//hosts/wasmtime:parity_test",
-        "//conformance:runtime_measurement_test"
-      ],
-      "tests": [
-        "//conformance/tests:tables_test",
-        "//conformance/tests:frontend_to_wasm_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
-      ]
+      "census_sources": [],
+      "census_forms": [],
+      "lowered_sources": [],
+      "executed_gates": [],
+      "tests": []
     },
     {
       "command": "CHECK_BUFFER_LEN",
@@ -11322,7 +11130,6 @@
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -15254,7 +15061,7 @@
       "kind": "Linearized",
       "value": 3,
       "treatment": "preserve deterministic CFG order without assuming fallthrough semantics",
-      "status": "admitted"
+      "status": "unimplemented"
     },
     {
       "kind": "ExitSync",
@@ -15269,5 +15076,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "05450ef325df2af3260dded427fc69f18317cf5511befa94ba751e38f53d1c3a"
+  "canonical_hash": "bb7376b72cd6da1512b4e53928c225ad2416780fdabb5a4dca08b33f775617fc"
 }

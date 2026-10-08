@@ -15,7 +15,7 @@
 #define LUAUC_FRONTEND_SNAPSHOT_V1_NO_ID UINT32_C(0xffffffff)
 
 // The snapshot is deliberately taken after upstream dead-block elimination, CFG analysis,
-// constant propagation, and block linearization, but before dead-store marking and native
+// constant propagation, but without block cloning and before dead-store marking and native
 // lowering. Dead-store marking creates target-lowering side tables; the Zig normalizer owns that
 // optional optimization instead of importing x64/A64 backend state into this protocol.
 #define LUAUC_FRONTEND_SNAPSHOT_V1_FLAG_PRE_DSE_IR UINT32_C(0x00000001)

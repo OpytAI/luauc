@@ -566,7 +566,7 @@ fn emitInstructionRangeInner(self: anytype, start: u32, finish: u32, block: snap
         progress.* = instruction_id;
         if (terminated)
             return Error.InvalidBlockTermination;
-        if (instruction_id < self.continuation_indices.len) {
+        if (instruction_id != self.interrupt_entry and instruction_id < self.continuation_indices.len) {
             const continuation_index = self.continuation_indices[instruction_id];
             if (continuation_index < self.call_continuations.len) {
                 const continuation = self.call_continuations[continuation_index];
@@ -928,8 +928,10 @@ pub noinline fn emitCallContinuation(self: anytype, continuation: CallContinuati
         },
         .interrupt_suffix => |suffix| {
             const block = try self.snapshot.irBlock(self.function, suffix.block_id);
-            try self.emitInterrupt(suffix.interrupt_id, try self.instruction(suffix.interrupt_id));
-            const terminated = try self.emitInstructionRange(suffix.suffix_start, suffix.block_finish, block);
+            const saved_entry = self.interrupt_entry;
+            self.interrupt_entry = suffix.interrupt_id;
+            defer self.interrupt_entry = saved_entry;
+            const terminated = try self.emitInstructionRange(suffix.interrupt_id, suffix.block_finish, block);
             if (!terminated)
                 return Error.InvalidBlockTermination;
         },
@@ -1254,6 +1256,8 @@ fn findReturnCycle(self: anytype, header_id: u32, start_id: u32) Error!?DirectLo
 }
 
 fn emitGenericForLoopBlock(self: anytype, block_id: u32) Error!bool {
+    if (self.interrupt_helper != null)
+        return false;
     if (self.plan.blockKind(block_id) != .generic_iteration)
         return false;
     const header = try self.snapshot.irBlock(self.function, block_id);

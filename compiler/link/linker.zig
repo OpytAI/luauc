@@ -851,6 +851,7 @@ const PackModel = struct {
     data: std.ArrayList(DataSegment),
     element_payload: []const u8,
     element_count: u32,
+    owned_element_payload: ?[]u8 = null,
 
     fn parse(allocator: std.mem.Allocator, bytes: []const u8, profile: runtime_profile.Profile, limits: Limits) Error!PackModel {
         var module = try CoreModule.parse(allocator, bytes, limits);
@@ -929,6 +930,7 @@ const PackModel = struct {
     }
 
     fn deinit(self: *PackModel) void {
+        if (self.owned_element_payload) |bytes| self.allocator.free(bytes);
         deinitData(self.allocator, &self.data);
         deinitBodies(self.allocator, &self.bodies);
         self.exports.deinit(self.allocator);
@@ -953,6 +955,157 @@ fn functionType(types: *const TypeTable, imports: *const Imports, defined_types:
     if (type_index >= types.encodings.items.len)
         return Error.InvalidType;
     return types.encodings.items[type_index];
+}
+
+const FunctionReference = struct {
+    start: usize,
+    finish: usize,
+    index: u32,
+};
+
+fn packElementReferences(allocator: std.mem.Allocator, payload: []const u8) Error!std.ArrayList(FunctionReference) {
+    var references: std.ArrayList(FunctionReference) = .empty;
+    errdefer references.deinit(allocator);
+    var reader = Reader{ .bytes = payload };
+    const segments = try reader.readUleb32();
+    for (0..segments) |_| {
+        const flags = try reader.readUleb32();
+        if (flags == 2) {
+            if (try reader.readUleb32() != 0) return Error.InvalidElement;
+        } else if (flags != 0) return Error.InvalidElement;
+        if (try reader.readByte() != 0x41) return Error.InvalidElement;
+        _ = try reader.readSleb32();
+        if (try reader.readByte() != 0x0b) return Error.InvalidElement;
+        if (flags == 2 and try reader.readByte() != 0) return Error.InvalidElement;
+        const count = try reader.readUleb32();
+        if (count > reader.remaining()) return Error.InvalidElement;
+        for (0..count) |_| {
+            const start = reader.cursor;
+            const index = try reader.readUleb32();
+            try references.append(allocator, .{ .start = start, .finish = reader.cursor, .index = index });
+        }
+    }
+    if (!reader.done()) return Error.InvalidElement;
+    return references;
+}
+
+fn rewriteFunctionReferences(allocator: std.mem.Allocator, bytes: []const u8, references: []const FunctionReference, mapping: []const u32) Error![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    var cursor: usize = 0;
+    for (references) |reference| {
+        if (reference.index >= mapping.len or mapping[reference.index] == std.math.maxInt(u32))
+            return Error.InvalidFunction;
+        try output.appendSlice(allocator, bytes[cursor..reference.start]);
+        try appendUleb(&output, allocator, mapping[reference.index]);
+        cursor = reference.finish;
+    }
+    try output.appendSlice(allocator, bytes[cursor..]);
+    return output.toOwnedSlice(allocator);
+}
+
+fn markPackFunction(allocator: std.mem.Allocator, live: []bool, pending: *std.ArrayList(u32), index: u32) Error!void {
+    if (index >= live.len) return Error.InvalidFunction;
+    if (live[index]) return;
+    try pending.append(allocator, index);
+    live[index] = true;
+}
+
+fn prunePackFunctions(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectModel, profile: runtime_profile.Profile) Error!void {
+    const imported = pack.imports.functions.items.len;
+    const count = imported + pack.bodies.items.len;
+    const live = try allocator.alloc(bool, count);
+    defer allocator.free(live);
+    @memset(live, false);
+    var pending: std.ArrayList(u32) = .empty;
+    defer pending.deinit(allocator);
+    for (0..imported) |index| try markPackFunction(allocator, live, &pending, @intCast(index));
+    for (object.imports.functions.items) |item| {
+        const exported = try findExport(pack.exports.items, item.name, external_kind.function);
+        try markPackFunction(allocator, live, &pending, exported.index);
+    }
+    for (0..profile.export_count) |index| {
+        const retained = profile.retainedExport(@intCast(index)) catch return Error.InvalidExport;
+        if (@intFromEnum(retained.kind) != external_kind.function) continue;
+        const exported = try findExport(pack.exports.items, retained.name, external_kind.function);
+        try markPackFunction(allocator, live, &pending, exported.index);
+    }
+    var elements = try packElementReferences(allocator, pack.element_payload);
+    defer elements.deinit(allocator);
+    for (elements.items) |reference| try markPackFunction(allocator, live, &pending, reference.index);
+
+    const references = try allocator.alloc(std.ArrayList(FunctionReference), pack.bodies.items.len);
+    for (references) |*items| items.* = .empty;
+    defer {
+        for (references) |*items| items.deinit(allocator);
+        allocator.free(references);
+    }
+    var ops: std.ArrayList(ArmOp) = .empty;
+    defer ops.deinit(allocator);
+    var cursor: usize = 0;
+    while (cursor < pending.items.len) : (cursor += 1) {
+        const index = pending.items[cursor];
+        if (index < imported) continue;
+        const defined = index - imported;
+        const bytes = pack.bodies.items[defined].bytes;
+        var reader = Reader{ .bytes = bytes };
+        const groups = try reader.readUleb32();
+        for (0..groups) |_| {
+            _ = try reader.readUleb32();
+            _ = try reader.readByte();
+        }
+        ops.clearRetainingCapacity();
+        try parseArmExpr(allocator, bytes, reader.cursor, &ops);
+        for (ops.items) |item| {
+            if (item.op != 0x10) continue;
+            const target: u32 = @bitCast(item.imm);
+            try references[defined].append(allocator, .{ .start = item.at + 1, .finish = item.at + item.len, .index = target });
+            try markPackFunction(allocator, live, &pending, target);
+        }
+    }
+    if (pending.items.len == count) return;
+    const mapping = try allocator.alloc(u32, count);
+    defer allocator.free(mapping);
+    @memset(mapping, std.math.maxInt(u32));
+    var next: u32 = 0;
+    for (live, 0..) |retained, index| {
+        if (!retained) continue;
+        mapping[index] = next;
+        next += 1;
+    }
+    var bodies: std.ArrayList(Body) = .empty;
+    errdefer deinitBodies(allocator, &bodies);
+    var types: std.ArrayList(u32) = .empty;
+    errdefer types.deinit(allocator);
+    var exports: std.ArrayList(Export) = .empty;
+    errdefer exports.deinit(allocator);
+    try bodies.ensureTotalCapacity(allocator, next - imported);
+    try types.ensureTotalCapacity(allocator, next - imported);
+    for (pack.bodies.items, 0..) |body, index| {
+        if (!live[imported + index]) continue;
+        const bytes = try rewriteFunctionReferences(allocator, body.bytes, references[index].items, mapping);
+        bodies.appendAssumeCapacity(.{ .payload_offset = 0, .bytes = bytes });
+        types.appendAssumeCapacity(pack.function_types.items[index]);
+    }
+    for (pack.exports.items) |item| {
+        var exported = item;
+        if (item.kind == external_kind.function) {
+            if (item.index >= mapping.len) return Error.InvalidExport;
+            if (!live[item.index]) continue;
+            exported.index = mapping[item.index];
+        }
+        try exports.append(allocator, exported);
+    }
+    const element_payload = try rewriteFunctionReferences(allocator, pack.element_payload, elements.items, mapping);
+    deinitBodies(allocator, &pack.bodies);
+    pack.function_types.deinit(allocator);
+    pack.exports.deinit(allocator);
+    if (pack.owned_element_payload) |bytes| allocator.free(bytes);
+    pack.bodies = bodies;
+    pack.function_types = types;
+    pack.exports = exports;
+    pack.element_payload = element_payload;
+    pack.owned_element_payload = element_payload;
 }
 
 fn findExport(exports: []const Export, name: []const u8, kind: u8) Error!Export {
@@ -1320,7 +1473,7 @@ fn parseArmExpr(allocator: std.mem.Allocator, bytes: []const u8, expr_at: usize,
                 }
             }
         } else if (op == 0x0c or op == 0x0d or op == 0x10 or (op >= 0x20 and op <= 0x24)) {
-            imm = @intCast(try reader.readUleb32());
+            imm = @bitCast(try reader.readUleb32());
             if (op >= 0x20 and op <= 0x22) class = 2;
         } else if (op == 0x0e) {
             const count = try reader.readUleb32();
@@ -2053,6 +2206,7 @@ pub fn link(allocator: std.mem.Allocator, runtime_pack: []const u8, package_obje
     defer pack.deinit();
     var object = try ObjectModel.parse(allocator, package_object, limits);
     defer object.deinit();
+    try prunePackFunctions(allocator, &pack, &object, profile);
     var resolved = try resolve(allocator, &pack, &object, profile, limits);
     defer resolved.deinit();
     try applyRelocations(&object, &resolved);
@@ -2171,6 +2325,89 @@ pub fn validateFinal(allocator: std.mem.Allocator, bytes: []const u8, profile: r
     }
     var data = parseData(allocator, module.payload(section.data).?, limits.max_data_segments) catch return Error.InvalidFinalModule;
     defer deinitData(allocator, &data);
+}
+
+fn exercisePackPruning(allocator: std.mem.Allocator) !void {
+    var pack: PackModel = undefined;
+    pack.bodies = .empty;
+    defer deinitBodies(allocator, &pack.bodies);
+    pack.function_types = .empty;
+    defer pack.function_types.deinit(allocator);
+    pack.exports = .empty;
+    defer pack.exports.deinit(allocator);
+    pack.imports = .{ .allocator = allocator };
+    defer pack.imports.deinit();
+    pack.owned_element_payload = null;
+    defer if (pack.owned_element_payload) |bytes| allocator.free(bytes);
+    pack.element_payload = &.{ 1, 0, 0x41, 1, 0x0b, 1, 3 };
+    try pack.imports.functions.append(allocator, .{ .module = "host", .name = "host", .kind = 0 });
+    const bodies = [_][]const u8{
+        &.{ 0, 0x10, 1, 0x0b },
+        &.{ 0, 0x10, 4, 0x0b },
+        &.{ 0, 0x10, 3, 0x0b },
+        &.{ 0, 0x10, 0, 0x0b },
+        &.{ 0, 0x10, 6, 0x0b },
+        &.{ 0, 0x10, 5, 0x0b },
+        &.{ 0, 0x0b },
+    };
+    try pack.bodies.ensureTotalCapacity(allocator, bodies.len);
+    for (bodies) |body| {
+        const bytes = try allocator.dupe(u8, body);
+        pack.bodies.appendAssumeCapacity(.{ .bytes = bytes, .payload_offset = 0 });
+        try pack.function_types.append(allocator, 0);
+    }
+    try pack.exports.appendSlice(allocator, &.{
+        .{ .name = "root", .kind = 0, .index = 2 },
+        .{ .name = "unused", .kind = 0, .index = 1 },
+        .{ .name = "api", .kind = 0, .index = 7 },
+        .{ .name = "global", .kind = 3, .index = 9 },
+    });
+    var object: ObjectModel = undefined;
+    object.imports = .{ .allocator = allocator };
+    defer object.imports.deinit();
+    try object.imports.functions.append(allocator, .{ .module = "runtime", .name = "root", .kind = 0 });
+    var profile = dummyProfile();
+    profile.bytes = &.{ 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'a', 'p', 'i' };
+    profile.string_offset = 16;
+    profile.string_size = 3;
+    profile.export_count = 1;
+    try prunePackFunctions(allocator, &pack, &object, profile);
+    try std.testing.expectEqual(@as(usize, 4), pack.bodies.items.len);
+    try std.testing.expectEqual(@as(usize, 4), pack.function_types.items.len);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0x10, 3, 0x0b }, pack.bodies.items[0].bytes);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0x10, 2, 0x0b }, pack.bodies.items[1].bytes);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0x10, 0, 0x0b }, pack.bodies.items[2].bytes);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0x0b }, pack.bodies.items[3].bytes);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 0, 0x41, 1, 0x0b, 1, 2 }, pack.element_payload);
+    try std.testing.expectEqual(@as(u32, 1), (try findExport(pack.exports.items, "root", 0)).index);
+    try std.testing.expectEqual(@as(u32, 4), (try findExport(pack.exports.items, "api", 0)).index);
+    try std.testing.expectEqual(@as(u32, 9), (try findExport(pack.exports.items, "global", 3)).index);
+    try std.testing.expectError(Error.MissingRuntimeSymbol, findExport(pack.exports.items, "unused", 0));
+    try prunePackFunctions(allocator, &pack, &object, profile);
+    try std.testing.expectEqual(@as(usize, 4), pack.bodies.items.len);
+}
+
+test "pack pruning retains API and table roots, closes cycles, and handles allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exercisePackPruning, .{});
+}
+
+test "pack function references preserve offsets and reject invalid targets" {
+    const allocator = std.testing.allocator;
+    var references = try packElementReferences(allocator, &.{ 1, 2, 0, 0x41, 1, 0x0b, 0, 1, 0x80, 1 });
+    defer references.deinit(allocator);
+    var mapping = [_]u32{std.math.maxInt(u32)} ** 129;
+    mapping[128] = 1;
+    const bytes = try rewriteFunctionReferences(allocator, &.{ 1, 2, 0, 0x41, 1, 0x0b, 0, 1, 0x80, 1 }, references.items, &mapping);
+    defer allocator.free(bytes);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 0, 0x41, 1, 0x0b, 0, 1, 1 }, bytes);
+    var live = [_]bool{false};
+    var pending: std.ArrayList(u32) = .empty;
+    defer pending.deinit(allocator);
+    try std.testing.expectError(Error.InvalidFunction, markPackFunction(allocator, &live, &pending, 1));
+    var ops: std.ArrayList(ArmOp) = .empty;
+    defer ops.deinit(allocator);
+    try parseArmExpr(allocator, &.{ 0x10, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x0b }, 0, &ops);
+    try std.testing.expectEqual(std.math.maxInt(u32), @as(u32, @bitCast(ops.items[0].imm)));
 }
 
 test "rejects malformed modules and oversized inputs deterministically" {

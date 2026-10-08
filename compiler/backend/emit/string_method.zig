@@ -77,6 +77,8 @@ pub fn stringMethodShape(
     parameter_count: i32,
     result_count: i32,
 ) Error!?StringMethodShape {
+    if (self.interrupt_helper != null)
+        return null;
     if (parameter_count < 2 or parameter_count > 4 or result_count < 1)
         return null;
     const site = (try namecallSite(self, call_id, function_register)) orelse return null;

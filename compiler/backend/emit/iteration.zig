@@ -413,6 +413,8 @@ pub noinline fn emitGeneralForgLoopFallback(
 }
 
 pub noinline fn emitGenericIterationCall(self: anytype, pattern: GenericIterationPattern) Error!void {
+    if (self.interrupt_helper != null)
+        return emitForgLoopHelper(self, pattern);
     // ipairs (aux 0x80000002) stops at the first hole. The array step is a few loads.
     // Every other proved builtin cursor walks the array, skipping holes, then the live hash nodes.
     // A cursor that fails the same tag proof still enters the pinned helper.
@@ -933,53 +935,53 @@ pub noinline fn emitArrayOperation(
     operation: ArrayOperationKind,
 ) Error!void {
     shared: {
-    switch (operation) {
-        .set => {
-            // A package larger than the inline sibling chain keeps the attempt at status 0.
-            if (self.interrupt_helper != null) {
+        switch (operation) {
+            .set => {
+                // A package larger than the inline sibling chain keeps the attempt at status 0.
+                if (self.interrupt_helper != null) {
+                    try self.body.localGet(self.allocator, 0);
+                    try self.body.i32Const(self.allocator, @intCast(pattern.table));
+                    try self.body.i32Const(self.allocator, @intCast(pattern.source));
+                    try self.body.i32Const(self.allocator, @intCast(pattern.index));
+                    try self.body.call(self.allocator, self.array_set orelse return Error.UnsupportedCommand);
+                    try self.emitReloadBase();
+                    break :shared;
+                }
+                try emitConstantArrayAttempt(self, .set, pattern.table, pattern.source, pattern.index);
+                try emitArrayMiss(self);
                 try self.body.localGet(self.allocator, 0);
                 try self.body.i32Const(self.allocator, @intCast(pattern.table));
                 try self.body.i32Const(self.allocator, @intCast(pattern.source));
                 try self.body.i32Const(self.allocator, @intCast(pattern.index));
                 try self.body.call(self.allocator, self.array_set orelse return Error.UnsupportedCommand);
                 try self.emitReloadBase();
-                break :shared;
-            }
-            try emitConstantArrayAttempt(self, .set, pattern.table, pattern.source, pattern.index);
-            try emitArrayMiss(self);
-            try self.body.localGet(self.allocator, 0);
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.i32Const(self.allocator, @intCast(pattern.source));
-            try self.body.i32Const(self.allocator, @intCast(pattern.index));
-            try self.body.call(self.allocator, self.array_set orelse return Error.UnsupportedCommand);
-            try self.emitReloadBase();
-            try emitArrayMissEnd(self);
-        },
-        .get => {
-            if (self.interrupt_helper != null) {
+                try emitArrayMissEnd(self);
+            },
+            .get => {
+                if (self.interrupt_helper != null) {
+                    try self.body.localGet(self.allocator, 0);
+                    try self.body.i32Const(self.allocator, @intCast(pattern.destination));
+                    try self.body.i32Const(self.allocator, @intCast(pattern.table));
+                    try self.body.i32Const(self.allocator, @intCast(pattern.index));
+                    try self.body.call(self.allocator, self.array_get orelse return Error.UnsupportedCommand);
+                    try self.emitReloadBase();
+                    break :shared;
+                }
+                try emitConstantArrayAttempt(self, .get, pattern.table, pattern.destination, pattern.index);
+                try emitArrayMiss(self);
                 try self.body.localGet(self.allocator, 0);
                 try self.body.i32Const(self.allocator, @intCast(pattern.destination));
                 try self.body.i32Const(self.allocator, @intCast(pattern.table));
                 try self.body.i32Const(self.allocator, @intCast(pattern.index));
                 try self.body.call(self.allocator, self.array_get orelse return Error.UnsupportedCommand);
                 try self.emitReloadBase();
-                break :shared;
-            }
-            try emitConstantArrayAttempt(self, .get, pattern.table, pattern.destination, pattern.index);
-            try emitArrayMiss(self);
-            try self.body.localGet(self.allocator, 0);
-            try self.body.i32Const(self.allocator, @intCast(pattern.destination));
-            try self.body.i32Const(self.allocator, @intCast(pattern.table));
-            try self.body.i32Const(self.allocator, @intCast(pattern.index));
-            try self.body.call(self.allocator, self.array_get orelse return Error.UnsupportedCommand);
-            try self.emitReloadBase();
-            try emitArrayMissEnd(self);
-        },
-        .len => {
-            try self.emitPlainTableLen(pattern.destination, pattern.table);
-            try self.publishLengthSlot(pattern.start + 5, pattern.destination);
-        },
-    }
+                try emitArrayMissEnd(self);
+            },
+            .len => {
+                try self.emitPlainTableLen(pattern.destination, pattern.table);
+                try self.publishLengthSlot(pattern.start + 5, pattern.destination);
+            },
+        }
     }
     if (self.rejoin_fallthrough)
         return;

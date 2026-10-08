@@ -9,6 +9,7 @@ const ROOTS = [
   "compiler/compiler_host.zig",
   "compiler/compiler_entry.zig",
   "compiler/link",
+  "compiler/model",
   "compiler/backend/plan",
   "compiler/backend/emit",
   "compiler/backend/lower",

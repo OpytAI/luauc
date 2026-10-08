@@ -1,4 +1,22 @@
-load("@rules_zig//zig:defs.bzl", "zig_library")
+load("@rules_zig//zig:defs.bzl", "zig_library", "zig_test")
+
+filegroup(
+    name = "compiler_build_digest_inputs",
+    srcs = glob(["*.zig"], exclude = ["*.test.zig"]),
+    visibility = ["//visibility:public"],
+)
+
+zig_test(
+    name = "model_test",
+    main = "model.zig",
+    deps = [
+        ":diagnostics",
+        ":runtime_abi",
+        ":static_package_v1",
+        "//compiler/ir:frontend_snapshot_v1",
+        "//compiler/wasm:object",
+    ],
+)
 
 zig_library(
     name = "runtime_abi",

@@ -7,6 +7,7 @@ def _source_env(name, label):
 
 COMMON_DATA = [
     "harness.mjs",
+    "linearized_graphs.json",
     "//compiler/backend:backend_wasm",
     "//frontend:frontend_wasm",
     WASM_LD,

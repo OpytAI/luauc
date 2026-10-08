@@ -455,6 +455,7 @@ fn lowerFunction(
     capture_run: [backend_context.max_uniform_capture_run + 1]?wasm.FunctionRef,
     move_reg: ?wasm.FunctionRef,
     scalar_publish: backend_context.ScalarPublish,
+    constant_array_helper: ?wasm.FunctionRef,
 ) Error!wasm.FunctionRef {
     diagnostics.enterFunction(function_id);
     diagnostics.trace("lower");
@@ -555,6 +556,7 @@ fn lowerFunction(
         .sibling_trampoline = sibling_trampoline,
         .fast_lua_call = fast_lua_call,
         .interrupt_helper = interrupt_helper,
+        .constant_array_helper = constant_array_helper,
         .exchange_helper = exchange_helper,
         .line_helper = line_helper,
         .prepare_helper = prepare_helper,
@@ -1150,7 +1152,7 @@ pub fn build(allocator: std.mem.Allocator, snapshot_bytes: []const u8, function_
     var string_keys = StringKeyPool{};
     defer string_keys.deinit(allocator);
     const imports = try runtime_imports.addRuntimeImports(&object, needs);
-    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, &.{}, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null, null, null, null, null, null, emptyCallPreface(), emptyCaptureRuns(), null, .{});
+    _ = try lowerFunction(allocator, snapshot, function_id, &object, imports, generated_symbol, null, &.{}, 0, proto_id_by_bytecode_id, &string_keys, null, &.{}, null, null, null, null, null, null, emptyCallPreface(), emptyCaptureRuns(), null, .{}, null);
     try emitStringKeyData(&object, string_keys);
     return object.emit();
 }
@@ -1200,6 +1202,10 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     const capture_run = try packageCaptureRuns(allocator, &object, imports, function_refs);
     const move_reg = try packageMoveReg(allocator, &object, function_refs);
     const scalar_publish = try packageScalarPublish(allocator, &object, function_refs);
+    const constant_array_helper = if (function_refs.len > backend_context.max_inline_direct_siblings)
+        try backend_context.emitConstantArrayHelper(allocator, &object)
+    else
+        null;
     function_id = 0;
     while (function_id < snapshot.header.ir_function_count) : (function_id += 1) {
         const symbol_name = try std.fmt.allocPrint(allocator, "luauc_runtime_v1_function_{d:0>8}", .{function_id});
@@ -1228,6 +1234,7 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
             capture_run,
             move_reg,
             scalar_publish,
+            constant_array_helper,
         );
     }
     try emitStringKeyData(&object, string_keys);
@@ -1769,6 +1776,10 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
     const capture_run = try packageCaptureRuns(allocator, &object, imports, function_refs);
     const move_reg = try packageMoveReg(allocator, &object, function_refs);
     const scalar_publish = try packageScalarPublish(allocator, &object, function_refs);
+    const constant_array_helper = if (function_refs.len > backend_context.max_inline_direct_siblings)
+        try backend_context.emitConstantArrayHelper(allocator, &object)
+    else
+        null;
     module_id = 0;
     while (module_id < package.module_count) : (module_id += 1) {
         const module = try package.module(module_id);
@@ -1805,6 +1816,7 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
                 capture_run,
                 move_reg,
                 scalar_publish,
+                constant_array_helper,
             );
         }
     }
