@@ -540,6 +540,88 @@ const DataSegment = struct {
     bytes: []u8,
 };
 
+const DataSpan = struct {
+    address: u32,
+    bytes: []const u8,
+};
+
+fn appendDataSpan(output: *std.ArrayList(u8), allocator: std.mem.Allocator, span: DataSpan) Error!void {
+    try output.appendSlice(allocator, &.{ 0, 0x41 });
+    try appendSleb(output, allocator, @bitCast(span.address));
+    try output.append(allocator, 0x0b);
+    try appendUleb(output, allocator, span.bytes.len);
+    try output.appendSlice(allocator, span.bytes);
+}
+
+fn appendSparseData(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    spans: []const DataSpan,
+    memory_bytes: u64,
+    max_segments: u32,
+) Error!void {
+    if (spans.len > max_segments) return Error.ResourceLimit;
+    const sorted = try allocator.dupe(DataSpan, spans);
+    defer allocator.free(sorted);
+    std.mem.sort(DataSpan, sorted, {}, struct {
+        fn less(_: void, left: DataSpan, right: DataSpan) bool {
+            return left.address < right.address;
+        }
+    }.less);
+    var previous_end: u64 = 0;
+    var overlap = false;
+    for (sorted) |span| {
+        const end = @as(u64, span.address) + span.bytes.len;
+        if (end > memory_bytes) return Error.InvalidData;
+        if (span.bytes.len == 0) continue;
+        if (span.address < previous_end) overlap = true;
+        previous_end = @max(previous_end, end);
+    }
+    if (overlap) {
+        try appendUleb(output, allocator, spans.len);
+        for (spans) |span| try appendDataSpan(output, allocator, span);
+        return;
+    }
+    var sparse: std.ArrayList(DataSpan) = .empty;
+    defer sparse.deinit(allocator);
+    for (spans, 0..) |span, span_index| {
+        if (@as(u64, span.address) + span.bytes.len > @as(u64, std.math.maxInt(i32)) + 1) {
+            try sparse.append(allocator, span);
+            continue;
+        }
+        const saved_count = sparse.items.len;
+        const available = max_segments - (spans.len - span_index - 1);
+        var cursor: usize = 0;
+        while (cursor < span.bytes.len) {
+            while (cursor < span.bytes.len and span.bytes[cursor] == 0) : (cursor += 1) {}
+            if (cursor == span.bytes.len) break;
+            const start = cursor;
+            var finish = cursor;
+            while (cursor < span.bytes.len) {
+                if (span.bytes[cursor] != 0) {
+                    cursor += 1;
+                    finish = cursor;
+                    continue;
+                }
+                const zero_start = cursor;
+                while (cursor < span.bytes.len and span.bytes[cursor] == 0) : (cursor += 1) {}
+                if (cursor - zero_start >= 16) break;
+            }
+            try sparse.append(allocator, .{
+                .address = std.math.add(u32, span.address, @intCast(start)) catch return Error.IntegerOverflow,
+                .bytes = span.bytes[start..finish],
+            });
+            if (sparse.items.len > available) break;
+        }
+        if (sparse.items.len > available) {
+            sparse.shrinkRetainingCapacity(saved_count);
+            try sparse.append(allocator, span);
+        }
+    }
+    try appendUleb(output, allocator, sparse.items.len);
+    for (sparse.items) |span| try appendDataSpan(output, allocator, span);
+}
+
 fn parseData(allocator: std.mem.Allocator, payload: []const u8, limit: u32) Error!std.ArrayList(DataSegment) {
     var result: std.ArrayList(DataSegment) = .empty;
     errdefer deinitData(allocator, &result);
@@ -1448,13 +1530,8 @@ fn tightenGeneratedBody(allocator: std.mem.Allocator, body: []const u8, slots: [
     return output.toOwnedSlice(allocator);
 }
 
-const ArmOp = struct {
-    at: u32,
-    len: u16,
-    class: u8,
-    op: u8,
-    imm: i32,
-};
+const control_flow = @import("control_flow.zig");
+const ArmOp = control_flow.Op;
 
 fn parseArmExpr(allocator: std.mem.Allocator, bytes: []const u8, expr_at: usize, ops: *std.ArrayList(ArmOp)) Error!void {
     var reader = Reader{ .bytes = bytes, .cursor = expr_at };
@@ -1534,6 +1611,29 @@ const ArmOcc = struct {
     holes: u16,
     shape: u32,
 };
+
+fn threadGeneratedBodies(allocator: std.mem.Allocator, bodies: [][]u8) Error!void {
+    for (bodies) |*body| {
+        var reader = Reader{ .bytes = body.* };
+        const groups = try reader.readUleb32();
+        for (0..groups) |_| {
+            _ = try reader.readUleb32();
+            _ = try reader.readByte();
+        }
+        var ops: std.ArrayList(ArmOp) = .empty;
+        defer ops.deinit(allocator);
+        parseArmExpr(allocator, body.*, reader.cursor, &ops) catch |err| switch (err) {
+            Error.OutOfMemory => return err,
+            else => continue,
+        };
+        const rewritten = control_flow.threadDispatch(allocator, body.*, ops.items) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.InvalidCode => continue,
+        };
+        allocator.free(body.*);
+        body.* = rewritten;
+    }
+}
 
 const ArmShape = struct {
     occs: std.ArrayList(ArmOcc) = .empty,
@@ -2082,6 +2182,7 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
         limits,
     );
     defer shared.deinit(allocator);
+    try threadGeneratedBodies(allocator, shared.bodies);
 
     // Types: preserve every pack index and append only genuinely new generated signatures.
     try appendUleb(&payload, allocator, type_base + @as(u32, @intCast(shared.extra_types.len)));
@@ -2164,23 +2265,15 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     try appendSection(&output, allocator, section.code, payload.items);
     payload.clearRetainingCapacity();
 
-    try appendUleb(&payload, allocator, pack.data.items.len + object.data.items.len);
+    var data_spans: std.ArrayList(DataSpan) = .empty;
+    defer data_spans.deinit(allocator);
     for (pack.data.items) |segment_value| {
-        try appendUleb(&payload, allocator, 0);
-        try payload.append(allocator, 0x41);
-        try appendSleb(&payload, allocator, @bitCast(segment_value.memory_offset));
-        try payload.append(allocator, 0x0b);
-        try appendUleb(&payload, allocator, segment_value.bytes.len);
-        try payload.appendSlice(allocator, segment_value.bytes);
+        try data_spans.append(allocator, .{ .address = segment_value.memory_offset, .bytes = segment_value.bytes });
     }
     for (object.data.items, 0..) |segment_value, index| {
-        try appendUleb(&payload, allocator, 0);
-        try payload.append(allocator, 0x41);
-        try appendSleb(&payload, allocator, @bitCast(resolved.data_addresses[index]));
-        try payload.append(allocator, 0x0b);
-        try appendUleb(&payload, allocator, segment_value.bytes.len);
-        try payload.appendSlice(allocator, segment_value.bytes);
+        try data_spans.append(allocator, .{ .address = resolved.data_addresses[index], .bytes = segment_value.bytes });
     }
+    try appendSparseData(&payload, allocator, data_spans.items, @as(u64, pack.memory.minimum) * 65536, limits.max_data_segments);
     try appendSection(&output, allocator, section.data, payload.items);
     payload.clearRetainingCapacity();
 
@@ -2325,6 +2418,114 @@ pub fn validateFinal(allocator: std.mem.Allocator, bytes: []const u8, profile: r
     }
     var data = parseData(allocator, module.payload(section.data).?, limits.max_data_segments) catch return Error.InvalidFinalModule;
     defer deinitData(allocator, &data);
+}
+
+fn exerciseThreadedDispatch(allocator: std.mem.Allocator) !void {
+    for ([_]bool{ false, true }) |paged| {
+        for ([_]bool{ false, true }) |nested| {
+            for (0..4) |tail_kind| {
+                const state_live = tail_kind == 1 or tail_kind == 2;
+                for ([_]u8{ 0, 1 }) |target| {
+                    var body: std.ArrayList(u8) = .empty;
+                    defer body.deinit(allocator);
+                    try body.appendSlice(allocator, &.{ 1, 2, 0x7f, 3, 0x40, 2, 0x40, 2, 0x40, 2, 0x40 });
+                    if (paged) {
+                        try body.appendSlice(allocator, &.{ 0x20, 3, 0x41, 1, 0x4f, 4, 0x40, 0x20, 3, 0x41, 1, 0x6b, 0x0e, 1, 2, 3, 5, 0x20, 3, 0x0e, 1, 1, 3, 0x0b });
+                    } else {
+                        try body.appendSlice(allocator, &.{ 0x20, 3, 0x0e, 2, 0, 1, 2 });
+                    }
+                    try body.appendSlice(allocator, &.{ 0x0b, 0x20, 0, 4, 0x40 });
+                    if (nested) try body.appendSlice(allocator, &.{ 0x20, 0, 4, 0x40 });
+                    const replace_at = body.items.len;
+                    try body.appendSlice(allocator, &.{ 0x41, target, 0x21, 3, 0x0c, if (nested) 4 else 3 });
+                    if (nested) try body.append(allocator, 0x0b);
+                    try body.appendSlice(allocator, &.{ 0x0b, 0x0b, 0x20, 0, 4, 0x40 });
+                    if (tail_kind >= 2) {
+                        try body.appendSlice(allocator, &.{ 0x20, 1, 4, 0x40, 0x41, 8, 0x21, 3 });
+                        if (tail_kind == 3) try body.appendSlice(allocator, &.{ 5, 0x41, 9, 0x21, 3 });
+                        try body.append(allocator, 0x0b);
+                    }
+                    try body.appendSlice(allocator, if (tail_kind == 0) &.{ 0x41, 7 } else &.{ 0x20, 3 });
+                    try body.appendSlice(allocator, &.{ 0x0f, 0x0b, 0x0b, 0x41, 9, 0x0f, 0x0b, 0x41, 9, 0x0b });
+                    var ops: std.ArrayList(ArmOp) = .empty;
+                    defer ops.deinit(allocator);
+                    try parseArmExpr(allocator, body.items, 3, &ops);
+                    const rewritten = try control_flow.threadDispatch(allocator, body.items, ops.items);
+                    defer allocator.free(rewritten);
+                    if (target == 1 and !state_live) {
+                        try std.testing.expectEqual(body.items.len - 4, rewritten.len);
+                        try std.testing.expectEqualSlices(u8, &.{ 0x0c, if (nested) 2 else 1 }, rewritten[replace_at..][0..2]);
+                        try std.testing.expectEqualSlices(u8, body.items[replace_at + 6 ..], rewritten[replace_at + 2 ..]);
+                    } else {
+                        try std.testing.expectEqualSlices(u8, body.items, rewritten);
+                    }
+                    try body.insertSlice(allocator, 5, &.{ 0x41, 0, 0x24, 0 });
+                    ops.clearRetainingCapacity();
+                    try parseArmExpr(allocator, body.items, 3, &ops);
+                    const with_effects = try control_flow.threadDispatch(allocator, body.items, ops.items);
+                    defer allocator.free(with_effects);
+                    try std.testing.expectEqualSlices(u8, body.items, with_effects);
+                }
+            }
+        }
+    }
+}
+
+test "dispatch threading preserves live state and handles pages, nesting, and backward edges" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseThreadedDispatch, .{});
+}
+
+fn exerciseSparseData(allocator: std.mem.Allocator) !void {
+    var source = [_]u8{0} ** 256;
+    source[17] = 1;
+    source[33] = 2;
+    source[50] = 3;
+    source[200] = 4;
+    const cases = [_][]const DataSpan{
+        &.{.{ .address = 32, .bytes = &source }},
+        &.{ .{ .address = 32, .bytes = &source }, .{ .address = 49, .bytes = &.{ 0, 7 } } },
+        &.{ .{ .address = 350, .bytes = &.{9} }, .{ .address = 32, .bytes = &source } },
+        &.{.{ .address = 512, .bytes = &.{} }},
+        &.{.{ .address = 100, .bytes = &([_]u8{0} ** 100) }},
+        &.{},
+    };
+    for (cases) |spans| {
+        for ([_]u32{ @intCast(spans.len), 16 }) |limit| {
+            var expected = [_]u8{0} ** 512;
+            for (spans) |span| @memcpy(expected[span.address..][0..span.bytes.len], span.bytes);
+            var encoded: std.ArrayList(u8) = .empty;
+            defer encoded.deinit(allocator);
+            try appendSparseData(&encoded, allocator, spans, expected.len, limit);
+            var actual = [_]u8{0} ** 512;
+            var reader = Reader{ .bytes = encoded.items };
+            const count = try reader.readUleb32();
+            try std.testing.expect(count <= limit);
+            for (0..count) |_| {
+                try std.testing.expectEqual(@as(u8, 0), try reader.readByte());
+                try std.testing.expectEqual(@as(u8, 0x41), try reader.readByte());
+                const address: u32 = @intCast(try reader.readSleb32());
+                try std.testing.expectEqual(@as(u8, 0x0b), try reader.readByte());
+                const size = try reader.readUleb32();
+                @memcpy(actual[address..][0..size], try reader.readBytes(size));
+            }
+            try std.testing.expect(reader.done());
+            try std.testing.expectEqualSlices(u8, &expected, &actual);
+        }
+    }
+}
+
+test "sparse data preserves the memory image, overlaps, and segment limits" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseSparseData, .{});
+    var encoded: std.ArrayList(u8) = .empty;
+    defer encoded.deinit(std.testing.allocator);
+    try std.testing.expectError(Error.InvalidData, appendSparseData(&encoded, std.testing.allocator, &.{.{ .address = 511, .bytes = &.{ 0, 0 } }}, 512, 16));
+    try std.testing.expectError(Error.ResourceLimit, appendSparseData(&encoded, std.testing.allocator, &.{.{ .address = 0, .bytes = &.{1} }}, 512, 0));
+    try appendSparseData(&encoded, std.testing.allocator, &.{.{ .address = std.math.maxInt(i32), .bytes = &.{ 0, 1 } }}, @as(u64, 1) << 32, 16);
+    var reader = Reader{ .bytes = encoded.items };
+    try std.testing.expectEqual(@as(u32, 1), try reader.readUleb32());
+    try std.testing.expectEqual(@as(u8, 0), try reader.readByte());
+    try std.testing.expectEqual(@as(u8, 0x41), try reader.readByte());
+    try std.testing.expectEqual(std.math.maxInt(i32), try reader.readSleb32());
 }
 
 fn exercisePackPruning(allocator: std.mem.Allocator) !void {

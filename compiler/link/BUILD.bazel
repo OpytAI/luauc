@@ -12,6 +12,7 @@ filegroup(
 zig_library(
     name = "linker",
     main = "linker.zig",
+    srcs = ["control_flow.zig"],
     import_name = "luauc_linker",
     visibility = ["//visibility:public"],
     deps = ["//schema:runtime_profile_v1"],
@@ -20,6 +21,7 @@ zig_library(
 zig_test(
     name = "linker_test",
     main = "linker.zig",
+    srcs = ["control_flow.zig"],
     deps = ["//schema:runtime_profile_v1"],
 )
 

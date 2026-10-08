@@ -23,6 +23,22 @@ js_test(
 )
 
 js_test(
+    name = "control_flow_test",
+    data = [
+        ":host",
+        "//compiler:compiler_wasm",
+        "//profiles/embed:embed_v1_profile",
+        "//profiles/embed:embed_v1_pack",
+    ],
+    entry_point = "control_flow.test.mjs",
+    env = {
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+    },
+)
+
+js_test(
     name = "shared_lowering_test",
     data = [
         ":host",
