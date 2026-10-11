@@ -24,7 +24,6 @@ const ConeMemo = struct {
 };
 
 /// Scratch reused across every region of one function.
-/// The dominator tree depends only on the entry block and the reachable block set.
 const AdmitScratch = struct {
     allocator: std.mem.Allocator,
     blocks: []bool,
@@ -33,9 +32,6 @@ const AdmitScratch = struct {
     block_finish: []u32,
     block_kind: []u8,
     pending: std.ArrayList(u32) = .empty,
-    cached_blocks: []bool,
-    cached_entry: u32 = snapshot_v1.no_id,
-    cached_doms: ?FunctionPlan.RegionDominators = null,
     memo_head: []u32,
     memos: std.ArrayList(ConeMemo) = .empty,
     cone_ids: std.ArrayList(u32) = .empty,
@@ -65,8 +61,6 @@ const AdmitScratch = struct {
         errdefer allocator.free(block_finish);
         const block_kind = try allocator.alloc(u8, function.block_count);
         errdefer allocator.free(block_kind);
-        const cached_blocks = try allocator.alloc(bool, function.block_count);
-        errdefer allocator.free(cached_blocks);
         const memo_head = try allocator.alloc(u32, function.block_count);
         errdefer allocator.free(memo_head);
         @memset(memo_head, snapshot_v1.no_id);
@@ -85,7 +79,6 @@ const AdmitScratch = struct {
             .block_start = block_start,
             .block_finish = block_finish,
             .block_kind = block_kind,
-            .cached_blocks = cached_blocks,
             .memo_head = memo_head,
             .rpo_block = rpo_block,
             .rpo_index = rpo_index,
@@ -100,7 +93,6 @@ const AdmitScratch = struct {
         self.allocator.free(self.block_start);
         self.allocator.free(self.block_finish);
         self.allocator.free(self.block_kind);
-        self.allocator.free(self.cached_blocks);
         self.allocator.free(self.memo_head);
         self.allocator.free(self.rpo_block);
         self.allocator.free(self.rpo_index);
@@ -120,8 +112,6 @@ const AdmitScratch = struct {
             self.allocator.free(self.bop_instruction);
             self.allocator.free(self.bop_target);
         }
-        if (self.cached_doms) |*doms|
-            doms.deinit();
     }
 
     /// Instruction operands grouped by consumer block. Built once per function.
@@ -881,69 +871,6 @@ fn saveMemo(
         .entry_consumer = walk.entry_consumer,
     });
     scratch.memo_head[block_id] = index;
-}
-
-const StraightScan = struct {
-    crossed: bool,
-    failed: bool,
-    invalid: bool,
-};
-
-fn scanStraight(
-    snapshot: snapshot_v1.Snapshot,
-    function: snapshot_v1.IrFunction,
-    continuation_block_id: u32,
-    suffix_start: u32,
-    block_finish: u32,
-) Error!StraightScan {
-    var crossed = false;
-    var failed = false;
-    var instruction_id = suffix_start;
-    while (instruction_id <= block_finish) : (instruction_id += 1) {
-        const instruction_value = try snapshot.irInstruction(function, instruction_id);
-        var operand_id: u32 = 0;
-        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-            const operand_value = try snapshot.irOperand(instruction_value, operand_id);
-            switch (operand_value.kind) {
-                .block => {
-                    if (operand_value.value >= function.block_count)
-                        return .{ .crossed = false, .failed = false, .invalid = true };
-                    if (operand_value.value != continuation_block_id)
-                        crossed = true;
-                },
-                .instruction => {
-                    if (operand_value.value < suffix_start or operand_value.value >= instruction_id)
-                        failed = true;
-                },
-                else => {},
-            }
-        }
-    }
-    return .{ .crossed = crossed, .failed = failed, .invalid = false };
-}
-
-fn cachedRegionDominators(
-    allocator: std.mem.Allocator,
-    plan: *FunctionPlan,
-    scratch: *AdmitScratch,
-    continuation_block_id: u32,
-) Error!FunctionPlan.RegionDominators {
-    if (scratch.cached_doms != null and
-        scratch.cached_entry == continuation_block_id and
-        std.mem.eql(bool, scratch.cached_blocks, scratch.blocks))
-    {
-        return scratch.cached_doms.?;
-    }
-
-    if (scratch.cached_doms) |*previous| {
-        previous.deinit();
-        scratch.cached_doms = null;
-    }
-    const doms = try plan.regionDominators(allocator, scratch.blocks, &.{continuation_block_id});
-    @memcpy(scratch.cached_blocks, scratch.blocks);
-    scratch.cached_entry = continuation_block_id;
-    scratch.cached_doms = doms;
-    return doms;
 }
 
 /// Generic FORGLOOP resume enters at the repeat and exit arms, not the function entry.

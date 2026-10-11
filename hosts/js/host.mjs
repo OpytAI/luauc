@@ -10,7 +10,7 @@ function hexBytes(hex) {
 }
 
 // Must match compiler/ir/frontend_identity_v1.zig frontend_contract_sha256.
-const FRONTEND_CONTRACT = hexBytes("9fc68749be627ad350e93fc79dc5db7fb9fc5fcedd16505f34808c690df890de");
+const FRONTEND_CONTRACT = hexBytes("5d484361ef5c642d53343e4be9e593322b84a9669894e79af5a60520b357d949");
 
 function bytes(value) {
   if (typeof value === "string") return encoder.encode(value);

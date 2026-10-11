@@ -1,0 +1,90 @@
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -183,7 +183,8 @@
+     BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
+ 
+     // fast-path: number (when both operands are expected to be a number or are unknown)
+-    if (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
++    if ((!build.hostHooks.compactDynamicOperations || (bcTypes.a != LBC_TYPE_ANY && bcTypes.b != LBC_TYPE_ANY)) &&
++        isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
+     {
+         IrOp fallback = build.fallbackBlock(pcpos);
+ 
+@@ -222,7 +223,8 @@
+     BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
+ 
+     // fast-path: number (when both operands are expected to be a number or are unknown)
+-    if (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
++    if ((!build.hostHooks.compactDynamicOperations || (bcTypes.a != LBC_TYPE_ANY && bcTypes.b != LBC_TYPE_ANY)) &&
++        isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
+     {
+         IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+         build.inst(
+@@ -264,7 +266,8 @@
+         // Note that if the number fast-path is not taken at all code that would have been in the fallback is actually the main path
+         build.beginBlock(fallback);
+     }
+-    else if (FFlag::LuauCodegenInteger2 && isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_INTEGER) &&
++    else if ((!build.hostHooks.compactDynamicOperations || (bcTypes.a != LBC_TYPE_ANY && bcTypes.b != LBC_TYPE_ANY)) &&
++             FFlag::LuauCodegenInteger2 && isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_INTEGER) &&
+              isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_INTEGER))
+     {
+         IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+@@ -334,7 +337,8 @@
+     BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
+ 
+     // fast-path: number (when both operands are expected to be a number or are unknown)
+-    if (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
++    if ((!build.hostHooks.compactDynamicOperations || (bcTypes.a != LBC_TYPE_ANY && bcTypes.b != LBC_TYPE_ANY)) &&
++        isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
+     {
+         IrOp fallback = build.fallbackBlock(pcpos);
+ 
+@@ -1139,7 +1143,14 @@
+         return;
+     }
+ 
+-    IrOp fallback;
++    if (build.hostHooks.compactDynamicOperations && bcTypes.a == LBC_TYPE_ANY)
++    {
++        build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
++        build.inst(IrCmd::DO_ARITH, build.vmReg(ra), build.vmReg(rb), build.vmReg(rb), build.constInt(TM_UNM));
++        return;
++    }
++
++    IrOp fallback;
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+     build.inst(
+@@ -1187,7 +1198,14 @@
+         return;
+     }
+ 
+-    IrOp fallback = build.fallbackBlock(pcpos);
++    if (build.hostHooks.compactDynamicOperations)
++    {
++        build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
++        build.inst(IrCmd::DO_LEN, build.vmReg(ra), build.vmReg(rb));
++        return;
++    }
++
++    IrOp fallback = build.fallbackBlock(pcpos);
+ 
+     IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+     build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+@@ -2068,7 +2086,13 @@
+ 
+     BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
+ 
+-    if (bcTypes.a == LBC_TYPE_VECTOR)
++    if (build.hostHooks.compactDynamicOperations && (bcTypes.a == LBC_TYPE_ANY || bcTypes.a == LBC_TYPE_TABLE))
++    {
++        build.inst(IrCmd::FALLBACK_NAMECALL, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
++        return false;
++    }
++
++    if (bcTypes.a == LBC_TYPE_VECTOR)
+     {
+         build.loadAndCheckTag(build.vmReg(rb), LUA_TVECTOR, build.vmExit(pcpos));
+ 

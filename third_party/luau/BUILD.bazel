@@ -29,6 +29,7 @@ exports_files([
     "patches/0021-aot-vector-fallbacks.patch",
     "patches/0022-aot-straight-add-chain.patch",
     "patches/0023-aot-compact-semantic-operations.patch",
+    "patches/0024-aot-compact-control-operations.patch",
 ])
 
 js_library(
@@ -59,6 +60,7 @@ js_library(
         "patches/0021-aot-vector-fallbacks.patch",
         "patches/0022-aot-straight-add-chain.patch",
         "patches/0023-aot-compact-semantic-operations.patch",
+        "patches/0024-aot-compact-control-operations.patch",
     ],
     visibility = ["//visibility:public"],
 )

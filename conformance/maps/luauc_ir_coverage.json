@@ -2,9 +2,9 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "95cd5dfbe50300e3263c6969d073307afa5282623b783e4403165a1b1e28d3d6",
+  "compiler_build_digest": "faf3e1622020ee72e449bbdd5b7fe27ea5ef7f8279f8794fc41f2f840ee5c513",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "9fc68749be627ad350e93fc79dc5db7fb9fc5fcedd16505f34808c690df890de",
+  "frontend_contract_digest": "5d484361ef5c642d53343e4be9e593322b84a9669894e79af5a60520b357d949",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,
@@ -472,7 +472,6 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -492,14 +491,12 @@
         "luauc_runtime_v1_forgprep_xnext_fallback",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -509,7 +506,6 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -518,7 +514,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -978,7 +973,6 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:168; CodeGen/src/IrLoweringA64.cpp:402",
       "census_sources": [
         "dynamic_hash_table",
-        "embed_lib",
         "global_state",
         "table_churn",
         "table_clone_append",
@@ -989,23 +983,18 @@
       ],
       "lowered_sources": [
         "dynamic_hash_table",
-        "embed_lib",
         "global_state",
         "table_churn",
         "table_clone_append",
         "table_namecall"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
         "//conformance/tests:tables_test",
-        "//conformance/tests:frontend_to_wasm_test",
         "//conformance:runtime_measurement_test",
-        "//conformance/tests:namecall_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance/tests:namecall_test"
       ]
     },
     {
@@ -1052,25 +1041,19 @@
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:177; CodeGen/src/IrLoweringA64.cpp:429",
       "census_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "census_forms": [
         "any"
       ],
       "lowered_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:namecall_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance/tests:namecall_test"
       ]
     },
     {
@@ -1297,7 +1280,6 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -1317,14 +1299,12 @@
         "luauc_runtime_v1_forgprep_xnext_fallback",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -1334,7 +1314,6 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -1343,7 +1322,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -3494,7 +3472,6 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:964; CodeGen/src/IrLoweringA64.cpp:874",
       "census_sources": [
         "call_graph",
-        "embed_lib",
         "table_churn"
       ],
       "census_forms": [
@@ -3502,18 +3479,13 @@
       ],
       "lowered_sources": [
         "call_graph",
-        "embed_lib",
         "table_churn"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance:runtime_measurement_test",
-        "//conformance/tests:frontend_to_wasm_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance:runtime_measurement_test"
       ]
     },
     {
@@ -6045,7 +6017,6 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -6065,14 +6036,12 @@
         "luauc_runtime_v1_forgprep_xnext_fallback",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -6082,7 +6051,6 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -6091,7 +6059,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -6326,7 +6293,6 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -6346,14 +6312,12 @@
         "luauc_runtime_v1_forgprep_xnext_fallback",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -6363,7 +6327,6 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -6372,7 +6335,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -6610,25 +6572,19 @@
       "rejoins": false,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2327; CodeGen/src/IrLoweringA64.cpp:2427",
       "census_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "census_forms": [
         "any"
       ],
       "lowered_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:namecall_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance/tests:namecall_test"
       ]
     },
     {
@@ -7084,25 +7040,19 @@
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:1882; CodeGen/src/IrLoweringA64.cpp:1864",
       "census_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "census_forms": [
         "any"
       ],
       "lowered_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:namecall_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance/tests:namecall_test"
       ]
     },
     {
@@ -9148,7 +9098,6 @@
         "call_graph",
         "dynamic_array_table",
         "dynamic_string",
-        "embed_lib",
         "embed_main",
         "generic_table",
         "mixed_table",
@@ -9161,7 +9110,6 @@
         "call_graph",
         "dynamic_array_table",
         "dynamic_string",
-        "embed_lib",
         "embed_main",
         "generic_table",
         "mixed_table",
@@ -9174,7 +9122,6 @@
       "tests": [
         "//conformance:runtime_measurement_test",
         "//conformance/tests:tables_test",
-        "//conformance/tests:frontend_to_wasm_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
       ]
@@ -9358,7 +9305,6 @@
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2328; CodeGen/src/IrLoweringA64.cpp:2428",
       "census_sources": [
         "dynamic_hash_table",
-        "embed_lib",
         "global_state",
         "table_churn",
         "table_clone_append",
@@ -9369,23 +9315,18 @@
       ],
       "lowered_sources": [
         "dynamic_hash_table",
-        "embed_lib",
         "global_state",
         "table_churn",
         "table_clone_append",
         "table_namecall"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
         "//conformance/tests:tables_test",
-        "//conformance/tests:frontend_to_wasm_test",
         "//conformance:runtime_measurement_test",
-        "//conformance/tests:namecall_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance/tests:namecall_test"
       ]
     },
     {
@@ -9432,25 +9373,19 @@
       "rejoins": true,
       "upstream_reference": "CodeGen/src/IrLoweringX64.cpp:2365; CodeGen/src/IrLoweringA64.cpp:2461",
       "census_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "census_forms": [
         "any"
       ],
       "lowered_sources": [
-        "embed_lib",
         "table_namecall"
       ],
       "executed_gates": [
-        "//hosts/wasmtime:parity_test",
         "//conformance:runtime_measurement_test"
       ],
       "tests": [
-        "//conformance/tests:frontend_to_wasm_test",
-        "//conformance/tests:namecall_test",
-        "//hosts/js:embed_test",
-        "//hosts/wasmtime:parity_test"
+        "//conformance/tests:namecall_test"
       ]
     },
     {
@@ -10961,7 +10896,6 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
@@ -10981,14 +10915,12 @@
         "luauc_runtime_v1_forgprep_xnext_fallback",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -10998,7 +10930,6 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -11007,7 +10938,6 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_features": [],
@@ -11087,14 +11017,12 @@
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_global",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get_string"
       ],
       "wasm_features": [],
@@ -11151,14 +11079,12 @@
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_global",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_table_get_string"
       ],
       "wasm_features": [],
@@ -11331,26 +11257,21 @@
       ],
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
         "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
-        "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
-        "luauc_runtime_v1_try_get_tm"
+        "luauc_runtime_v1_slice_string"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -14842,5 +14763,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "a7446ac4dd805db0a9152d480ae32ebc0cb53e34e03db236f8b9f92744c5844b"
+  "canonical_hash": "dd3e1ac26cf10ad36da0709754a3a7db9b5f990c7c9400fb5266f0fa235fac3e"
 }

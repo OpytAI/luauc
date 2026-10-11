@@ -297,21 +297,15 @@ pub noinline fn emitFallbackNamecall(
         return Error.InvalidOperandType;
     const key = try self.string_keys.intern(self.allocator, key_bytes);
     try self.emitPcLocation(pc);
-    // Strings and other non-tables hit __index in the type metatable. A miss keeps this helper.
     if (try followingStringMethod(self, instruction_id + 1, destination))
-        try emitDeferredStringReceiver(self, destination, source)
-    else
-        try self.emitInlineNonTableNamecall(destination, source, key_operand.value);
+        return emitDeferredStringReceiver(self, destination, source);
+    if (self.interrupt_helper != null)
+        return emitPlainNamecall(self, destination, source, key.offset, key.length);
+    try self.emitInlineNonTableNamecall(destination, source, key_operand.value);
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try self.body.localGet(self.allocator, 0);
-    try self.body.i32Const(self.allocator, @intCast(destination));
-    try self.body.i32Const(self.allocator, @intCast(source));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
-    try self.body.i32Const(self.allocator, @intCast(key.length));
-    try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
-    try self.emitReloadBase();
+    try emitPlainNamecall(self, destination, source, key.offset, key.length);
     try self.body.end(self.allocator);
 }
 fn emitPlainNamecall(self: anytype, destination: u32, source: u32, key_offset: u32, key_length: u32) Error!void {

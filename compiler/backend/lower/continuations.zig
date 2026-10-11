@@ -80,41 +80,6 @@ pub fn validateStringTableContinuationTail(
     ));
 }
 
-pub fn validateNamecallContinuationTail(
-    allocator: std.mem.Allocator,
-    context: Context,
-    block: snapshot_v1.IrBlock,
-    suffix_start: u32,
-) Error!?bool {
-    const pattern = (try context.plainTableNamecallPattern(block)) orelse return null;
-    if (pattern.start < suffix_start)
-        return null;
-    var instruction_id = suffix_start;
-    while (instruction_id < pattern.start) : (instruction_id += 1) {
-        const instruction_value = try context.instruction(instruction_id);
-        var operand_id: u32 = 0;
-        while (operand_id < instruction_value.operand_count) : (operand_id += 1) {
-            const operand_value = try context.operand(instruction_value, operand_id);
-            if (operand_value.kind == .instruction and
-                (operand_value.value < suffix_start or operand_value.value >= instruction_id))
-                return false;
-            // A branch is outside this straight-line tail. The ordinary region check decides it.
-            if (operand_value.kind == .block)
-                return null;
-        }
-    }
-    const rejoin = try context.snapshot.irBlock(context.function, pattern.rejoin);
-    if (rejoin.isEmpty())
-        return false;
-    return @as(?bool, try validateContinuationRegion(
-        allocator,
-        context,
-        pattern.rejoin,
-        rejoin.start,
-        rejoin.finish,
-    ));
-}
-
 pub fn validateGenericIterationContinuationRegion(
     allocator: std.mem.Allocator,
     context: Context,

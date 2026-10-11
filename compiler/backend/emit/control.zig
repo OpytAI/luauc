@@ -137,8 +137,6 @@ fn fallbackLengthConvert(self: anytype, do_len_id: u32, destination: u32) Error!
     return null;
 }
 
-/// `#` in a compilable block is the userdata form of length. A string length is a
-/// load. A plain table uses the table-length helper. Every other value uses `do_len`.
 pub noinline fn emitCompilableDoLen(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {
     try self.requireOperandCount(instruction_value, 2);
     if (instruction_id == 0 or (try self.instruction(instruction_id - 1)).command != .set_savedpc)
@@ -190,7 +188,7 @@ pub noinline fn emitCompareAny(self: anytype, instruction_id: u32, instruction_v
     const rhs = try self.valueOperandEncoding(rhs_operand);
     const operation = try self.comparisonOperation(try self.conditionOperand(instruction_value, 2));
 
-    if (lhs_operand.kind == .vm_reg and rhs_operand.kind == .vm_reg)
+    if (self.interrupt_helper == null and lhs_operand.kind == .vm_reg and rhs_operand.kind == .vm_reg)
         try emitPrimitiveCompare(self, lhs_operand.value, rhs_operand.value, lhs, rhs, operation)
     else
         try emitCompareHelper(self, lhs, rhs, operation);
