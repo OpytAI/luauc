@@ -273,7 +273,7 @@ function linearizedGraphFixture(source, chunk) {
   const snapshot = gunzipSync(Buffer.from(fixture.gzip, "base64"));
   if (digest(snapshot) !== fixture.snapshotSha256 || snapshot.subarray(88, 120).toString("hex") !== (fixture.frontendContract ?? fixtures.frontendContract))
     throw new Error(`linearized fixture identity mismatch: ${chunk}`);
-  snapshot.set(current.subarray(88, 120), 88);
+  snapshot.set(current.subarray(56, 120), 56);
   return snapshot;
 }
 

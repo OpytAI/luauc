@@ -37,7 +37,7 @@ if (descriptionView.getUint32(0, true) !== 1 || descriptionView.getUint32(8, tru
   throw new Error("compiler description drifted");
 release(description);
 
-const frontendContract = Buffer.from("254652880aa0967cfcb192da1a8bb062ae82d6adc767e0d5aea044b675c4efd0", "hex");
+const frontendContract = Buffer.from("9fc68749be627ad350e93fc79dc5db7fb9fc5fcedd16505f34808c690df890de", "hex");
 
 function createContext(profile, pack, expectedStatus = 0) {
   const profileInput = allocation(profile), packInput = allocation(pack), result = allocation(72);

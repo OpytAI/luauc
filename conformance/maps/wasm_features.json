@@ -3,9 +3,9 @@
   "generator_version": "luauc-wasm-features-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "254652880aa0967cfcb192da1a8bb062ae82d6adc767e0d5aea044b675c4efd0",
+  "frontend_contract_digest": "9fc68749be627ad350e93fc79dc5db7fb9fc5fcedd16505f34808c690df890de",
   "input_sha256": {
-    "compiler": "503d1579124ba625bcbcb1b007aef7062916d20d682913b347a25fa59ff47a13",
+    "compiler": "bd396f2178f49ef30653c91d10794a87a056ca3fa8479976e94d15aec5d4ff40",
     "pack": "bbe4d22685aaa9bd4e59c94737c867457f64c0b861dd07302c92a6e544d5555a",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
@@ -35,7 +35,7 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "503d1579124ba625bcbcb1b007aef7062916d20d682913b347a25fa59ff47a13",
+      "sha256": "bd396f2178f49ef30653c91d10794a87a056ca3fa8479976e94d15aec5d4ff40",
       "export_names": [
         "luauc_v1_alloc",
         "luauc_v1_compile",
@@ -196,5 +196,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "58ae0a4b5e94031bafcb69cae7e2fc2bc2c5b4702294d334e3feb617321e3058"
+  "canonical_hash": "cce1f964cb4639934ac7b71cb677ad30bc7a5ea6c6ee635a5ade9c269ca2389b"
 }

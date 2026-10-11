@@ -171,6 +171,12 @@
       "hook": false
     },
     {
+      "source": "numeric_floor_division",
+      "path": "conformance/sources/numeric_floor_division.luau",
+      "bazel_data": "//conformance/sources:numeric_floor_division",
+      "hook": false
+    },
+    {
       "source": "natural_integer",
       "path": "conformance/sources/natural_integer.luau",
       "bazel_data": "//conformance/sources:natural_integer",

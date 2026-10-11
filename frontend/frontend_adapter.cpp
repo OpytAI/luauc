@@ -219,6 +219,7 @@ constexpr size_t kMaxSourceBytes = 16 * 1024 * 1024;
 constexpr size_t kMaxBytecodeBytes = 64 * 1024 * 1024;
 constexpr size_t kMaxSnapshotBytes = 256 * 1024 * 1024;
 constexpr size_t kMaxProtos = 4096;
+constexpr size_t kInlineModuleFunctionLimit = 8;
 constexpr size_t kMaxInstructions = 1'048'576;
 constexpr size_t kMaxBlocksPerFunction = 32'768;
 constexpr size_t kMaxInstructionsPerBlock = 65'536;
@@ -231,8 +232,8 @@ constexpr uint8_t kLuauPinSha256[32] = {
 };
 
 constexpr uint8_t kPatchsetSha256[32] = {
-    0x61, 0x7b, 0x45, 0x3d, 0x3f, 0x2f, 0x9d, 0x91, 0xe7, 0xc8, 0xd9, 0x69, 0xbe, 0x40, 0xbe, 0x0f,
-    0x60, 0x8b, 0xc7, 0x6f, 0x46, 0xac, 0xc6, 0xa5, 0xab, 0x48, 0x3d, 0x1e, 0xe3, 0xd1, 0x19, 0x34,
+    0xe0, 0x56, 0xdf, 0x9f, 0xe8, 0x0e, 0xea, 0xf7, 0x19, 0x9b, 0xbc, 0xd2, 0xcd, 0x40, 0x98, 0x2a,
+    0xa8, 0x54, 0x7b, 0x0e, 0x3a, 0x00, 0x36, 0x04, 0xf1, 0x5e, 0xff, 0x87, 0x68, 0x3a, 0x0e, 0xf2,
 };
 
 constexpr uint8_t kIrEnumSha256[32] = {
@@ -992,7 +993,8 @@ bool serializeIr(const std::vector<ProtoRef> &protos, std::vector<SectionData> &
     SectionData &mapping = section(sections, LUAUC_SNAPSHOT_V1_BC_MAPPING);
 
     size_t totalInstructions = 0;
-    const HostIrHooks hooks = makeHostIrHooks();
+    HostIrHooks hooks = makeHostIrHooks();
+    hooks.compactDynamicOperations = protos.size() > kInlineModuleFunctionLimit;
 
     for (size_t functionIndex = 0; functionIndex < protos.size(); ++functionIndex) {
         Proto *proto = protos[functionIndex].proto;

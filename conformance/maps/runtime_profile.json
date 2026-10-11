@@ -3,7 +3,7 @@
   "generator_version": "luauc-runtime-profile-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "254652880aa0967cfcb192da1a8bb062ae82d6adc767e0d5aea044b675c4efd0",
+  "frontend_contract_digest": "9fc68749be627ad350e93fc79dc5db7fb9fc5fcedd16505f34808c690df890de",
   "input_sha256": {
     "profile": "3c7fb63ba9582868cdbca48d56081f23a7dbc4bda65331336fd7f21ee4ebb62d",
     "policy": "0ef5bf8353a1393734fe0b387f76f6758e70073079c270d15a3cc61bdfdebf47",
@@ -403,5 +403,5 @@
       }
     ]
   },
-  "canonical_hash": "293125554e23f250208428374c0891521f6b8c9a4bdea570215b71ef9926436c"
+  "canonical_hash": "0e733b8ccf3f191de3cd96f1b399faa099ed01224bd0dff544124439ee6e1a83"
 }

@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "labels": [
+    "//hosts/js:compact_semantics_test",
     "//compiler/backend:backend_build_test",
     "//compiler/backend:frontend_to_wasm_test",
     "//compiler/backend/lower:backend_build_test",

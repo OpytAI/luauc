@@ -28,6 +28,7 @@ exports_files([
     "patches/0020-aot-goto-labels.patch",
     "patches/0021-aot-vector-fallbacks.patch",
     "patches/0022-aot-straight-add-chain.patch",
+    "patches/0023-aot-compact-semantic-operations.patch",
 ])
 
 js_library(
@@ -57,6 +58,7 @@ js_library(
         "patches/0020-aot-goto-labels.patch",
         "patches/0021-aot-vector-fallbacks.patch",
         "patches/0022-aot-straight-add-chain.patch",
+        "patches/0023-aot-compact-semantic-operations.patch",
     ],
     visibility = ["//visibility:public"],
 )

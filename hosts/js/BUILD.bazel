@@ -141,3 +141,22 @@ js_test(
         "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
     },
 )
+
+js_test(
+    name = "compact_semantics_test",
+    data = [
+        "compact_semantics.test.mjs",
+        "//conformance/sources:numeric_floor_division",
+        ":host",
+        "//compiler:compiler_wasm",
+        "//profiles/embed:embed_v1_pack",
+        "//profiles/embed:embed_v1_profile",
+    ],
+    entry_point = "compact_semantics.test.mjs",
+    env = {
+        "LUAUC_NUMERIC_FLOOR_DIVISION": "$(rlocationpath //conformance/sources:numeric_floor_division)",
+        "LUAUC_COMPILER_WASM": "$(rlocationpath //compiler:compiler_wasm)",
+        "LUAUC_EMBED_PACK": "$(rlocationpath //profiles/embed:embed_v1_pack)",
+        "LUAUC_EMBED_PROFILE": "$(rlocationpath //profiles/embed:embed_v1_profile)",
+    },
+)

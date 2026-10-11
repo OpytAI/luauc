@@ -47,6 +47,7 @@ const contractInputs = [
   "third_party/luau/patches/0020-aot-goto-labels.patch",
   "third_party/luau/patches/0021-aot-vector-fallbacks.patch",
   "third_party/luau/patches/0022-aot-straight-add-chain.patch",
+  "third_party/luau/patches/0023-aot-compact-semantic-operations.patch",
 ].sort();
 
 function frontendContractDigest() {

@@ -82,6 +82,7 @@ function intersectSorted(sets) {
 
 const NATURAL_SOURCES = new Set([
   "numeric_loop",
+  "numeric_floor_division",
   "natural_integer",
   "natural_bit32",
   "natural_buffer",
@@ -114,6 +115,7 @@ const FAMILY_TESTS = Object.freeze({
   userdata_hold: "//hosts/wasmtime:barrier_parity_test",
   userdata_store: "//hosts/wasmtime:barrier_parity_test",
   numeric_loop: "//conformance/tests:natural_sources_test",
+  numeric_floor_division: "//hosts/js:compact_semantics_test",
   natural_integer: "//conformance/tests:natural_sources_test",
   natural_bit32: "//conformance/tests:natural_sources_test",
   natural_buffer: "//conformance/tests:natural_sources_test",
