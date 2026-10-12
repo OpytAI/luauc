@@ -20,6 +20,17 @@ extern fn luauc_frontend_snapshot_v1_compile(source: [*]const u8, source_size: u
 extern fn luauc_frontend_snapshot_v1_compile_inlined(source: [*]const u8, source_size: usize, chunk_name: [*]const u8, chunk_name_size: usize, coverage_level: u32, plans: [*]const source_package.InlinePlan, plan_count: u32, result: *FrontendResult) u32;
 extern fn luauc_frontend_snapshot_v1_free(result: *FrontendResult) void;
 
+const LivenessSource = extern struct {
+    name: [*]const u8,
+    name_size: usize,
+    source: [*]const u8,
+    source_size: usize,
+    rewritten: ?[*]u8 = null,
+};
+
+extern fn luauc_frontend_prune_package(sources: [*]LivenessSource, count: usize, entry: usize) void;
+extern fn luauc_frontend_free_pruned(sources: [*]LivenessSource, count: usize) void;
+
 const ContextResult = extern struct {
     handle: u32 = 0,
     status: u32 = 0,
@@ -393,6 +404,21 @@ pub fn compile(handle: u32, request: []const u8) Guest {
     if (featureCount(profile.feature_mask) > package.feature_ceiling)
         return rejected(&guest, status_resource_limit, "ResourceLimit");
 
+    const sources = allocator.alloc(LivenessSource, package.module_count) catch return rejected(&guest, status_resource_limit, "source analysis allocation failed");
+    defer allocator.free(sources);
+    var prune = package.coverage_level == 0;
+    for (sources, 0..) |*source, index| {
+        const module = package.module(@intCast(index)) catch |err| return rejectedError(&guest, status_invalid_request, err);
+        source.* = .{ .name = module.name.ptr, .name_size = module.name.len, .source = module.content.ptr, .source_size = module.content.len };
+        if (module.inline_plan_count != 0) prune = false;
+        for (0..profile.host_module_count) |host_index| {
+            const host_name = profile.hostModule(@intCast(host_index)) catch return rejected(&guest, status_invalid_context, "InvalidStoredProfile");
+            if (std.mem.eql(u8, module.name, host_name)) prune = false;
+        }
+    }
+    if (prune) luauc_frontend_prune_package(sources.ptr, sources.len, package.entry_module_id);
+    defer luauc_frontend_free_pruned(sources.ptr, sources.len);
+
     const frontend_results = allocator.alloc(FrontendResult, package.module_count) catch return rejected(&guest, status_resource_limit, "frontend result allocation failed");
     defer allocator.free(frontend_results);
     @memset(frontend_results, .{});
@@ -406,7 +432,7 @@ pub fn compile(handle: u32, request: []const u8) Guest {
         var inline_plans: ?[]source_package.InlinePlan = null;
         defer if (inline_plans) |plans| allocator.free(plans);
         const frontend_status = if (module.inline_plan_count == 0)
-            luauc_frontend_snapshot_v1_compile(module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, frontend_result)
+            luauc_frontend_snapshot_v1_compile(sources[index].rewritten orelse module.content.ptr, module.content.len, module.source_name.ptr, module.source_name.len, package.coverage_level, frontend_result)
         else inlined: {
             const plans = allocator.alloc(source_package.InlinePlan, module.inline_plan_count) catch return rejected(&guest, status_resource_limit, "inline plan allocation failed");
             inline_plans = plans;

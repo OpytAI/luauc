@@ -15,6 +15,7 @@ const ROOTS = [
   "compiler/backend/lower",
   "schema",
   "frontend/frontend_adapter.cpp",
+  "frontend/package_liveness.h",
 ];
 
 function collect(dir, out) {

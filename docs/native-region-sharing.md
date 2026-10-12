@@ -8,7 +8,7 @@ The matcher normalizes local indices and i32 constants. Local types remain part 
 
 A region must consume only values that it produces on the operand stack. It must leave that stack unchanged. Control instructions and indirect calls end a candidate region. The pass does not move branches, returns, continuation boundaries, or fuel guards.
 
-Each helper receives the locals that the region reads before writing them. It returns the one local that the region writes, if any. This preserves local values across calls, including stack-base reloads. Local indices may differ between callers, but their corresponding types must match.
+Each helper receives the locals that the region reads before writing them. It returns up to four written locals through native Wasm multi-value results. The caller stores those results in reverse stack order. This preserves local values across calls, including stack-base reloads. Local indices may differ between callers, but their corresponding types must match.
 
 ## Constant arguments
 
@@ -23,3 +23,9 @@ The pass measures the actual replacement calls, helper body, and type encoding b
 Candidate discovery has fixed limits for instruction windows, local bindings, constant arguments, shapes, and occurrences. A per-instruction occupancy array prevents overlapping replacements. Reaching a search limit stops optimization discovery; it does not reject a supported program or change its capabilities.
 
 Tests cover typed local bindings, constant packing at signed endpoints, deterministic output, overlapping candidates, resource limits, allocation failures, control boundaries, and host execution parity.
+
+## Remaining opportunities
+
+The four-result limit admits regions that the former single-result rule rejected. Further structural opportunities remain. Local liveness could exclude writes that no successor reads, reducing helper results and admitting longer regions. Typed stack inputs and outputs could share expressions that do not begin and end at an empty relative stack. Structured control-flow sharing needs explicit branch and continuation proofs; the present matcher deliberately stops at those boundaries.
+
+Candidate ranking currently estimates unpacked argument costs before evaluating packed arguments. That can miss groups that become profitable only after packing. Discovery also uses fixed global shape and occurrence limits. Better ranking and search allocation may find additional groups, but those changes require measured total-size and compilation-time comparisons. Increasing the limits alone is not a demonstrated improvement.

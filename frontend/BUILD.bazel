@@ -13,7 +13,7 @@ cc_headers(
 
 filegroup(
     name = "compiler_build_digest_inputs",
-    srcs = ["frontend_adapter.cpp"],
+    srcs = ["frontend_adapter.cpp", "package_liveness.h"],
     visibility = ["//visibility:public"],
 )
 
@@ -21,6 +21,7 @@ filegroup(
     name = "compiler_patch_headers",
     srcs = [
         "compiler_error_channel.h",
+        "package_liveness.h",
         "error_channel.h",
         "trap.h",
     ],
@@ -34,6 +35,7 @@ filegroup(
         "compiler_error_channel.h",
         "error_channel.h",
         "frontend_adapter.cpp",
+        "package_liveness.h",
         "frontend_fastflags.cpp",
         "frontend_host.zig",
         "host_wasi_stubs.c",

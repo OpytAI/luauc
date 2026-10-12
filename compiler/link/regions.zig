@@ -48,7 +48,7 @@ const Binding = struct {
         if (op.op == 0x20) {
             if (self.written & mask == 0) self.live |= mask;
         } else self.written |= mask;
-        if (@popCount(self.written) > 1 or @popCount(self.live) > 12) return null;
+        if (@popCount(self.written) > 4 or @popCount(self.live) > 12) return null;
         return ordinal;
     }
 };
@@ -159,8 +159,10 @@ fn siteBytes(output: *std.ArrayList(u8), allocator: std.mem.Allocator, input: In
     }
     for (words[0..args.count]) |word| try constantOp(output, allocator, @bitCast(word));
     try localOp(output, allocator, 0x10, helper);
-    for (values.locals[0..values.local_count], 0..) |local, index| {
-        if (has(values.written, index)) try localOp(output, allocator, 0x21, local);
+    var remaining: usize = values.local_count;
+    while (remaining > 0) {
+        remaining -= 1;
+        if (has(values.written, remaining)) try localOp(output, allocator, 0x21, values.locals[remaining]);
     }
 }
 

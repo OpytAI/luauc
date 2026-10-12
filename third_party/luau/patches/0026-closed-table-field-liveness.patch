@@ -1,0 +1,272 @@
+--- /dev/null
++++ b/Compiler/src/FieldLiveness.h
+@@ -0,0 +1,250 @@
++#pragma once
++
++#include "Luau/Ast.h"
++
++#include <cstring>
++#include <string>
++#include <unordered_map>
++#include <unordered_set>
++#include <utility>
++#include <vector>
++
++namespace Luau
++{
++
++class ScopedClosedTableFields
++{
++    struct Shape
++    {
++        bool escaped = false;
++        std::unordered_set<std::string> reads;
++    };
++
++    struct Analysis : AstVisitor
++    {
++        std::unordered_map<AstLocal*, AstExpr*> bindings;
++        std::unordered_map<AstLocal*, AstExprTable*> aliases;
++        std::unordered_map<AstExprTable*, Shape> shapes;
++        bool collecting = true;
++        bool observable = false;
++
++        bool visit(AstExprFunction* expression) override
++        {
++            observable |= expression->hasNativeAttribute();
++            return true;
++        }
++
++        bool visit(AstExprGlobal* expression) override
++        {
++            observable |= expression->name == "getfenv" || expression->name == "setfenv";
++            return false;
++        }
++
++        AstExprTable* resolve(AstLocal* local)
++        {
++            std::vector<AstLocal*> path;
++            AstExprTable* table = nullptr;
++            while (path.size() <= bindings.size())
++            {
++                auto cached = aliases.find(local);
++                if (cached != aliases.end())
++                {
++                    table = cached->second;
++                    break;
++                }
++                auto found = bindings.find(local);
++                if (found == bindings.end())
++                    break;
++                path.push_back(local);
++                if (AstExprTable* literal = found->second->as<AstExprTable>())
++                {
++                    table = literal;
++                    break;
++                }
++                AstExprLocal* alias = found->second->as<AstExprLocal>();
++                if (!alias)
++                    break;
++                local = alias->local;
++            }
++            for (AstLocal* item : path)
++                aliases[item] = table;
++            return table;
++        }
++
++        AstExprTable* resolve(AstExpr* expression)
++        {
++            AstExprLocal* local = expression->as<AstExprLocal>();
++            return local ? resolve(local->local) : nullptr;
++        }
++
++        void escape(AstExpr* expression)
++        {
++            if (AstExprTable* table = resolve(expression))
++                shapes[table].escaped = true;
++        }
++
++        void write(AstExpr* expression)
++        {
++            escape(expression);
++            if (AstExprIndexName* field = expression->as<AstExprIndexName>())
++                escape(field->expr);
++            if (AstExprIndexExpr* field = expression->as<AstExprIndexExpr>())
++                escape(field->expr);
++            expression->visit(this);
++        }
++
++        bool visit(AstStatLocal* statement) override
++        {
++            if (collecting)
++            {
++                for (size_t index = 0; index < statement->vars.size && index < statement->values.size; ++index)
++                {
++                    AstExpr* value = statement->values.data[index];
++                    bindings[statement->vars.data[index]] = value;
++                    if (AstExprTable* table = value->as<AstExprTable>())
++                        shapes.emplace(table, Shape{});
++                }
++                return true;
++            }
++            for (size_t index = 0; index < statement->values.size; ++index)
++            {
++                AstExpr* value = statement->values.data[index];
++                AstExprLocal* alias = value->as<AstExprLocal>();
++                if (index < statement->vars.size)
++                {
++                    AstLocal* local = statement->vars.data[index];
++                    if (local->isExported)
++                        if (AstExprTable* table = resolve(local))
++                            shapes[table].escaped = true;
++                    if (alias && !alias->upvalue && resolve(local) && resolve(local) == resolve(alias->local))
++                        continue;
++                }
++                value->visit(this);
++            }
++            return false;
++        }
++
++        bool visit(AstExprLocal* expression) override
++        {
++            if (!collecting)
++                escape(expression);
++            return false;
++        }
++
++        bool read(AstExpr* base, const char* key, size_t length)
++        {
++            if (collecting)
++                return true;
++            AstExprLocal* local = base->as<AstExprLocal>();
++            AstExprTable* table = resolve(base);
++            if (!table)
++                return true;
++            if (local->upvalue)
++                shapes[table].escaped = true;
++            shapes[table].reads.emplace(key, length);
++            return false;
++        }
++
++        bool visit(AstExprIndexName* expression) override
++        {
++            if (!collecting && expression->op == ':')
++                escape(expression->expr);
++            return read(expression->expr, expression->index.value, strlen(expression->index.value));
++        }
++
++        bool visit(AstExprIndexExpr* expression) override
++        {
++            if (AstExprConstantString* key = expression->index->as<AstExprConstantString>())
++                return read(expression->expr, key->value.data, key->value.size);
++            return true;
++        }
++
++        bool visit(AstStatAssign* statement) override
++        {
++            if (collecting)
++                return true;
++            for (AstExpr* target : statement->vars)
++                write(target);
++            for (AstExpr* value : statement->values)
++                value->visit(this);
++            return false;
++        }
++
++        bool visit(AstStatCompoundAssign* statement) override
++        {
++            if (collecting)
++                return true;
++            write(statement->var);
++            statement->value->visit(this);
++            return false;
++        }
++
++        bool visit(AstStatFunction* statement) override
++        {
++            if (collecting)
++                return true;
++            write(statement->name);
++            statement->func->visit(this);
++            return false;
++        }
++    };
++
++    struct Rewrite
++    {
++        AstExprTable* table;
++        AstArray<AstExprTable::Item> original;
++        std::vector<AstExprTable::Item> items;
++    };
++
++    std::vector<Rewrite> rewrites;
++
++public:
++    ScopedClosedTableFields(AstStatBlock* root, bool enabled)
++    {
++        if (!enabled)
++            return;
++        Analysis analysis;
++        root->visit(&analysis);
++        if (analysis.observable)
++            return;
++        analysis.collecting = false;
++        root->visit(&analysis);
++        for (auto& entry : analysis.shapes)
++        {
++            AstExprTable* table = entry.first;
++            const Shape& shape = entry.second;
++            if (shape.escaped)
++                continue;
++            bool eligible = true;
++            std::unordered_set<std::string> keys;
++            Rewrite rewrite{table, table->items, {}};
++            for (const AstExprTable::Item& item : table->items)
++            {
++                AstExprConstantString* key = item.key ? item.key->as<AstExprConstantString>() : nullptr;
++                if (!key || !keys.emplace(key->value.data, key->value.size).second)
++                {
++                    eligible = false;
++                    break;
++                }
++                const std::string name(key->value.data, key->value.size);
++                if (!item.value->is<AstExprFunction>() || shape.reads.count(name))
++                    rewrite.items.push_back(item);
++            }
++            if (eligible && rewrite.items.size() != table->items.size)
++                rewrites.push_back(std::move(rewrite));
++        }
++        for (Rewrite& rewrite : rewrites)
++            rewrite.table->items = {rewrite.items.data(), rewrite.items.size()};
++    }
++
++    ~ScopedClosedTableFields()
++    {
++        for (Rewrite& rewrite : rewrites)
++            rewrite.table->items = rewrite.original;
++    }
++
++    ScopedClosedTableFields(const ScopedClosedTableFields&) = delete;
++    ScopedClosedTableFields& operator=(const ScopedClosedTableFields&) = delete;
++};
++
++}
+--- a/Compiler/src/Compiler.cpp
++++ b/Compiler/src/Compiler.cpp
+@@ -13,6 +13,7 @@
+ #include "Builtins.h"
+ #include "ConstantFolding.h"
+ #include "CostModel.h"
++#include "FieldLiveness.h"
+ #include "TableShape.h"
+ #include "Types.h"
+ #include "Utils.h"
+@@ -5392,6 +5393,8 @@
+     }
+ 
+     AstStatBlock* root = parseResult.root;
++    ScopedClosedTableFields closedTableFields(root,
++        options.optimizationLevel >= 1 && options.coverageLevel == 0 && options.debugLevel <= 1);
+ 
+     // gathers all functions with the invariant that all function references are to functions earlier in the list
+     // for example, function foo() return function() end end will result in two vector entries, [0] = anonymous and [1] = foo

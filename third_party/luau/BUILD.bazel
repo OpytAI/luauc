@@ -31,6 +31,7 @@ exports_files([
     "patches/0023-aot-compact-semantic-operations.patch",
     "patches/0024-aot-compact-control-operations.patch",
     "patches/0025-aot-literal-key-templates.patch",
+    "patches/0026-closed-table-field-liveness.patch",
 ])
 
 js_library(
@@ -63,6 +64,7 @@ js_library(
         "patches/0023-aot-compact-semantic-operations.patch",
         "patches/0024-aot-compact-control-operations.patch",
         "patches/0025-aot-literal-key-templates.patch",
+        "patches/0026-closed-table-field-liveness.patch",
     ],
     visibility = ["//visibility:public"],
 )

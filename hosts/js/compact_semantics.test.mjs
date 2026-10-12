@@ -10,6 +10,55 @@ const pack = runfile("LUAUC_EMBED_PACK");
 
 for (const coverageLevel of [0, 2]) {
   const source = `
+return function(value, text)
+    local effects = { count = 0 }
+    local function effect()
+        effects.count += 1
+        return 11
+    end
+    local methods = {
+        used = function(input) return input + 3 end,
+        unused = function() return function() error("unreachable") end end,
+        effect = effect(),
+    }
+    local alias = methods
+    local result = alias.used(value)
+    assert(effects.count == 1 and methods.effect == 11)
+    local exposed = {
+        used = function() return 7 end,
+        unused = function() return 13 end,
+    }
+    local function inspect(record)
+        local count = 0
+        for key, callback in pairs(record) do count += callback() end
+        return count
+    end
+    assert(inspect(exposed) == 20)
+    local rebound = { used = function() return 17 end }
+    local saved = rebound
+    rebound = exposed
+    assert(saved.used() == 17 and rebound.unused() == 13)
+    local duplicate = { unused = function() return 1 end, unused = function() return 2 end }
+    assert(duplicate.unused() == 2)
+    coroutine.yield("gc-boundary")
+    return result, text
+end
+`;
+  const compilation = await compilePackage(compiler, profile, pack, [{ name: "main", source }],
+    "main", { coverageLevel });
+  const instance = instantiateArtifact(compilation.artifact);
+  for (const value of [7, -11, 0]) {
+    const result = invoke(instance, value, "fields");
+    assert.equal(result.status, 0, JSON.stringify(result));
+    assert.equal(result.resultStatus, 0, JSON.stringify(result));
+    assert.equal(result.error, false);
+    assert.equal(result.number, value + 3);
+    assert.equal(result.text, "fields");
+  }
+}
+
+for (const coverageLevel of [0, 2]) {
+  const source = `
 local function make()
     return { ["literal:key"] = "seed", flag = false, absent = nil, negative = -0.0, count = 11 }
 end

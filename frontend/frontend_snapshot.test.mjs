@@ -17,6 +17,7 @@ const contractInputs = [
   "frontend/compiler_error_channel.h",
   "frontend/error_channel.h",
   "frontend/frontend_adapter.cpp",
+  "frontend/package_liveness.h",
   "frontend/frontend_fastflags.cpp",
   "frontend/frontend_host.zig",
   "frontend/host_wasi_stubs.c",
@@ -50,6 +51,7 @@ const contractInputs = [
   "third_party/luau/patches/0023-aot-compact-semantic-operations.patch",
   "third_party/luau/patches/0024-aot-compact-control-operations.patch",
   "third_party/luau/patches/0025-aot-literal-key-templates.patch",
+  "third_party/luau/patches/0026-closed-table-field-liveness.patch",
 ].sort();
 
 function frontendContractDigest() {
@@ -403,6 +405,53 @@ if (!first.snapshot.equals(second.snapshot)) throw new Error("identical input pr
 const invalid = compile("local =", "@frontend/syntax-error.luau");
 if (invalid.status !== 2 || invalid.snapshot.length !== 0 || invalid.diagnostic.length === 0)
   throw new Error(`syntax failure was not a structured diagnostic: ${JSON.stringify(invalid)}`);
+
+const closedFields = `
+local methods = {
+    used = function(value) return value + 1 end,
+    unused = function() return function() return 99 end end,
+}
+`;
+for (const [label, suffix, expected] of [
+  ["literal", "return methods.used(7)", 2],
+  ["alias", "local alias = methods; local other = alias; return other.used(7)", 2],
+  ["index", 'return methods["used"](7)', 2],
+  ["return", "return methods", 4],
+  ["argument", "return unknown(methods)", 4],
+  ["dynamic", "return methods[unknown()](7)", 4],
+  ["iterate", "for key in pairs(methods) do print(key) end", 4],
+  ["length", "return #methods", 4],
+  ["namecall", "return methods:used()", 4],
+  ["mutation", "methods.unused = nil; return methods.used(7)", 4],
+  ["alias-mutation", "local alias = methods; alias.unused = nil; return methods.used(7)", 4],
+  ["rebind", "local alias = methods; methods = unknown(); return alias.used(7)", 4],
+  ["capture", "return function() return methods.used(7) end", 5],
+  ["environment", "getfenv(); return methods.used(7)", 4],
+]) {
+  for (const coverageLevel of [0, 2, 0]) {
+    const result = compile(closedFields + suffix, `@frontend/closed-fields-${label}.luau`, coverageLevel);
+    if (result.status !== 0 || result.validation !== 0)
+      throw new Error(`closed field analysis failed for ${label}: ${result.diagnostic}`);
+    const count = parseSnapshot(result.snapshot).protoCount;
+    const retained = coverageLevel ? (label === "capture" ? 5 : 4) : expected;
+    if (count !== retained)
+      throw new Error(`closed fields ${label} coverage ${coverageLevel}: expected ${retained} prototypes, got ${count}`);
+    const repeated = compile(closedFields + suffix, `@frontend/closed-fields-${label}.luau`, coverageLevel);
+    if (!result.snapshot.equals(repeated.snapshot))
+      throw new Error(`closed field analysis is nondeterministic for ${label}`);
+  }
+}
+for (const [label, source, expected] of [
+  ["duplicate", "local t = { unused = function() return 1 end, unused = function() return 2 end }; return t.missing", 3],
+  ["mixed", "local t = { function() return 1 end, unused = function() return 2 end }; return t.missing", 3],
+  ["effect", "local t = { effect = unknown(function() return 1 end), unused = function() return 2 end }; return t.missing", 2],
+  ["binary-key", 'local t = { ["a\\0b"] = function() return 1 end, a = function() return 2 end }; return t["a\\0b"]()', 2],
+  ["native", "local t = { unused = @native function() return 1 end }; return t.missing", 2],
+]) {
+  const result = compile(source, `@frontend/closed-fields-${label}.luau`);
+  if (result.status !== 0 || result.validation !== 0 || parseSnapshot(result.snapshot).protoCount !== expected)
+    throw new Error(`closed field boundary failed for ${label}: ${result.diagnostic}`);
+}
 
 const protoIdentitySource = `
 local function hot(a, b)

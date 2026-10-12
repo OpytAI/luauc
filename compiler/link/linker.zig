@@ -288,7 +288,7 @@ const TypeTable = struct {
             for (0..params) |_|
                 try validateValueType(try reader.readByte());
             const results = try reader.readUleb32();
-            if (results > 1)
+            if (results > 16)
                 return Error.InvalidType;
             for (0..results) |_|
                 try validateValueType(try reader.readByte());
@@ -2555,6 +2555,10 @@ fn checkNativeRegions(allocator: std.mem.Allocator) !void {
             try emitLocalOp(body, allocator, 0x20, floating_local);
             try body.appendSlice(allocator, &.{ 0x44, 0, 0, 0, 0, 0, 0, 0xf4, 0x3f, 0xa0 });
             try emitLocalOp(body, allocator, 0x21, floating_local);
+            const integer_local = 3 - floating_local;
+            try emitLocalOp(body, allocator, 0x20, integer_local);
+            try body.appendSlice(allocator, &.{ 0x41, 1, 0x6a });
+            try emitLocalOp(body, allocator, 0x21, integer_local);
         }
         try body.append(allocator, 0x0b);
         try parseArmExpr(allocator, body.items, 5, ops);
@@ -2569,11 +2573,14 @@ fn checkNativeRegions(allocator: std.mem.Allocator) !void {
     for (inputs) |input| original_size += input.bytes.len;
     for (result.bodies.items) |body| final_size += body.len;
     for (result.helpers.items) |body| final_size += body.len;
+    var multiple_results = false;
     for (result.types.items) |encoding| {
         final_size += encoding.len;
         const signature = try regionSignature(encoding);
-        try std.testing.expect(signature.results.len <= 1);
+        try std.testing.expect(signature.results.len <= 4);
+        multiple_results = multiple_results or signature.results.len > 1;
     }
+    try std.testing.expect(multiple_results);
     try std.testing.expect(final_size < original_size);
     var repeated = try regions.share(allocator, &inputs, &signatures, 10, 100, 100, 200);
     defer repeated.deinit(allocator);
