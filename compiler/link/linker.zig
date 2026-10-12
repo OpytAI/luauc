@@ -1531,7 +1531,66 @@ fn tightenGeneratedBody(allocator: std.mem.Allocator, body: []const u8, slots: [
 }
 
 const control_flow = @import("control_flow.zig");
+const regions = @import("regions.zig");
 const ArmOp = control_flow.Op;
+
+fn regionSignature(encoding: []const u8) Error!regions.Signature {
+    var reader = Reader{ .bytes = encoding };
+    if (try reader.readByte() != 0x60) return Error.InvalidType;
+    const params = try reader.readBytes(try reader.readUleb32());
+    const results = try reader.readBytes(try reader.readUleb32());
+    return .{ .params = params, .results = results };
+}
+
+fn shareNativeRegions(allocator: std.mem.Allocator, pack: *const PackModel, object: *const ObjectModel, resolved: *const Resolved, shared: SharedArms, type_base: u32, limits: Limits) Error!regions.Result {
+    var types: std.ArrayList(regions.Signature) = .empty;
+    defer types.deinit(allocator);
+    for (pack.types.encodings.items) |encoding| try types.append(allocator, try regionSignature(encoding));
+    for (resolved.appended_types.items) |encoding| try types.append(allocator, try regionSignature(encoding));
+    for (shared.extra_types) |encoding| try types.append(allocator, try regionSignature(encoding));
+    var signatures: std.ArrayList(regions.Signature) = .empty;
+    defer signatures.deinit(allocator);
+    for (pack.imports.functions.items) |item| try signatures.append(allocator, types.items[item.type_index]);
+    for (pack.function_types.items) |index| try signatures.append(allocator, types.items[index]);
+    const body_base = signatures.items.len;
+    for (object.function_types.items) |index| try signatures.append(allocator, types.items[resolved.type_map[index]]);
+    for (shared.helper_types) |index| try signatures.append(allocator, types.items[index]);
+    var inputs: std.ArrayList(regions.Input) = .empty;
+    defer {
+        for (inputs.items) |input| {
+            allocator.free(input.ops);
+            allocator.free(input.locals);
+        }
+        inputs.deinit(allocator);
+    }
+    for (shared.bodies, 0..) |body, ordinal| {
+        var ops: std.ArrayList(ArmOp) = .empty;
+        errdefer ops.deinit(allocator);
+        var locals: std.ArrayList(u8) = .empty;
+        errdefer locals.deinit(allocator);
+        try locals.appendSlice(allocator, signatures.items[body_base + ordinal].params);
+        var reader = Reader{ .bytes = body };
+        const groups = try reader.readUleb32();
+        var bounded = true;
+        for (0..groups) |_| {
+            const count = try reader.readUleb32();
+            const value_type = try reader.readByte();
+            if (count > 65536 - locals.items.len) {
+                bounded = false;
+            } else try locals.appendNTimes(allocator, value_type, count);
+        }
+        if (bounded) parseArmExpr(allocator, body, reader.cursor, &ops) catch |err| switch (err) {
+            Error.OutOfMemory => return err,
+            else => ops.clearRetainingCapacity(),
+        };
+        const owned_ops = try ops.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_ops);
+        const owned_locals = try locals.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_locals);
+        try inputs.append(allocator, .{ .bytes = body, .ops = owned_ops, .locals = owned_locals });
+    }
+    return regions.share(allocator, inputs.items, signatures.items, type_base + @as(u32, @intCast(shared.extra_types.len)), @intCast(signatures.items.len), limits.max_types, limits.max_functions);
+}
 
 fn parseArmExpr(allocator: std.mem.Allocator, bytes: []const u8, expr_at: usize, ops: *std.ArrayList(ArmOp)) Error!void {
     var reader = Reader{ .bytes = bytes, .cursor = expr_at };
@@ -2183,22 +2242,26 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     );
     defer shared.deinit(allocator);
     try threadGeneratedBodies(allocator, shared.bodies);
+    var native = try shareNativeRegions(allocator, pack, object, resolved, shared, type_base, limits);
+    defer native.deinit(allocator);
 
     // Types: preserve every pack index and append only genuinely new generated signatures.
-    try appendUleb(&payload, allocator, type_base + @as(u32, @intCast(shared.extra_types.len)));
+    try appendUleb(&payload, allocator, type_base + @as(u32, @intCast(shared.extra_types.len + native.types.items.len)));
     for (pack.types.encodings.items) |encoding| try payload.appendSlice(allocator, encoding);
     for (resolved.appended_types.items) |encoding| try payload.appendSlice(allocator, encoding);
     for (shared.extra_types) |encoding| try payload.appendSlice(allocator, encoding);
+    for (native.types.items) |encoding| try payload.appendSlice(allocator, encoding);
     try appendSection(&output, allocator, section.type_, payload.items);
     payload.clearRetainingCapacity();
 
     // The profile-declared host imports remain byte-for-byte and in the same function-index order.
     try appendSection(&output, allocator, section.import, pack.module.payload(section.import).?);
 
-    try appendUleb(&payload, allocator, pack.function_types.items.len + object.function_types.items.len + shared.helper_types.len);
+    try appendUleb(&payload, allocator, pack.function_types.items.len + object.function_types.items.len + shared.helper_types.len + native.helper_types.items.len);
     for (pack.function_types.items) |type_index| try appendUleb(&payload, allocator, type_index);
     for (object.function_types.items) |type_index| try appendUleb(&payload, allocator, resolved.type_map[type_index]);
     for (shared.helper_types) |type_index| try appendUleb(&payload, allocator, type_index);
+    for (native.helper_types.items) |type_index| try appendUleb(&payload, allocator, type_index);
     try appendSection(&output, allocator, section.function, payload.items);
     payload.clearRetainingCapacity();
 
@@ -2249,16 +2312,20 @@ fn emit(allocator: std.mem.Allocator, pack: *PackModel, object: *const ObjectMod
     try appendSection(&output, allocator, section.element, payload.items);
     payload.clearRetainingCapacity();
 
-    try appendUleb(&payload, allocator, pack.bodies.items.len + shared.bodies.len + shared.helpers.len);
+    try appendUleb(&payload, allocator, pack.bodies.items.len + native.bodies.items.len + shared.helpers.len + native.helpers.items.len);
     for (pack.bodies.items) |body| {
         try appendUleb(&payload, allocator, body.bytes.len);
         try payload.appendSlice(allocator, body.bytes);
     }
-    for (shared.bodies) |body| {
+    for (native.bodies.items) |body| {
         try appendUleb(&payload, allocator, body.len);
         try payload.appendSlice(allocator, body);
     }
     for (shared.helpers) |body| {
+        try appendUleb(&payload, allocator, body.len);
+        try payload.appendSlice(allocator, body);
+    }
+    for (native.helpers.items) |body| {
         try appendUleb(&payload, allocator, body.len);
         try payload.appendSlice(allocator, body);
     }
@@ -2469,6 +2536,59 @@ fn exerciseThreadedDispatch(allocator: std.mem.Allocator) !void {
             }
         }
     }
+}
+
+fn checkNativeRegions(allocator: std.mem.Allocator) !void {
+    var bodies = [_]std.ArrayList(u8){.empty} ** 4;
+    var operations = [_]std.ArrayList(ArmOp){.empty} ** 4;
+    defer for (&bodies) |*body| body.deinit(allocator);
+    defer for (&operations) |*ops| ops.deinit(allocator);
+    var inputs: [4]regions.Input = undefined;
+    for (&bodies, &operations, &inputs, 0..) |*body, *ops, *input, ordinal| {
+        const floating_local: u32 = if (ordinal % 2 == 0) 2 else 1;
+        const locals: []const u8 = if (floating_local == 2) &.{ 0x7f, 0x7f, 0x7c } else &.{ 0x7f, 0x7c, 0x7f };
+        try body.appendSlice(allocator, &.{ 2, 1, locals[1], 1, locals[2] });
+        for (0..16) |step| {
+            try body.appendSlice(allocator, &.{ 0x20, 0, 0x41 });
+            try appendSleb(body, allocator, @as(i32, @intCast(ordinal * 1000 + step)) - 2000);
+            try body.appendSlice(allocator, &.{ 0x10, 0 });
+            try emitLocalOp(body, allocator, 0x20, floating_local);
+            try body.appendSlice(allocator, &.{ 0x44, 0, 0, 0, 0, 0, 0, 0xf4, 0x3f, 0xa0 });
+            try emitLocalOp(body, allocator, 0x21, floating_local);
+        }
+        try body.append(allocator, 0x0b);
+        try parseArmExpr(allocator, body.items, 5, ops);
+        input.* = .{ .bytes = body.items, .ops = ops.items, .locals = locals };
+    }
+    const signatures = [_]regions.Signature{.{ .params = &.{ 0x7f, 0x7f }, .results = &.{} }};
+    var result = try regions.share(allocator, &inputs, &signatures, 10, 100, 100, 200);
+    defer result.deinit(allocator);
+    try std.testing.expect(result.helpers.items.len > 0);
+    var original_size: usize = 0;
+    var final_size: usize = 0;
+    for (inputs) |input| original_size += input.bytes.len;
+    for (result.bodies.items) |body| final_size += body.len;
+    for (result.helpers.items) |body| final_size += body.len;
+    for (result.types.items) |encoding| {
+        final_size += encoding.len;
+        const signature = try regionSignature(encoding);
+        try std.testing.expect(signature.results.len <= 1);
+    }
+    try std.testing.expect(final_size < original_size);
+    var repeated = try regions.share(allocator, &inputs, &signatures, 10, 100, 100, 200);
+    defer repeated.deinit(allocator);
+    try std.testing.expectEqual(result.helpers.items.len, repeated.helpers.items.len);
+    for (result.bodies.items, repeated.bodies.items) |left, right| try std.testing.expectEqualSlices(u8, left, right);
+    for (result.helpers.items, repeated.helpers.items) |left, right| try std.testing.expectEqualSlices(u8, left, right);
+    var limited = try regions.share(allocator, &inputs, &signatures, 10, 100, 10, 100);
+    defer limited.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), limited.helpers.items.len);
+    for (inputs, limited.bodies.items) |input, body| try std.testing.expectEqualSlices(u8, input.bytes, body);
+}
+
+test "native regions preserve typed live locals, overlap ownership, limits, and deterministic output" {
+    try checkNativeRegions(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkNativeRegions, .{});
 }
 
 test "dispatch threading preserves live state and handles pages, nesting, and backward edges" {
