@@ -35,6 +35,7 @@
 using namespace Luau::CodeGen;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(LuauCompileDuptableConstantPack2)
 
 // Host userdata types follow the pinned Luau HostIrHooks contract (same class as CALLFB /
 // inline_plans): the production frontend emits NEW_USERDATA / CHECK_USERDATA_TAG / BARRIER_OBJ /
@@ -232,8 +233,8 @@ constexpr uint8_t kLuauPinSha256[32] = {
 };
 
 constexpr uint8_t kPatchsetSha256[32] = {
-    0x8b, 0xdf, 0x92, 0xbd, 0x9b, 0x99, 0x7c, 0x65, 0x9c, 0xac, 0x0c, 0x60, 0xca, 0xff, 0x7a, 0x8c,
-    0xbb, 0x58, 0x09, 0x25, 0x22, 0x06, 0x4b, 0xe7, 0x4f, 0xee, 0xb1, 0x63, 0x98, 0x60, 0xde, 0xcd,
+    0x5d, 0x94, 0x86, 0xb3, 0xf2, 0xb7, 0xc7, 0x76, 0xe8, 0xc3, 0x23, 0x0f, 0x21, 0xeb, 0x9c, 0x00,
+    0xad, 0xd9, 0x43, 0xc6, 0xe2, 0x32, 0x68, 0x39, 0x5a, 0x87, 0xf7, 0x9f, 0xdf, 0x95, 0xc7, 0x5d,
 };
 
 constexpr uint8_t kIrEnumSha256[32] = {
@@ -539,15 +540,17 @@ bool sameTableScalar(const TValue &left, const TValue &right) {
     return false;
 }
 
-uint32_t localScalarConstantId(Proto *proto, const TValue &wanted) {
+uint32_t localScalarConstantId(Proto *proto, const TValue &wanted,
+                               const std::vector<ImportDescriptor> &imports) {
     for (int index = 0; index < proto->sizek; ++index) {
-        if (sameTableScalar(proto->k[index], wanted))
+        if (!imports[index].present && sameTableScalar(proto->k[index], wanted))
             return uint32_t(index);
     }
     return LUAUC_FRONTEND_SNAPSHOT_V1_NO_ID;
 }
 
 bool serializeTableConstant(Proto *proto, LuaTable *table, size_t record,
+                            const std::vector<ImportDescriptor> &imports,
                             SectionData &constants, SectionData &constantItems,
                             std::string &error) {
     if (!table || table->metatable || table->sizearray != 0 || !table->node ||
@@ -581,7 +584,7 @@ bool serializeTableConstant(Proto *proto, LuaTable *table, size_t record,
         key.value = node.key.value;
         memcpy(key.extra, node.key.extra, sizeof(key.extra));
         key.tt = int(node.key.tt);
-        uint32_t keyId = localScalarConstantId(proto, key);
+        uint32_t keyId = localScalarConstantId(proto, key, imports);
         if (keyId == LUAUC_FRONTEND_SNAPSHOT_V1_NO_ID) {
             error = "loader table key does not reference a local VM constant";
             return false;
@@ -589,7 +592,7 @@ bool serializeTableConstant(Proto *proto, LuaTable *table, size_t record,
 
         uint32_t valueId = LUAUC_FRONTEND_SNAPSHOT_V1_NO_ID;
         if (isSerializableTableScalar(node.val))
-            valueId = localScalarConstantId(proto, node.val);
+            valueId = localScalarConstantId(proto, node.val, imports);
         else {
             error = "loader table value is not a supported scalar VM constant";
             return false;
@@ -634,6 +637,7 @@ bool serializeTableConstant(Proto *proto, LuaTable *table, size_t record,
 }
 
 bool serializeVmConstant(Proto *proto, const TValue &value, const ImportDescriptor *import,
+                          const std::vector<ImportDescriptor> &imports,
                           const std::vector<ProtoRef> &protos, StringTable &strings,
                          SectionData &constants, SectionData &constantItems,
                          uint32_t &failureStatus, std::string &error) {
@@ -680,7 +684,7 @@ bool serializeVmConstant(Proto *proto, const TValue &value, const ImportDescript
         }
         putU32(constants.bytes, record + 4, id);
     } else if (ttistable(&value)) {
-        if (!serializeTableConstant(proto, hvalue(&value), record, constants, constantItems,
+        if (!serializeTableConstant(proto, hvalue(&value), record, imports, constants, constantItems,
                                     error)) {
             constants.bytes.resize(record);
             return false;
@@ -758,7 +762,7 @@ bool serializeProtoMetadata(const std::vector<ProtoRef> &protos, std::vector<Sec
                uint32_t(proto->sizek));
         for (int index = 0; index < proto->sizek; ++index) {
             const ImportDescriptor *import = imports[index].present ? &imports[index] : nullptr;
-            if (!serializeVmConstant(proto, proto->k[index], import, protos, strings, constants,
+            if (!serializeVmConstant(proto, proto->k[index], import, imports, protos, strings, constants,
                                      constantItems, failureStatus, error))
                 return false;
         }
@@ -1185,8 +1189,24 @@ bool buildWireImage(std::vector<SectionData> &sections, uint32_t protoCount, uin
     return output.size() == totalSize;
 }
 
+class ScopedTableConstantPacking {
+public:
+    explicit ScopedTableConstantPacking(uint32_t coverageLevel)
+        : previous(FFlag::LuauCompileDuptableConstantPack2.value) {
+        FFlag::LuauCompileDuptableConstantPack2.value = coverageLevel < 2;
+    }
+
+    ~ScopedTableConstantPacking() {
+        FFlag::LuauCompileDuptableConstantPack2.value = previous;
+    }
+
+private:
+    bool previous;
+};
+
 bool compileSource(const uint8_t *source, size_t sourceSize, uint32_t coverageLevel,
                    std::string &bytecode, LuaucFrontendSnapshotV1Result *result) {
+    ScopedTableConstantPacking packing(coverageLevel);
     size_t bytecodeSize = 0;
     const char *sourceBytes = sourceSize ? reinterpret_cast<const char *>(source) : "";
     lua_CompileOptions options{};
@@ -1337,6 +1357,7 @@ bool buildInlinedBytecode(const uint8_t *source, size_t sourceSize, uint32_t cov
     }
 
     const bool previousFeedback = FFlag::LuauEmitCallFeedback.value;
+    ScopedTableConstantPacking packing(coverageLevel);
     FFlag::LuauEmitCallFeedback.value = true;
     Luau::CompileOptions options{};
     options.optimizationLevel = 1;

@@ -2,9 +2,9 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "faf3e1622020ee72e449bbdd5b7fe27ea5ef7f8279f8794fc41f2f840ee5c513",
+  "compiler_build_digest": "4dcb5ce1edf7d3d6838f9f2b5a5f00318ad0378faf11ea660bafba8424aa862f",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "5d484361ef5c642d53343e4be9e593322b84a9669894e79af5a60520b357d949",
+  "frontend_contract_digest": "10e9a97f110d579a1bf9bacd16d06d7b7fb7aea6dabfbd983d7f4f725ade5d78",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
   "totals": {
     "implemented": 0,
@@ -173,7 +173,6 @@
         "reference_capture",
         "slow_add",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "userdata_hold",
         "userdata_hooks",
@@ -210,7 +209,6 @@
         "reference_capture",
         "slow_add",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "userdata_hold",
         "userdata_hooks",
@@ -955,6 +953,7 @@
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -975,7 +974,6 @@
         "dynamic_hash_table",
         "global_state",
         "table_churn",
-        "table_clone_append",
         "table_namecall"
       ],
       "census_forms": [
@@ -985,7 +983,6 @@
         "dynamic_hash_table",
         "global_state",
         "table_churn",
-        "table_clone_append",
         "table_namecall"
       ],
       "executed_gates": [
@@ -1501,7 +1498,6 @@
         "silent_return",
         "slow_add",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "userdata_hooks",
         "yield_call"
@@ -1537,7 +1533,6 @@
         "silent_return",
         "slow_add",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "userdata_hooks",
         "yield_call"
@@ -1583,6 +1578,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_get_upvalue",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_return",
@@ -1600,8 +1596,7 @@
         "dynamic_string",
         "embed_lib",
         "embed_main",
-        "fast_builtins",
-        "table_clone_append"
+        "fast_builtins"
       ],
       "census_forms": [
         "any"
@@ -1610,8 +1605,7 @@
         "dynamic_string",
         "embed_lib",
         "embed_main",
-        "fast_builtins",
-        "table_clone_append"
+        "fast_builtins"
       ],
       "executed_gates": [
         "//hosts/wasmtime:parity_test",
@@ -1894,6 +1888,7 @@
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_finish_compiled_call",
@@ -1915,7 +1910,6 @@
         "embed_lib",
         "forwarded_capture",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "yield_call"
       ],
@@ -1927,7 +1921,6 @@
         "embed_lib",
         "forwarded_capture",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "yield_call"
       ],
@@ -1940,7 +1933,6 @@
         "//conformance/tests:frontend_to_wasm_test",
         "//conformance/tests:closures_test",
         "//conformance:runtime_measurement_test",
-        "//conformance/tests:tables_test",
         "//conformance/tests:namecall_test",
         "//hosts/js:embed_test",
         "//hosts/wasmtime:parity_test"
@@ -1971,7 +1963,6 @@
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -1979,8 +1970,7 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
-        "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string"
+        "luauc_runtime_v1_table_len"
       ],
       "wasm_features": [],
       "may_allocate": false,
@@ -6819,7 +6809,6 @@
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -6827,8 +6816,7 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
-        "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string"
+        "luauc_runtime_v1_table_len"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -6890,7 +6878,6 @@
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_require_static",
@@ -6898,8 +6885,7 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
-        "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string"
+        "luauc_runtime_v1_table_len"
       ],
       "wasm_features": [],
       "may_allocate": true,
@@ -8853,7 +8839,6 @@
         "reference_capture",
         "slow_add",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "userdata_hold",
         "userdata_hooks",
@@ -8890,7 +8875,6 @@
         "reference_capture",
         "slow_add",
         "table_churn",
-        "table_clone_append",
         "table_namecall",
         "userdata_hold",
         "userdata_hooks",
@@ -9287,6 +9271,7 @@
       "runtime_symbols": [
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -9307,7 +9292,6 @@
         "dynamic_hash_table",
         "global_state",
         "table_churn",
-        "table_clone_append",
         "table_namecall"
       ],
       "census_forms": [
@@ -9317,7 +9301,6 @@
         "dynamic_hash_table",
         "global_state",
         "table_churn",
-        "table_clone_append",
         "table_namecall"
       ],
       "executed_gates": [
@@ -11195,6 +11178,7 @@
         "luauc_runtime_v1_check_gc",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_close_upvalues",
+        "luauc_runtime_v1_do_arith",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_interrupt",
@@ -11215,8 +11199,7 @@
         "dynamic_hash_table",
         "embed_lib",
         "fast_builtins",
-        "table_churn",
-        "table_clone_append"
+        "table_churn"
       ],
       "census_forms": [
         "any",
@@ -11226,8 +11209,7 @@
         "dynamic_hash_table",
         "embed_lib",
         "fast_builtins",
-        "table_churn",
-        "table_clone_append"
+        "table_churn"
       ],
       "executed_gates": [
         "//hosts/wasmtime:parity_test",
@@ -14763,5 +14745,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "dd3e1ac26cf10ad36da0709754a3a7db9b5f990c7c9400fb5266f0fa235fac3e"
+  "canonical_hash": "7e5eb6af7beb0927219a62908b2a22b646190055e03e7ed0e535b1c02c84bb60"
 }

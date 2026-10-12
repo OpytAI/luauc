@@ -49,6 +49,7 @@ const contractInputs = [
   "third_party/luau/patches/0022-aot-straight-add-chain.patch",
   "third_party/luau/patches/0023-aot-compact-semantic-operations.patch",
   "third_party/luau/patches/0024-aot-compact-control-operations.patch",
+  "third_party/luau/patches/0025-aot-literal-key-templates.patch",
 ].sort();
 
 function frontendContractDigest() {
@@ -462,12 +463,34 @@ if (decodedItems.some((item, index) => index > 0 && decodedItems[index - 1].keyI
 const decodedRecord = Object.fromEntries(decodedItems.map((item) => [item.key.value, item.value.value]));
 if (
   JSON.stringify(Object.keys(decodedRecord).sort()) !== JSON.stringify(["first", "label", "second"]) ||
-  decodedItems.some((item) => item.value.kind !== "placeholder")
+  decodedRecord.first !== 11 || decodedRecord.second !== 22 || decodedRecord.label !== "seed"
 )
   throw new Error(`VM_TABLE item references mismatch: ${JSON.stringify(decodedItems)}`);
 const compoundSecond = compile(compoundSource, "@frontend/compound-constant.luau");
 if (compoundSecond.status !== 0 || !compound.snapshot.equals(compoundSecond.snapshot))
   throw new Error("identical record-only table input produced nondeterministic snapshot bytes");
+
+for (const coverageLevel of [0, 2, 0]) {
+  for (const inlinePlans of [null, protoIdentityPlan]) {
+    const literal = '{ ["first:key"] = 11, ["nil:key"] = nil, flag = false }';
+    const source = inlinePlans === null ? `return function() return ${literal} end`
+      : protoIdentitySource.replace("return a - b", `return ${literal}`);
+    const result = compile(source,
+      "@frontend/literal-key-template.luau", coverageLevel, inlinePlans);
+    if (result.status !== 0 || result.validation !== 0)
+      throw new Error(`literal-key template failed: ${result.diagnostic}`);
+    const tables = tableConstants(result.snapshot, parseSnapshot(result.snapshot));
+    if (tables.length !== 1) throw new Error("literal keys did not use a table template");
+    const fields = Object.fromEntries(tables[0].items.map(item => [item.key.value, item.value]));
+    if (coverageLevel < 2) {
+      if (fields["first:key"]?.value !== 11 || fields.flag?.value !== false ||
+          fields["nil:key"]?.kind !== "nil")
+        throw new Error(`literal-key template values mismatch: ${JSON.stringify(fields)}`);
+    } else if (Object.values(fields).some(value => value.kind !== "placeholder")) {
+      throw new Error("expression coverage must retain individual field initializers");
+    }
+  }
+}
 
 const imported = compile("return math.abs(-42)", "@frontend/import-constant.luau");
 if (imported.status !== 0 || imported.validation !== 0)

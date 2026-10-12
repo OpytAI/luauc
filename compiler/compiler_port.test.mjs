@@ -6,7 +6,7 @@ import { join } from "node:path";
 if (!process.env.RUNFILES_DIR) throw new Error("RUNFILES_DIR is not set");
 const runfile = (value) => value.startsWith("/") ? value : join(process.env.RUNFILES_DIR, value);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest();
-const frontendContract = Buffer.from("5d484361ef5c642d53343e4be9e593322b84a9669894e79af5a60520b357d949", "hex");
+const frontendContract = Buffer.from("10e9a97f110d579a1bf9bacd16d06d7b7fb7aea6dabfbd983d7f4f725ade5d78", "hex");
 const source = "return function(value, text) return value * 3 + 1, text .. ':' .. value end";
 const maxRequestBytes = 16 * 1024 * 1024;
 

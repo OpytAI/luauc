@@ -1,0 +1,30 @@
+--- a/Compiler/src/Compiler.cpp
++++ b/Compiler/src/Compiler.cpp
+@@ -2500,7 +2500,8 @@
+ 
+             arraySize += (item.kind == AstExprTable::Item::Kind::List);
+             hashSize += (item.kind != AstExprTable::Item::Kind::List);
+-            recordSize += (item.kind == AstExprTable::Item::Kind::Record);
++            recordSize += (item.kind == AstExprTable::Item::Kind::Record ||
++                (item.key && item.key->is<AstExprConstantString>()));
+         }
+ 
+         // Optimization: allocate sequential explicitly specified numeric indices ([1]) as arrays
+@@ -2540,7 +2541,7 @@
+                 for (size_t i = 0; i < expr->items.size; ++i)
+                 {
+                     const AstExprTable::Item& item = expr->items.data[i];
+-                    LUAU_ASSERT(item.kind == AstExprTable::Item::Kind::Record);
++                    LUAU_ASSERT(item.key && item.key->is<AstExprConstantString>());
+ 
+                     AstExprConstantString* ckey = item.key->as<AstExprConstantString>();
+                     LUAU_ASSERT(ckey);
+@@ -2580,7 +2581,7 @@
+                 for (size_t i = 0; i < expr->items.size; ++i)
+                 {
+                     const AstExprTable::Item& item = expr->items.data[i];
+-                    LUAU_ASSERT(item.kind == AstExprTable::Item::Kind::Record);
++                    LUAU_ASSERT(item.key && item.key->is<AstExprConstantString>());
+ 
+                     AstExprConstantString* ckey = item.key->as<AstExprConstantString>();
+                     LUAU_ASSERT(ckey);

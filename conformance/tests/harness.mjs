@@ -1294,61 +1294,61 @@ export async function executePlainTableNamecallPackageShape() {
     if (JSON.stringify(actual) !== JSON.stringify(wanted))
       throw new Error(`${name}: ${label} commands changed: ${JSON.stringify(actual)}`);
   };
-  expectCommands(35, [1, 131, 2, 11, 97], "dispatch head");
-  expectCommands(40, [15, 13, 7, 20, 88], "direct-slot arm");
-  expectCommands(45, [138, 104, 1, 131, 2, 10, 137, 2, 15, 13, 7, 20, 88], "__index arm");
-  expectCommands(58, [164, 88], "fallback arm");
+  expectCommands(21, [1, 131, 2, 11, 97], "dispatch head");
+  expectCommands(26, [15, 13, 7, 20, 88], "direct-slot arm");
+  expectCommands(31, [138, 104, 1, 131, 2, 10, 137, 2, 15, 13, 7, 20, 88], "__index arm");
+  expectCommands(44, [164, 88], "fallback arm");
 
-  const check = shape.instruction(1, 36);
-  const hash = shape.instruction(1, 38);
-  const branch = shape.instruction(1, 39);
-  const directReceiver = shape.instruction(1, 40);
-  const directMethod = shape.instruction(1, 43);
-  const noNext = shape.instruction(1, 45);
-  const fastgettm = shape.instruction(1, 46);
-  const indexSlot = shape.instruction(1, 50);
-  const indexMatch = shape.instruction(1, 51);
-  const indexedReceiver = shape.instruction(1, 53);
-  const indexedMethod = shape.instruction(1, 56);
-  const fallback = shape.instruction(1, 58);
-  const fallbackJump = shape.instruction(1, 59);
+  const check = shape.instruction(1, 22);
+  const hash = shape.instruction(1, 24);
+  const branch = shape.instruction(1, 25);
+  const directReceiver = shape.instruction(1, 26);
+  const directMethod = shape.instruction(1, 29);
+  const noNext = shape.instruction(1, 31);
+  const fastgettm = shape.instruction(1, 32);
+  const indexSlot = shape.instruction(1, 36);
+  const indexMatch = shape.instruction(1, 37);
+  const indexedReceiver = shape.instruction(1, 39);
+  const indexedMethod = shape.instruction(1, 42);
+  const fallback = shape.instruction(1, 44);
+  const fallbackJump = shape.instruction(1, 45);
   const key = branch.operand(1);
-  if (check.operand(0).kind !== 4 || check.operand(0).value !== 35 ||
+  if (check.operand(0).kind !== 4 || check.operand(0).value !== 21 ||
       check.constant(1).kind !== 4 || check.constant(1).bits !== 7n ||
-      check.operand(2).kind !== 5 || check.operand(2).value !== 6 ||
-      hash.operand(0).kind !== 4 || hash.operand(0).value !== 37 ||
+      check.operand(2).kind !== 5 || check.operand(2).value !== 4 ||
+      hash.operand(0).kind !== 4 || hash.operand(0).value !== 23 ||
       hash.constant(1).kind !== 2 || hash.constant(1).bits !== 8460347n ||
-      key.kind !== 7 || branch.operand(2).kind !== 5 || branch.operand(2).value !== 7 ||
-      branch.operand(3).kind !== 5 || branch.operand(3).value !== 8 ||
+      key.kind !== 7 || branch.operand(2).kind !== 5 || branch.operand(2).value !== 5 ||
+      branch.operand(3).kind !== 5 || branch.operand(3).value !== 6 ||
       directReceiver.operand(0).kind !== 6 || directReceiver.operand(0).value !== 3 ||
-      directReceiver.operand(1).kind !== 4 || directReceiver.operand(1).value !== 37 ||
+      directReceiver.operand(1).kind !== 4 || directReceiver.operand(1).value !== 23 ||
       directMethod.operand(0).kind !== 6 || directMethod.operand(0).value !== 2 ||
-      directMethod.operand(1).kind !== 4 || directMethod.operand(1).value !== 42 ||
-      noNext.operand(0).kind !== 4 || noNext.operand(0).value !== 38 ||
-      noNext.operand(1).kind !== 5 || noNext.operand(1).value !== 6 ||
-      fastgettm.operand(0).kind !== 4 || fastgettm.operand(0).value !== 37 ||
+      directMethod.operand(1).kind !== 4 || directMethod.operand(1).value !== 28 ||
+      noNext.operand(0).kind !== 4 || noNext.operand(0).value !== 24 ||
+      noNext.operand(1).kind !== 5 || noNext.operand(1).value !== 4 ||
+      fastgettm.operand(0).kind !== 4 || fastgettm.operand(0).value !== 23 ||
       fastgettm.constant(1).kind !== 0 || fastgettm.constant(1).bits !== 0n ||
-      fastgettm.operand(2).kind !== 5 || fastgettm.operand(2).value !== 6 ||
-      indexSlot.operand(0).kind !== 4 || indexSlot.operand(0).value !== 49 ||
-      indexSlot.constant(1).kind !== 2 || indexSlot.constant(1).bits !== 8n ||
+      fastgettm.operand(2).kind !== 5 || fastgettm.operand(2).value !== 4 ||
+      indexSlot.operand(0).kind !== 4 || indexSlot.operand(0).value !== 35 ||
+      indexSlot.constant(1).kind !== 2 || indexSlot.constant(1).bits !== 5n ||
       indexSlot.operand(2).kind !== 7 || indexSlot.operand(2).value !== key.value ||
-      indexMatch.operand(0).kind !== 4 || indexMatch.operand(0).value !== 50 ||
+      indexMatch.operand(0).kind !== 4 || indexMatch.operand(0).value !== 36 ||
       indexMatch.operand(1).kind !== 7 || indexMatch.operand(1).value !== key.value ||
-      indexMatch.operand(2).kind !== 5 || indexMatch.operand(2).value !== 6 ||
+      indexMatch.operand(2).kind !== 5 || indexMatch.operand(2).value !== 4 ||
       indexedReceiver.operand(0).kind !== 6 || indexedReceiver.operand(0).value !== 3 ||
-      indexedReceiver.operand(1).kind !== 4 || indexedReceiver.operand(1).value !== 52 ||
+      indexedReceiver.operand(1).kind !== 4 || indexedReceiver.operand(1).value !== 38 ||
       indexedMethod.operand(0).kind !== 6 || indexedMethod.operand(0).value !== 2 ||
-      indexedMethod.operand(1).kind !== 4 || indexedMethod.operand(1).value !== 55 ||
-      fallback.constant(0).kind !== 2 || fallback.constant(0).bits !== 8n ||
+      indexedMethod.operand(1).kind !== 4 || indexedMethod.operand(1).value !== 41 ||
+      fallback.constant(0).kind !== 2 || fallback.constant(0).bits !== 5n ||
       fallback.operand(1).kind !== 6 || fallback.operand(1).value !== 2 ||
       fallback.operand(2).kind !== 6 || fallback.operand(2).value !== 1 ||
       fallback.operand(3).kind !== 7 || fallback.operand(3).value !== key.value ||
-      fallbackJump.operand(0).kind !== 5 || fallbackJump.operand(0).value !== 5)
+      fallbackJump.operand(0).kind !== 5 || fallbackJump.operand(0).value !== 3)
     throw new Error(`${name}: exact NAMECALL dependencies changed`);
-  for (const jumpId of [44, 57]) {
+  for (const jumpId of [30, 43]) {
     const jump = shape.instruction(1, jumpId).operand(0);
-    if (jump.kind !== 5 || jump.value !== 5)
-      throw new Error(`${name}: fast arm ${jumpId} no longer rejoins block 5`);
+    if (jump.kind !== 5 || jump.value !== 3)
+      throw new Error(`${name}: fast arm ${jumpId} no longer rejoins block 3`);
   }
 
   const blockReferences = Array(shape.blockCount(1)).fill(0);
@@ -1359,39 +1359,39 @@ export async function executePlainTableNamecallPackageShape() {
       if (operand.kind === 5) blockReferences[operand.value]++;
     }
   }
-  const semanticBlocks = [5, 6, 7, 8].map((blockId) => shape.block(1, blockId));
+  const semanticBlocks = [3, 4, 5, 6].map((blockId) => shape.block(1, blockId));
   const expectedBlocks = [
-    { kind: 2, useCount: 3, start: 60, finish: 64 },
-    { kind: 1, useCount: 5, start: 58, finish: 59 },
-    { kind: 2, useCount: 1, start: 40, finish: 44 },
-    { kind: 2, useCount: 1, start: 45, finish: 57 },
+    { kind: 2, useCount: 3, start: 46, finish: 50 },
+    { kind: 1, useCount: 5, start: 44, finish: 45 },
+    { kind: 2, useCount: 1, start: 26, finish: 30 },
+    { kind: 2, useCount: 1, start: 31, finish: 43 },
   ];
   if (JSON.stringify(semanticBlocks) !== JSON.stringify(expectedBlocks) ||
-      JSON.stringify(blockReferences.slice(5)) !== JSON.stringify([3, 5, 1, 1]))
+      JSON.stringify(blockReferences.slice(3)) !== JSON.stringify([3, 5, 1, 1]))
     throw new Error(`${name}: NAMECALL block ownership changed: ${JSON.stringify({ semanticBlocks, blockReferences })}`);
 
   {
     const mutated = Buffer.from(snapshot);
     const offsets = referenceSnapshotOffsets(mutated);
-    mutated.writeUInt32LE(9, offsets.operand(1, 38, 1) + 4);
+    mutated.writeUInt32LE(9, offsets.operand(1, 24, 1) + 4);
     expectPackageRejection(mutated, "NAMECALL hash no longer matches the literal key");
   }
   {
     const mutated = Buffer.from(snapshot);
     const offsets = referenceSnapshotOffsets(mutated);
-    mutated.writeUInt32LE(3, offsets.operand(1, 58, 1) + 4);
+    mutated.writeUInt32LE(3, offsets.operand(1, 44, 1) + 4);
     expectPackageRejection(mutated, "FALLBACK_NAMECALL destination diverges from both fast arms");
   }
   {
     const mutated = Buffer.from(snapshot);
     const offsets = referenceSnapshotOffsets(mutated);
-    mutated.writeUInt32LE(4, offsets.operand(1, 53, 0) + 4);
+    mutated.writeUInt32LE(4, offsets.operand(1, 39, 0) + 4);
     expectPackageRejection(mutated, "__index arm publishes the receiver outside destination plus one");
   }
   {
     const mutated = Buffer.from(snapshot);
     const offsets = referenceSnapshotOffsets(mutated);
-    mutated.writeUInt32LE(4, offsets.operand(1, 59, 0) + 4);
+    mutated.writeUInt32LE(4, offsets.operand(1, 45, 0) + 4);
     expectPackageRejection(mutated, "fallback arm no longer uses the canonical rejoin");
   }
 

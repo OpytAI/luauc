@@ -8,6 +8,49 @@ const compiler = runfile("LUAUC_COMPILER_WASM");
 const profile = runfile("LUAUC_EMBED_PROFILE");
 const pack = runfile("LUAUC_EMBED_PACK");
 
+for (const coverageLevel of [0, 2]) {
+  const source = `
+local function make()
+    return { ["literal:key"] = "seed", flag = false, absent = nil, negative = -0.0, count = 11 }
+end
+return function(value, text)
+    local first, second = make(), make()
+    assert(first ~= second and first["literal:key"] == "seed" and first.flag == false)
+    assert(first.absent == nil and 1 / first.negative == -math.huge and first.count == 11)
+    first["literal:key"], first.count, first.absent = text, value, true
+    table.freeze(first)
+    coroutine.yield("gc-boundary")
+    assert(second["literal:key"] == "seed" and second.count == 11 and second.absent == nil)
+    local order = { value = "" }
+    local function effect(label)
+        order.value ..= label
+        return label
+    end
+    local duplicate = { ["same"] = 1, same = effect("a"), ["same"] = 3, other = effect("b") }
+    assert(order.value == "ab" and duplicate.same == 3 and duplicate.other == "b")
+    local constant = { ["same"] = 1, same = 2, ["same"] = nil, flag = true }
+    assert(constant.same == nil and constant.flag)
+    local key = "same"
+    local dynamic = { ["same"] = 1, [key] = effect("c"), same = 4 }
+    assert(order.value == "abc" and dynamic.same == 4)
+    local mixed = { 7, ["literal:key"] = 8, 9 }
+    assert(mixed[1] == 7 and mixed[2] == 9 and mixed["literal:key"] == 8)
+    return first.count, first["literal:key"]
+end
+`;
+  const compilation = await compilePackage(compiler, profile, pack, [{ name: "main", source }],
+    "main", { coverageLevel });
+  const instance = instantiateArtifact(compilation.artifact);
+  for (const value of [7, -11, 0]) {
+    const result = invoke(instance, value, "templates");
+    assert.equal(result.status, 0, JSON.stringify(result));
+    assert.equal(result.resultStatus, 0, JSON.stringify(result));
+    assert.equal(result.error, false);
+    assert.equal(result.number, value);
+    assert.equal(result.text, "templates");
+  }
+}
+
 for (const paddingCount of [0, 8]) {
   const sizes = [];
   for (const count of [16, 48]) {
