@@ -1028,7 +1028,6 @@ fn packageCaptureRuns(
 fn packageCallPreface(
     allocator: std.mem.Allocator,
     object: *wasm.Object,
-    imports: runtime_imports.RuntimeImports,
     siblings: []const wasm.FunctionRef,
     interrupt_helper: ?wasm.FunctionRef,
     exchange_helper: ?wasm.FunctionRef,
@@ -1045,35 +1044,7 @@ fn packageCallPreface(
     const fast = fast_lua_call orelse return preface;
     if (prepare_helper == null)
         return preface;
-    var move_flag: u32 = 0;
-    while (move_flag <= 1) : (move_flag += 1) {
-        var capture_count: u32 = 0;
-        while (capture_count <= 3) : (capture_count += 1) {
-            var constant_flag: u32 = 0;
-            while (constant_flag <= 1) : (constant_flag += 1) {
-                const move = move_flag != 0;
-                const constant = constant_flag != 0;
-                if (constant and imports.load_constant == null)
-                    continue;
-                if (capture_count != 0 and imports.dupclosure_capture == null)
-                    continue;
-                const index = backend_context.callPrefaceIndex(move, constant, capture_count);
-                preface[index] = try backend_context.emitCallPreface(
-                    allocator,
-                    object,
-                    interrupt,
-                    line,
-                    exchange,
-                    fast,
-                    imports.load_constant,
-                    imports.dupclosure_capture,
-                    move,
-                    constant,
-                    capture_count,
-                );
-            }
-        }
-    }
+    preface[0] = try backend_context.emitCallPreface(allocator, object, interrupt, line, exchange, fast);
     return preface;
 }
 
@@ -1191,7 +1162,6 @@ pub fn buildPackage(allocator: std.mem.Allocator, snapshot_bytes: []const u8) Er
     const call_preface = try packageCallPreface(
         allocator,
         &object,
-        imports,
         function_refs,
         interrupt_helper,
         exchange_helper,
@@ -1765,7 +1735,6 @@ pub fn buildStaticPackage(allocator: std.mem.Allocator, package_bytes: []const u
     const call_preface = try packageCallPreface(
         allocator,
         &object,
-        imports,
         function_refs,
         interrupt_helper,
         exchange_helper,

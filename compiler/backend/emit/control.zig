@@ -41,7 +41,7 @@ const fast_lua_guard_miss: i32 = -1;
 // A preface still treats this sentinel as interrupt success. The shared interrupt
 // itself returns 0 for both a quiet update and a slow success, and the caller reloads.
 const outlined_reload: i32 = -1;
-pub const call_preface_count: usize = 16;
+pub const call_preface_count: usize = 1;
 
 pub fn sourceLine(self: anytype, pc: u32) Error!u32 {
     const line = try self.snapshot.sourceLine(self.proto, pc);
@@ -1552,32 +1552,6 @@ fn emitFastLuaCallSite(
     try self.body.localSet(self.allocator, self.status_local);
 }
 
-fn prefaceSymbol(move: bool, constant: bool, capture_count: u32) []const u8 {
-    const symbols = [_][]const u8{
-        "luauc_runtime_v1_fast_call_preface",
-        "luauc_runtime_v1_fast_call_preface_c1",
-        "luauc_runtime_v1_fast_call_preface_c2",
-        "luauc_runtime_v1_fast_call_preface_c3",
-        "luauc_runtime_v1_fast_call_preface_k",
-        "luauc_runtime_v1_fast_call_preface_k_c1",
-        "luauc_runtime_v1_fast_call_preface_k_c2",
-        "luauc_runtime_v1_fast_call_preface_k_c3",
-        "luauc_runtime_v1_fast_call_preface_m",
-        "luauc_runtime_v1_fast_call_preface_m_c1",
-        "luauc_runtime_v1_fast_call_preface_m_c2",
-        "luauc_runtime_v1_fast_call_preface_m_c3",
-        "luauc_runtime_v1_fast_call_preface_m_k",
-        "luauc_runtime_v1_fast_call_preface_m_k_c1",
-        "luauc_runtime_v1_fast_call_preface_m_k_c2",
-        "luauc_runtime_v1_fast_call_preface_m_k_c3",
-    };
-    return symbols[callPrefaceIndex(move, constant, capture_count)];
-}
-
-pub fn callPrefaceIndex(move: bool, constant: bool, capture_count: u32) u32 {
-    return @as(u32, @intFromBool(move)) * 8 + @as(u32, @intFromBool(constant)) * 4 + capture_count;
-}
-
 /// One stack-to-stack TValue copy. The packed immediate is source in the low 16 bits and destination in the high 16.
 pub fn emitMoveReg(
     allocator: std.mem.Allocator,
@@ -1598,19 +1572,6 @@ pub fn emitMoveReg(
     );
 }
 
-fn prefaceParamCount(move: bool, constant: bool, capture_count: u32) u32 {
-    // L, packed interrupt line and continuation, packed call line and continuation,
-    // byte offset, argument bytes, result count.
-    var count: u32 = 6;
-    if (move)
-        count += 1;
-    if (constant)
-        count += 2;
-    if (capture_count != 0)
-        count += 2 + capture_count;
-    return count;
-}
-
 fn emitMasked(body: *wasm.Body, allocator: std.mem.Allocator, local_index: u32, mask: u32) Error!void {
     try body.localGet(allocator, local_index);
     try body.i32Const(allocator, @intCast(mask));
@@ -1624,9 +1585,9 @@ fn emitShifted(body: *wasm.Body, allocator: std.mem.Allocator, local_index: u32,
 }
 
 /// One straight-line preface for packages larger than the inline sibling chain.
-/// The tail is a constant load, then 0..3 dupclosure captures. Each shape is its own function.
+/// The preface ends at CALL because a prepared call resumes at the following instruction.
 /// Interrupt 0 and `outlined_reload` continue. Any other interrupt status returns raw.
-/// A call-region failure returns that status. Success returns 0 after the tail.
+/// A call-region failure returns that status. Success returns 0.
 pub fn emitCallPreface(
     allocator: std.mem.Allocator,
     object: *wasm.Object,
@@ -1634,30 +1595,14 @@ pub fn emitCallPreface(
     line_helper: wasm.FunctionRef,
     exchange_helper: wasm.FunctionRef,
     fast_lua_call: wasm.FunctionRef,
-    load_constant: ?wasm.FunctionRef,
-    dupclosure_capture: ?wasm.FunctionRef,
-    move: bool,
-    constant: bool,
-    capture_count: u32,
 ) Error!wasm.FunctionRef {
-    if (capture_count > 3)
-        return Error.UnsupportedControlFlow;
-    if (constant and load_constant == null)
-        return Error.UnsupportedCommand;
-    if (capture_count != 0 and dupclosure_capture == null)
-        return Error.UnsupportedCommand;
-
-    const param_count = prefaceParamCount(move, constant, capture_count);
-    var params: [20]wasm.ValueType = .{.i32} ** 20;
+    const params = [_]wasm.ValueType{.i32} ** 6;
     const results = [_]wasm.ValueType{.i32};
-    const function_type = try object.addType(.{ .params = params[0..param_count], .results = &results });
+    const function_type = try object.addType(.{ .params = &params, .results = &results });
     const locals = [_]wasm.Local{.{ .count = 1, .value_type = .i32 }};
     var body = try wasm.Body.init(allocator, &locals);
     defer body.deinit(allocator);
-    const status: u32 = param_count;
-    const move_at: u32 = 6;
-    const const_at: u32 = 6 + @as(u32, if (move) 1 else 0);
-    const cap_base: u32 = const_at + @as(u32, if (constant) 2 else 0);
+    const status: u32 = params.len;
 
     try body.localGet(allocator, 0);
     try emitMasked(&body, allocator, 1, abi.aot_line_mask);
@@ -1705,37 +1650,13 @@ pub fn emitCallPreface(
     try body.localTee(allocator, status);
     try body.i32Eqz(allocator);
     try body.ifVoid(allocator);
-    if (move)
-        try emitPrefaceRegisterCopy(&body, allocator, move_at);
-    if (constant) {
-        try body.localGet(allocator, 0);
-        try body.localGet(allocator, const_at);
-        try body.localGet(allocator, const_at + 1);
-        try body.call(allocator, load_constant orelse return Error.UnsupportedCommand);
-    }
-    if (capture_count != 0) {
-        const capture_fn = dupclosure_capture orelse return Error.UnsupportedCommand;
-        var index: u32 = 0;
-        while (index < capture_count) : (index += 1) {
-            const packed_capture = cap_base + 2 + index;
-            try body.localGet(allocator, 0);
-            try body.localGet(allocator, cap_base);
-            try body.localGet(allocator, cap_base + 1);
-            try body.i32Const(allocator, @intCast(index));
-            try emitShifted(&body, allocator, packed_capture, 16);
-            try emitMasked(&body, allocator, packed_capture, 0xffff);
-            try body.i32Const(allocator, @intFromBool(index + 1 == capture_count));
-            try body.call(allocator, capture_fn);
-        }
-    }
-    try body.else_(allocator);
-    try body.localGet(allocator, status);
+    try body.i32Const(allocator, status_ok);
     try body.return_(allocator);
     try body.end(allocator);
-    try body.i32Const(allocator, status_ok);
+    try body.localGet(allocator, status);
     try body.finish(allocator);
     return object.defineFunction(
-        prefaceSymbol(move, constant, capture_count),
+        "luauc_runtime_v1_fast_call_preface",
         function_type,
         wasm.symbol.visibility_hidden,
         body,
@@ -2335,24 +2256,10 @@ fn emitOutlinedFastLuaResult(self: anytype, continuation: ?CallContinuation) Err
     try self.emitReloadBase();
 }
 
-const PrefaceConstant = struct {
-    load_id: u32,
-    destination: u32,
-    constant_id: u32,
-};
-
 const PrefaceMove = struct {
     source: u32,
     destination: u32,
     finish: u32,
-};
-
-const PrefaceCaptures = struct {
-    count: u32,
-    destination: u32,
-    child_id: u32,
-    kinds: [3]u32,
-    sources: [3]u32,
 };
 
 pub const CallPreface = struct {
@@ -2365,9 +2272,6 @@ pub const CallPreface = struct {
     func_offset: i32,
     arg_bytes: i32,
     result_count: i32,
-    move: ?PrefaceMove,
-    constant: ?PrefaceConstant,
-    captures: ?PrefaceCaptures,
 };
 
 fn prefaceHelpersReady(self: anytype) bool {
@@ -2388,67 +2292,8 @@ fn prefaceSpanOwned(self: anytype, start: u32, finish: u32) bool {
     return true;
 }
 
-/// A constant load is a planned cluster. That cluster is the load itself, so the tail may own it.
-fn prefaceConstantLoadOwned(self: anytype, owner: u32, start: u32, finish: u32) bool {
-    var cursor = start;
-    while (cursor <= finish) : (cursor += 1) {
-        if ((self.plan.instructionBlock(cursor) orelse return false) != owner)
-            return false;
-        if (self.plan.clusterAt(cursor)) |cluster| {
-            if (cluster.kind != .constant_load or cluster.start != start or cluster.finish != finish)
-                return false;
-        }
-    }
-    return true;
-}
-
-fn i32Immediate(value: u32) Error!i32 {
-    return std.math.cast(i32, value) orelse Error.ResourceLimit;
-}
-
-fn prefaceCapturesAt(self: anytype, start: u32, range_finish: u32, move: bool) Error!?PrefaceCaptures {
-    if (start > range_finish)
-        return null;
-    if ((try self.instruction(start)).command != .fallback_dupclosure)
-        return null;
-    const pattern = model.dupClosurePattern(self.snapshot, self.function, self.proto, start) catch return null;
-    const captured = switch (pattern) {
-        .closed => return null,
-        .captured => |found| found,
-    };
-    if (captured.capture_count < 1 or captured.capture_count > 3)
-        return null;
-    const finish = std.math.add(u32, start, captured.capture_count) catch return Error.ResourceLimit;
-    if (finish > range_finish or !prefaceSpanOwned(self, start, finish))
-        return null;
-    if (self.call_preface[callPrefaceIndex(move, false, captured.capture_count)] == null and
-        self.call_preface[callPrefaceIndex(move, true, captured.capture_count)] == null)
-        return null;
-    var tail = PrefaceCaptures{
-        .count = captured.capture_count,
-        .destination = captured.destination,
-        .child_id = std.math.add(u32, self.function_id_base, captured.child_proto_id) catch return Error.ResourceLimit,
-        .kinds = .{ 0, 0, 0 },
-        .sources = .{ 0, 0, 0 },
-    };
-    var index: u32 = 0;
-    while (index < captured.capture_count) : (index += 1) {
-        const capture = try model.markerCapture(
-            self.snapshot,
-            self.function,
-            self.proto,
-            captured.marker_start + index,
-            false,
-        );
-        tail.kinds[index] = @intFromEnum(capture.kind);
-        tail.sources[index] = capture.source;
-    }
-    return tail;
-}
-
-/// Interrupt, saved-pc line, and a fixed ordinary Lua call. A following constant load and
-/// one to three dupclosure captures join when that exact helper exists.
-/// Generic-for, string-method, and ipairs stay on the prepare-on-miss path.
+/// Interrupt, saved-pc line, and a fixed ordinary Lua call.
+/// Instructions after CALL remain in the caller so a prepared call can resume them.
 pub noinline fn callPrefaceAt(self: anytype, start: u32, range_finish: u32) Error!?CallPreface {
     if (!prefaceHelpersReady(self))
         return null;
@@ -2459,7 +2304,6 @@ pub noinline fn callPrefaceAt(self: anytype, start: u32, range_finish: u32) Erro
     const call = try self.instruction(start + 2);
     if (interrupt.command != .interrupt or saved.command != .set_savedpc or call.command != .call)
         return null;
-    const owner = self.plan.instructionBlock(start) orelse return null;
     if (!prefaceSpanOwned(self, start, start + 2))
         return null;
 
@@ -2491,7 +2335,7 @@ pub noinline fn callPrefaceAt(self: anytype, start: u32, range_finish: u32) Erro
     if (try self.stringMethodShape(start + 2, function_register, parameter_count, result_count) != null)
         return null;
 
-    var preface = CallPreface{
+    const preface = CallPreface{
         .start = start,
         .finish = start + 2,
         .interrupt_line = interrupt_line,
@@ -2501,58 +2345,8 @@ pub noinline fn callPrefaceAt(self: anytype, start: u32, range_finish: u32) Erro
         .func_offset = try slotByteOffset(function_register),
         .arg_bytes = (parameter_count + 1) * tvalue_size,
         .result_count = result_count,
-        .move = null,
-        .constant = null,
-        .captures = null,
     };
 
-    // A register move often sits between the call and the constant load. Take it only when
-    // that lets the constant load or the captures join the same straight-line helper.
-    const moved = try prefaceMoveAt(self, start + 3, range_finish, owner);
-    const load_at: u32 = if (moved) |copy| copy.finish + 1 else start + 3;
-    var took_move = false;
-    if (self.call_preface[callPrefaceIndex(moved != null, true, 0)] != null) {
-        if (try self.constantLoadPatternAt(load_at)) |load| {
-            if (load.finish <= range_finish and prefaceConstantLoadOwned(self, owner, load.start, load.finish) and
-                load.start < self.slots.len and
-                (self.slots[load.start].shape == .tvalue or self.slots[load.start].shape == .none))
-            {
-                took_move = moved != null;
-                preface.constant = .{
-                    .load_id = load.start,
-                    .destination = load.destination,
-                    .constant_id = load.constant_id,
-                };
-                preface.finish = load.finish;
-            }
-        }
-    }
-    const capture_at: u32 = if (preface.constant != null)
-        preface.finish + 1
-    else if (moved) |copy|
-        copy.finish + 1
-    else
-        start + 3;
-    if (try prefaceCapturesAt(self, capture_at, range_finish, moved != null and capture_at != start + 3)) |tail| {
-        const same_block = if (self.plan.instructionBlock(capture_at)) |found| found == owner else false;
-        const aliases = if (preface.constant) |load| load.destination == tail.destination else false;
-        const use_move = took_move or (moved != null and capture_at != start + 3);
-        const helper = self.call_preface[callPrefaceIndex(use_move, preface.constant != null, tail.count)];
-        if (same_block and !aliases and helper != null) {
-            took_move = use_move;
-            preface.captures = tail;
-            preface.finish = capture_at + tail.count;
-        }
-    }
-    if (took_move) {
-        const copy = moved orelse return Error.UnsupportedCommand;
-        preface.move = copy;
-        if (preface.finish < copy.finish)
-            preface.finish = copy.finish;
-    }
-    const capture_count: u32 = if (preface.captures) |tail| tail.count else 0;
-    if (self.call_preface[callPrefaceIndex(preface.move != null, preface.constant != null, capture_count)] == null)
-        return null;
     return preface;
 }
 
@@ -2580,10 +2374,6 @@ fn prefaceMoveAt(self: anytype, start: u32, range_finish: u32, owner: u32) Error
         .destination = destination.value,
         .finish = start + 1,
     };
-}
-
-fn emitPrefaceImmediate(self: anytype, value: u32) Error!void {
-    try self.body.i32Const(self.allocator, try i32Immediate(value));
 }
 
 fn emitPackedBits(self: anytype, value: u32) Error!void {
@@ -2626,46 +2416,18 @@ pub fn emitRegisterMove(self: anytype, start: u32, range_finish: u32) Error!?u32
 }
 
 pub noinline fn emitFusedCallPreface(self: anytype, preface: CallPreface) Error!void {
-    const capture_count: u32 = if (preface.captures) |tail| tail.count else 0;
-    const helper = self.call_preface[callPrefaceIndex(preface.move != null, preface.constant != null, capture_count)] orelse
-        return Error.UnsupportedCommand;
+    const helper = self.call_preface[0] orelse return Error.UnsupportedCommand;
     try self.body.localGet(self.allocator, 0);
     try emitPackedBits(self, try packLineContinuation(preface.interrupt_line, preface.interrupt_continuation));
     try emitPackedBits(self, try packLineContinuation(preface.call_line, preface.call_continuation));
     try self.body.i32Const(self.allocator, preface.func_offset);
     try self.body.i32Const(self.allocator, preface.arg_bytes);
     try self.body.i32Const(self.allocator, preface.result_count);
-    if (preface.move) |copy| {
-        try emitPackedBits(self, try packLowHigh(copy.source, copy.destination));
-    }
-    if (preface.constant) |load| {
-        try emitPrefaceImmediate(self, load.destination);
-        try emitPrefaceImmediate(self, load.constant_id);
-    }
-    if (preface.captures) |tail| {
-        try emitPrefaceImmediate(self, tail.destination);
-        try emitPrefaceImmediate(self, tail.child_id);
-        var index: u32 = 0;
-        while (index < tail.count) : (index += 1)
-            try emitPackedBits(self, try packLowHigh(tail.sources[index], tail.kinds[index]));
-    }
     try self.body.call(self.allocator, helper);
     // Non-zero is the status this function returns. The abort block sits outside the dispatcher loop.
     try self.body.localTee(self.allocator, self.status_local);
     try self.body.branchIf(self.allocator, self.loop_branch_depth + 1);
     try self.emitReloadBase();
-    if (preface.constant) |load| {
-        const uses = self.plan.instructionUses(load.load_id) orelse return Error.InvalidInstructionResult;
-        if (uses > 1 and (load.load_id >= self.slots.len or self.slots[load.load_id].shape != .none)) {
-            if (load.load_id >= self.slots.len or self.slots[load.load_id].shape != .tvalue)
-                return Error.InvalidInstructionResult;
-            const published = snapshot_v1.IrOperand{ .kind = .vm_reg, .value = load.destination };
-            try self.emitTValuePart(published, false);
-            try self.body.localSet(self.allocator, self.slots[load.load_id].first);
-            try self.emitTValuePart(published, true);
-            try self.body.localSet(self.allocator, self.slots[load.load_id].second);
-        }
-    }
 }
 
 pub noinline fn emitCall(self: anytype, instruction_id: u32, instruction_value: snapshot_v1.IrInstruction) Error!void {

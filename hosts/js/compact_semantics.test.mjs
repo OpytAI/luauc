@@ -8,6 +8,88 @@ const compiler = runfile("LUAUC_COMPILER_WASM");
 const profile = runfile("LUAUC_EMBED_PROFILE");
 const pack = runfile("LUAUC_EMBED_PACK");
 
+{
+  const source = `
+return function(value, text)
+    local _, whitespaceEnd = text:find("^%s*", value)
+    return whitespaceEnd, tostring(_)
+end
+`;
+  const compilation = await compilePackage(compiler, profile, pack, [{ name: "main", source }]);
+  const instance = instantiateArtifact(compilation.artifact);
+  for (const [text, start, expectedEnd] of [
+    ["xmlns:a=\"value\"", 8, 7],
+    ["x  =\"value\"", 2, 3],
+    ["x=\"value\"", 2, 1],
+  ]) {
+    const result = invoke(instance, start, text);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    assert.equal(result.number, expectedEnd, `${text} at ${start}: ${JSON.stringify(result)}`);
+    assert.equal(result.text, String(start), `${text} at ${start}: ${JSON.stringify(result)}`);
+  }
+}
+
+{
+  const source = `
+return function(value, text)
+    local nameEnd = text:find("[%s=/>]", value)
+    local _, whitespaceEnd = text:find("^%s*", nameEnd)
+    local nextIndex = whitespaceEnd + 1
+    return nextIndex, text:sub(nextIndex, nextIndex)
+end
+`;
+  const compilation = await compilePackage(compiler, profile, pack, [{ name: "main", source }]);
+  const instance = instantiateArtifact(compilation.artifact);
+  for (const [text, start, expectedIndex, expectedCharacter] of [
+    ["xmlns:a=\"value\"", 1, 8, "="],
+    ["name =\"value\"", 1, 6, "="],
+  ]) {
+    const result = invoke(instance, start, text);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    assert.equal(result.number, expectedIndex, `${text}: ${JSON.stringify(result)}`);
+    assert.equal(result.text, expectedCharacter, `${text}: ${JSON.stringify(result)}`);
+  }
+}
+
+{
+  const source = `
+return function(value, text)
+    local _, firstEnd = text:find("^%s*", value)
+    local nextIndex = text:find("[%s=/>]", firstEnd + 1)
+    local _, secondEnd = text:find("^%s*", nextIndex)
+    return secondEnd, tostring(firstEnd)
+end
+`;
+  const compilation = await compilePackage(compiler, profile, pack, [{ name: "main", source }]);
+  const result = invoke(instantiateArtifact(compilation.artifact), 7, "<p:sld xmlns:a=\"hi\"/>");
+  assert.equal(result.status, 0, JSON.stringify(result));
+  assert.equal(result.number, 14, JSON.stringify(result));
+  assert.equal(result.text, "7", JSON.stringify(result));
+}
+
+{
+  const callbacks = Array.from({ length: 16 }, (_, index) => `function() return ${index} end`).join(",");
+  const source = `
+local callbacks = {${callbacks}}
+return function(value, text)
+    local start = 7
+    local _, firstEnd = text:find("^%s*", start)
+    start = firstEnd + 1
+    local nameEnd = text:find("[%s=/>]", start)
+    local name = text:sub(start, nameEnd - 1)
+    start = nameEnd
+    local _, secondEnd = text:find("^%s*", start)
+    start = secondEnd + 1
+    return start + callbacks[value + 1](), name .. text:sub(start, start)
+end
+`;
+  const compilation = await compilePackage(compiler, profile, pack, [{ name: "main", source }]);
+  const result = invoke(instantiateArtifact(compilation.artifact), 0, "<p:sld x=\"value\"/>");
+  assert.equal(result.status, 0, JSON.stringify(result));
+  assert.equal(result.number, 9, JSON.stringify(result));
+  assert.equal(result.text, "x=", JSON.stringify(result));
+}
+
 for (const coverageLevel of [0, 2]) {
   const source = `
 return function(value, text)

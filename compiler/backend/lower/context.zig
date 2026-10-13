@@ -36,7 +36,6 @@ pub const ScalarPublish = scalar.ScalarPublish;
 pub const emitPublishBoolean = scalar.emitPublishBoolean;
 pub const emitPublishNumber = scalar.emitPublishNumber;
 pub const emitPublishInteger = scalar.emitPublishInteger;
-pub const callPrefaceIndex = control.callPrefaceIndex;
 pub const call_preface_count = control.call_preface_count;
 pub const max_uniform_capture_run = closures.max_uniform_capture_run;
 pub const emitUniformCaptureRun = closures.emitUniformCaptureRun;
@@ -83,7 +82,7 @@ pub const Context = struct {
     exchange_helper: ?wasm.FunctionRef = null,
     line_helper: ?wasm.FunctionRef = null,
     prepare_helper: ?wasm.FunctionRef = null,
-    // Index is callPrefaceIndex(constant, capture_count). Null keeps that shape inline.
+    // The single shared preface covers only the interrupt, location, and CALL.
     call_preface: [call_preface_count]?wasm.FunctionRef = .{null} ** call_preface_count,
     // Index is the capture count. A same-kind run of that length is one call.
     capture_run: [max_uniform_capture_run + 1]?wasm.FunctionRef = .{null} ** (max_uniform_capture_run + 1),

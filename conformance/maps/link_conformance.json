@@ -3,12 +3,12 @@
   "generator_version": "luauc-link-conformance-v1",
   "pin": "luau-0.725+luauc-patches",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
-  "frontend_contract_digest": "4f422eb1ebec170e704d16b6f7e51ddac3383d11b40f81ca7d322c70b397dbb4",
+  "frontend_contract_digest": "738b75004fc1f80ff891fd883ae70eac3d657c9c0162099646926e33ebabd44c",
   "objects": [
     {
       "name": "embed_lib",
       "kind": "generated_package",
-      "object_sha256": "1e3c87a4b5e3bfd953d5cae9e18d30758bb6c4967178ff6788af672cffe89c21",
+      "object_sha256": "b3606d7205eb5944861cd41ecf24bdc15941a6409b9580ee812ac43058ec0e46",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -23,13 +23,12 @@
         "luauc_runtime_v1_builtin_number",
         "luauc_runtime_v1_builtin_type_error",
         "luauc_runtime_v1_check_gc",
-        "luauc_runtime_v1_check_node_no_next",
-        "luauc_runtime_v1_check_node_value",
         "luauc_runtime_v1_check_readonly",
         "luauc_runtime_v1_check_safe_env",
         "luauc_runtime_v1_close_upvalues",
         "luauc_runtime_v1_compare_any",
         "luauc_runtime_v1_concat",
+        "luauc_runtime_v1_constant_array",
         "luauc_runtime_v1_constant_items",
         "luauc_runtime_v1_constant_strings",
         "luauc_runtime_v1_constants",
@@ -39,6 +38,12 @@
         "luauc_runtime_v1_dup_table",
         "luauc_runtime_v1_dupclosure",
         "luauc_runtime_v1_exchange_continuation",
+        "luauc_runtime_v1_fast_call_preface",
+        "luauc_runtime_v1_fast_exchange",
+        "luauc_runtime_v1_fast_interrupt",
+        "luauc_runtime_v1_fast_line",
+        "luauc_runtime_v1_fast_lua_call",
+        "luauc_runtime_v1_fast_prepare",
         "luauc_runtime_v1_fastcall",
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
@@ -99,21 +104,22 @@
         "luauc_runtime_v1_function_00000050",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_get_upvalue",
-        "luauc_runtime_v1_hash_node_addr",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_libm",
         "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_module_sources",
         "luauc_runtime_v1_modules",
+        "luauc_runtime_v1_move_reg",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
         "luauc_runtime_v1_newclosure_capture",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_program",
         "luauc_runtime_v1_protos",
+        "luauc_runtime_v1_publish_boolean",
+        "luauc_runtime_v1_publish_integer",
+        "luauc_runtime_v1_publish_number",
         "luauc_runtime_v1_require_static",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_global",
@@ -121,7 +127,6 @@
         "luauc_runtime_v1_set_location",
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_string_keys",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
@@ -131,13 +136,19 @@
         "luauc_runtime_v1_table_set",
         "luauc_runtime_v1_table_set_number",
         "luauc_runtime_v1_table_set_string",
-        "luauc_runtime_v1_try_get_tm",
         "luauc_runtime_v1_type_name"
       ],
       "wasm_ld": {
-        "sha256": "830a594b0ca67bdbbcaca03481afac4f9150fbd5ffb28f6b835041ba4d173720",
+        "sha256": "6d55954a921ee3d3dd67be3e02b3e87183bc414136a5f7c7d79a8e09f6abf9a0",
         "export_names": [
+          "luauc_runtime_v1_constant_array",
           "luauc_runtime_v1_direct_dispatch",
+          "luauc_runtime_v1_fast_call_preface",
+          "luauc_runtime_v1_fast_exchange",
+          "luauc_runtime_v1_fast_interrupt",
+          "luauc_runtime_v1_fast_line",
+          "luauc_runtime_v1_fast_lua_call",
+          "luauc_runtime_v1_fast_prepare",
           "luauc_runtime_v1_function_00000000",
           "luauc_runtime_v1_function_00000001",
           "luauc_runtime_v1_function_00000002",
@@ -189,13 +200,17 @@
           "luauc_runtime_v1_function_00000048",
           "luauc_runtime_v1_function_00000049",
           "luauc_runtime_v1_function_00000050",
+          "luauc_runtime_v1_move_reg",
+          "luauc_runtime_v1_publish_boolean",
+          "luauc_runtime_v1_publish_integer",
+          "luauc_runtime_v1_publish_number",
           "memory"
         ],
         "memory_min": 2,
-        "function_count": 92
+        "function_count": 100
       },
       "production": {
-        "sha256": "468327bb266b8c400867cd8bbf6d2aa81556aa1a88c4d2f3287eac3ac123d4a4",
+        "sha256": "d7a37b56bb4cf08a96d0b7dc6345b028c01e4bc07b09976410af7b8b9b723090",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -220,13 +235,13 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1093
+        "function_count": 1085
       }
     },
     {
       "name": "compiled_call",
       "kind": "generated_package",
-      "object_sha256": "85e82088db7b87def36b25433619a28c93ec17d5fbfe1957f5df9ac5838bd2e8",
+      "object_sha256": "8ddf2f475296d225118b3f36e5bb368ef72d1b0d178d3755a5cc492bafabf3cb",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -255,7 +270,7 @@
         "luauc_runtime_v1_set_location"
       ],
       "wasm_ld": {
-        "sha256": "bfe25674ec53cb6423df2b00f3449384143a33f7eb479f28f7b182d36701ea5f",
+        "sha256": "41e64d85114da78493f41268eaecd0c7046b99c51d2dd92700ae90bd3f3d6410",
         "export_names": [
           "luauc_runtime_v1_function_00000000",
           "luauc_runtime_v1_function_00000001",
@@ -266,7 +281,7 @@
         "function_count": 11
       },
       "production": {
-        "sha256": "fbe89663c551cd32ba977c94ca6f24f34af1cf42f02bfdd15c295e6a27a31789",
+        "sha256": "0bad6d84077f2becb74f5b8ae903daba642ef9af9ecc49b8067c4586577ad311",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -291,13 +306,13 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1044
+        "function_count": 963
       }
     },
     {
       "name": "recursive_call",
       "kind": "generated_package",
-      "object_sha256": "3c666e3fa184b6818c79eec4c2057316d7003342aeb4425989af4289832fb1af",
+      "object_sha256": "90064c24c7d0a96166be5fd5e6b978a51ae9072d926717de7db78993934176dc",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -330,7 +345,7 @@
         "luauc_runtime_v1_set_location"
       ],
       "wasm_ld": {
-        "sha256": "ab70da664b9c243672863b4a016ae6fb3a72b3fdd9dc4fbb7745df2ebfc74ff6",
+        "sha256": "3dcee2ef4c742e0241ccc76ef4f796d6abc3d11069de90f49ff35292f6408006",
         "export_names": [
           "luauc_runtime_v1_function_00000000",
           "luauc_runtime_v1_function_00000001",
@@ -339,10 +354,10 @@
           "memory"
         ],
         "memory_min": 1,
-        "function_count": 15
+        "function_count": 16
       },
       "production": {
-        "sha256": "fc5b5c50cf055f69c702c03ef789e424af600a7d6c65718ab01ea98cade4c515",
+        "sha256": "45830ca4a0ad382f816ef3ee241e539724562e51daf38affcb143a6d11f45465",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -367,13 +382,13 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1045
+        "function_count": 968
       }
     },
     {
       "name": "table_clone_append",
       "kind": "generated_package",
-      "object_sha256": "7130d619f9a5b3d326c0129b1fa353b089dfbc6ce88ef78438620ba9fbf38727",
+      "object_sha256": "134b4484387adae9d0cbb6c25307cdadcf71792d77be3e974d82e53713b9b5cf",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -399,10 +414,8 @@
         "luauc_runtime_v1_function_00000001",
         "luauc_runtime_v1_get_global",
         "luauc_runtime_v1_interrupt",
-        "luauc_runtime_v1_load_constant",
         "luauc_runtime_v1_module_sources",
         "luauc_runtime_v1_modules",
-        "luauc_runtime_v1_node_slot_match",
         "luauc_runtime_v1_prep_varargs",
         "luauc_runtime_v1_prepare_compiled_call",
         "luauc_runtime_v1_program",
@@ -410,25 +423,23 @@
         "luauc_runtime_v1_require_static",
         "luauc_runtime_v1_return",
         "luauc_runtime_v1_set_location",
-        "luauc_runtime_v1_slot_node_addr",
         "luauc_runtime_v1_string_keys",
         "luauc_runtime_v1_table_get_string",
         "luauc_runtime_v1_table_insert_append",
-        "luauc_runtime_v1_table_len",
-        "luauc_runtime_v1_table_set_string"
+        "luauc_runtime_v1_table_len"
       ],
       "wasm_ld": {
-        "sha256": "d23739d064ec5eee0242b1c3a874ffef54d0536b07483a009489b9bcbcc71073",
+        "sha256": "87b5176d9e3401417c2b6635cbe65aa679e3ab65f5d03dffc30d971932582d16",
         "export_names": [
           "luauc_runtime_v1_function_00000000",
           "luauc_runtime_v1_function_00000001",
           "memory"
         ],
         "memory_min": 2,
-        "function_count": 16
+        "function_count": 13
       },
       "production": {
-        "sha256": "6f3e1979158370efa46f1e262c8e5a04a1b3a85fa3371ec850ec32a020ee833f",
+        "sha256": "39c4e680cec5974eff76c7cf297a48e5478ad3ed223ab2d03b00f6999cf96617",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -453,13 +464,13 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1043
+        "function_count": 972
       }
     },
     {
       "name": "generic_iteration",
       "kind": "generated_package",
-      "object_sha256": "d8a81fa35e622a3f8a14b62c54d7a4e5610b166b65e7de78ce74f98a9fd7eaaa",
+      "object_sha256": "d5f659a7e100c45b4aa3f6363df34bfbf7fbf8ce871e8efccb4054feaaaec614",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -495,7 +506,7 @@
         "luauc_runtime_v1_set_location"
       ],
       "wasm_ld": {
-        "sha256": "ecca3d8d8f6fec788610c1962d4981f2b389bd65470bbd9f600b4f7aa2cf6c8e",
+        "sha256": "6ae7d18e509527ee22d5f89d4ed4ca09ca472525326d53b610cf23057a721caf",
         "export_names": [
           "luauc_runtime_v1_function_00000000",
           "luauc_runtime_v1_function_00000001",
@@ -503,10 +514,10 @@
           "memory"
         ],
         "memory_min": 1,
-        "function_count": 17
+        "function_count": 18
       },
       "production": {
-        "sha256": "4b650743d101b125510df0457d7253463ef3945fd1aac58634df8aeb0912a00c",
+        "sha256": "036c0d4d21232d27a923a20c8d3e8e2f51fc9ec52f0a6298f298714951c2d03d",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -531,7 +542,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1044
+        "function_count": 975
       }
     },
     {
@@ -557,5 +568,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "d9f5239f149328514508af9aec8e9d16d4326569a87a33b414a6c69ae621776c"
+  "canonical_hash": "f7b6a3b785ed5e3e15d6c98ec53746c150a85fb73a1866573bbd373f80a7d896"
 }

@@ -2,7 +2,7 @@
   "schema_version": 2,
   "generator_version": "luauc-ir-ledger-v2",
   "pin": "luau-0.725+luauc-patches",
-  "compiler_build_digest": "eb24b7c7cda143b836143077d75af9769327cc4223fda7ee1a6ada3fb4f31e43",
+  "compiler_build_digest": "d7e4ffcb245ad061f916442f71c2200fd4c9b7cd612b027112babc8b4816cb5c",
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "738b75004fc1f80ff891fd883ae70eac3d657c9c0162099646926e33ebabd44c",
   "input_sha256": "765f9188e07a3886c29b5bb146241286d1f95c801a8907aa03147df524e7c399",
@@ -14745,5 +14745,5 @@
       "status": "admitted"
     }
   ],
-  "canonical_hash": "411456cd25f3e1d6d1641c4335948c5be0c26182227d4040b675072e8dd5069a"
+  "canonical_hash": "65d33a44c938b66302be09ef63c9d8de0c6ba86a7a97e087c52d190c7e5b6f4d"
 }
