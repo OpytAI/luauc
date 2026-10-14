@@ -25,7 +25,7 @@ sidecar dependency. Unknown IR, object, profile, feature, import, or relocation 
 Ordinary execution and coroutine resumption share admitted continuation suffixes. The normal
 path transfers to the same generated wasm block instead of copying the remainder of the source
 block at every call. Admission proves that the suffix can reconstruct its values from the Luau
-frame. See [the compiler size review](compiler-size-review.md) for measurements and limits.
+frame.
 
 ## Ownership
 
