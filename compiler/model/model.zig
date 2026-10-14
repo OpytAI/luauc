@@ -1331,10 +1331,12 @@ pub fn scanImportNeedsFor(
                 needs.set_location = true;
             },
             ir_cmd_fallback_settableks => {
+                needs.table_set = true;
                 needs.table_set_string = true;
                 needs.set_location = true;
             },
             ir_cmd_fallback_gettableks => {
+                needs.table_get = true;
                 needs.table_get_string = true;
                 needs.set_location = true;
             },

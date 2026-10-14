@@ -267,14 +267,10 @@ pub fn emitResolveDeferredNamecall(
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    const key_operand = snapshot_v1.IrOperand{ .kind = .vm_const, .value = key_constant };
-    const key_bytes = (try self.stringKey(key_operand)) orelse return Error.UnsupportedCommand;
-    const key = try self.string_keys.intern(self.allocator, key_bytes);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(destination));
     try self.body.i32Const(self.allocator, @intCast(source));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key.offset));
-    try self.body.i32Const(self.allocator, @intCast(key.length));
+    try self.body.i32Const(self.allocator, @intCast(key_constant));
     try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
     try self.body.end(self.allocator);
@@ -293,33 +289,30 @@ pub noinline fn emitFallbackNamecall(
     const destination = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
     const source = try self.vmRegisterIndex(try self.operand(instruction_value, 2));
     const key_operand = try self.operand(instruction_value, 3);
-    const key_bytes = (try self.stringKey(key_operand)) orelse
+    _ = (try self.stringKey(key_operand)) orelse
         return Error.InvalidOperandType;
-    const key = try self.string_keys.intern(self.allocator, key_bytes);
     try self.emitPcLocation(pc);
     if (try followingStringMethod(self, instruction_id + 1, destination))
         return emitDeferredStringReceiver(self, destination, source);
     if (self.interrupt_helper != null)
-        return emitPlainNamecall(self, destination, source, key.offset, key.length);
+        return emitPlainNamecall(self, destination, source, key_operand.value);
     try self.emitInlineNonTableNamecall(destination, source, key_operand.value);
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try emitPlainNamecall(self, destination, source, key.offset, key.length);
+    try emitPlainNamecall(self, destination, source, key_operand.value);
     try self.body.end(self.allocator);
 }
-fn emitPlainNamecall(self: anytype, destination: u32, source: u32, key_offset: u32, key_length: u32) Error!void {
+fn emitPlainNamecall(self: anytype, destination: u32, source: u32, key_constant: u32) Error!void {
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(destination));
     try self.body.i32Const(self.allocator, @intCast(source));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key_offset));
-    try self.body.i32Const(self.allocator, @intCast(key_length));
+    try self.body.i32Const(self.allocator, @intCast(key_constant));
     try self.body.call(self.allocator, self.namecall_plain orelse return Error.UnsupportedCommand);
     try self.emitReloadBase();
 }
 
 pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTableNamecallPattern) Error!void {
-    const key = try self.string_keys.intern(self.allocator, pattern.key);
     try self.emitPcLocation(pattern.pc);
     // A package larger than the inline sibling chain leaves both probes clear.
     // The helper is the only path, except a proved string method that keeps the nil method slot.
@@ -328,7 +321,7 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
         if (try followingStringMethod(self, fallback_block.start + 1, pattern.destination))
             try emitDeferredStringReceiver(self, pattern.destination, pattern.source)
         else
-            try emitPlainNamecall(self, pattern.destination, pattern.source, key.offset, key.length);
+            try emitPlainNamecall(self, pattern.destination, pattern.source, pattern.key_constant);
     } else {
         // Own slot or one table __index. A string receiver uses the type metatable.
         // A function __index, a chain longer than the walk, and a missing method stay on namecall_plain.
@@ -344,7 +337,7 @@ pub noinline fn emitPlainTableNamecallOperation(self: anytype, pattern: PlainTab
         try self.body.localGet(self.allocator, self.call_proto_local);
         try self.body.i32Eqz(self.allocator);
         try self.body.ifVoid(self.allocator);
-        try emitPlainNamecall(self, pattern.destination, pattern.source, key.offset, key.length);
+        try emitPlainNamecall(self, pattern.destination, pattern.source, pattern.key_constant);
         try self.body.end(self.allocator);
         try self.body.end(self.allocator);
     }

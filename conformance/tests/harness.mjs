@@ -1232,7 +1232,7 @@ export async function executePreloadedFieldAndInvertedCompare() {
   const imports = WebAssembly.Module.imports(module).map(({ name: importName }) => importName);
   for (const helper of [
     "luauc_runtime_v1_load_constant",
-    "luauc_runtime_v1_table_set_string",
+    "luauc_runtime_v1_table_set",
     "luauc_runtime_v1_compare_any",
   ]) if (!imports.includes(helper)) throw new Error(`${name}: missing ${helper}`);
   return { objectSize: object.length };
@@ -1274,7 +1274,7 @@ assert(sys.fs.write(outputPath, json.encode(plan)))`,
   const object = backendStaticPackage(staticPackageFrame("linearized_string_field_writes", snapshot));
   const module = await WebAssembly.compile(linkPackage(object, packageFunctionSymbols(1)));
   const imports = WebAssembly.Module.imports(module).map(({ name: importName }) => importName);
-  if (!imports.includes("luauc_runtime_v1_table_set_string"))
+  if (!imports.includes("luauc_runtime_v1_table_set"))
     throw new Error(`${name}: real literal table-set boundary is missing`);
   return { objectSize: object.length };
 }
@@ -1551,11 +1551,11 @@ export async function executeDynamicHashTablePackage() {
       "luauc_runtime_v1_new_table",
       "luauc_runtime_v1_table_set_string",
       "luauc_runtime_v1_table_get_string",
+      "luauc_runtime_v1_table_get",
     ].includes(importName));
   if (JSON.stringify(helpers) !== JSON.stringify([
     "luauc_runtime_v1_new_table",
-    "luauc_runtime_v1_table_set_string",
-    "luauc_runtime_v1_table_get_string",
+    "luauc_runtime_v1_table_get",
   ])) throw new Error(`${name}: unexpected string-table helper imports ${JSON.stringify(helpers)}`);
   if (WebAssembly.Module.imports(module).filter(({ name: importName }) =>
     importName === "luauc_runtime_v1_set_location").length !== 0)

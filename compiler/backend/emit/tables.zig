@@ -63,17 +63,16 @@ fn emitGeneralGlobal(self: anytype, instruction_value: snapshot_v1.IrInstruction
     const value = try self.vmRegisterIndex(try self.operand(instruction_value, 1));
     const key_operand = try self.operand(instruction_value, 2);
     const key = (try self.stringKey(key_operand)) orelse return Error.UnsupportedControlFlow;
-    const interned = try self.string_keys.intern(self.allocator, key);
     try self.emitPcLocation(pc);
     if (operation == .get and key_operand.kind == .vm_const) {
         try emitInlineEnvGet(self, value, key_operand.value);
         try self.body.localGet(self.allocator, self.call_proto_local);
         try self.body.i32Eqz(self.allocator);
         try self.body.ifVoid(self.allocator);
-        try emitGeneralGlobalCall(self, operation, value, interned.offset, interned.length);
+        try emitGeneralGlobalCall(self, operation, value, key, key_operand.value);
         try self.body.end(self.allocator);
     } else {
-        try emitGeneralGlobalCall(self, operation, value, interned.offset, interned.length);
+        try emitGeneralGlobalCall(self, operation, value, key, null);
     }
 }
 
@@ -81,13 +80,24 @@ fn emitGeneralGlobalCall(
     self: anytype,
     operation: GlobalOperation,
     value: u32,
-    key_offset: u32,
-    key_length: u32,
+    key: []const u8,
+    key_constant: ?u32,
 ) Error!void {
+    if (operation == .get) {
+        if (key_constant) |index| {
+            try self.body.localGet(self.allocator, 0);
+            try self.body.i32Const(self.allocator, @intCast(value));
+            try self.body.i32Const(self.allocator, @intCast(index));
+            try self.body.call(self.allocator, self.get_global_constant orelse return Error.UnsupportedCommand);
+            try self.emitReloadBase();
+            return;
+        }
+    }
+    const interned = try self.string_keys.intern(self.allocator, key);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(value));
-    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(key_offset));
-    try self.body.i32Const(self.allocator, @intCast(key_length));
+    try self.body.i32ConstDataAddress(self.allocator, 0, @intCast(interned.offset));
+    try self.body.i32Const(self.allocator, @intCast(interned.length));
     try self.body.call(self.allocator, switch (operation) {
         .get => self.get_global orelse return Error.UnsupportedCommand,
         .set => self.set_global orelse return Error.UnsupportedCommand,
@@ -115,7 +125,16 @@ fn emitRegisterBelowTop(self: anytype, register: u32) Error!void {
     try self.body.opcode(self.allocator, 0x49); // i32.lt_u
 }
 
-fn emitStringGetHelper(self: anytype, destination: u32, table: u32, key: []const u8) Error!void {
+fn emitStringGetHelper(self: anytype, destination: u32, table: u32, key: []const u8, key_constant: ?u32) Error!void {
+    if (key_constant) |index| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(destination));
+        try self.body.i32Const(self.allocator, @intCast(table));
+        try self.body.i32Const(self.allocator, @bitCast(index | @as(u32, 0x8000_0000)));
+        try self.body.call(self.allocator, self.table_get orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+        return;
+    }
     const interned = try self.string_keys.intern(self.allocator, key);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(destination));
@@ -471,9 +490,8 @@ fn emitAfterMainPositionMiss(self: anytype, destination: u32, publish_nil: bool)
 
 // Main-position hit copies the TValue. Every other outcome uses the string-key helper once.
 fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []const u8, key_constant: ?u32) Error!void {
-    // A package larger than the inline sibling chain uses table_get_string.
     if (self.interrupt_helper != null)
-        return emitStringGetHelper(self, destination, table, key);
+        return emitStringGetHelper(self, destination, table, key, key_constant);
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
     if (key_constant) |index| {
@@ -508,7 +526,7 @@ fn emitStringSlotOrHelper(self: anytype, destination: u32, table: u32, key: []co
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try emitStringGetHelper(self, destination, table, key);
+    try emitStringGetHelper(self, destination, table, key, key_constant);
     try self.body.end(self.allocator);
 }
 
@@ -633,7 +651,16 @@ pub fn emitInlineEnvGet(self: anytype, destination: u32, key_constant: u32) Erro
     try self.body.end(self.allocator);
 }
 
-fn emitStringSetHelper(self: anytype, table: u32, value: u32, key: []const u8) Error!void {
+fn emitStringSetHelper(self: anytype, table: u32, value: u32, key: []const u8, key_constant: ?u32) Error!void {
+    if (key_constant) |index| {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(table));
+        try self.body.i32Const(self.allocator, @bitCast(index | @as(u32, 0x8000_0000)));
+        try self.body.i32Const(self.allocator, @intCast(value));
+        try self.body.call(self.allocator, self.table_set orelse return Error.UnsupportedCommand);
+        try self.emitReloadBase();
+        return;
+    }
     const interned = try self.string_keys.intern(self.allocator, key);
     try self.body.localGet(self.allocator, 0);
     try self.body.i32Const(self.allocator, @intCast(table));
@@ -741,9 +768,8 @@ pub fn emitStringSlotSetOrHelper(
     key: []const u8,
     key_constant: ?u32,
 ) Error!void {
-    // A package larger than the inline sibling chain uses table_set_string.
     if (self.interrupt_helper != null)
-        return emitStringSetHelper(self, table, value, key);
+        return emitStringSetHelper(self, table, value, key, key_constant);
     try self.body.i32Const(self.allocator, 0);
     try self.body.localSet(self.allocator, self.call_proto_local);
     if (key_constant) |index| {
@@ -812,7 +838,7 @@ pub fn emitStringSlotSetOrHelper(
     try self.body.localGet(self.allocator, self.call_proto_local);
     try self.body.i32Eqz(self.allocator);
     try self.body.ifVoid(self.allocator);
-    try emitStringSetHelper(self, table, value, key);
+    try emitStringSetHelper(self, table, value, key, key_constant);
     try self.body.end(self.allocator);
 }
 
@@ -1655,9 +1681,9 @@ fn numericValuePublished(
 /// Emit the owner's direct array write and generic set instead of that branch.
 pub noinline fn linearizedNumericTableSetAt(self: anytype, start: u32) Error!?InlineGenericTablePattern {
     const commands = [_]snapshot_v1.IrCommand{
-        .load_tag,               .check_tag,                .nop,                         .nop,
-        .load_pointer,           .nop,                      ir_cmd_try_num_to_index,      .sub_int,
-        ir_cmd_check_array_size, ir_cmd_check_no_metatable, ir_cmd_check_readonly,        ir_cmd_get_arr_addr,
+        .load_tag,               .check_tag,                .nop,                    .nop,
+        .load_pointer,           .nop,                      ir_cmd_try_num_to_index, .sub_int,
+        ir_cmd_check_array_size, ir_cmd_check_no_metatable, ir_cmd_check_readonly,   ir_cmd_get_arr_addr,
         .nop,                    .store_split_tvalue,
     };
     if (!try self.commandRangeMatches(start, &commands))

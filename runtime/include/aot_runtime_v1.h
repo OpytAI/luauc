@@ -215,8 +215,7 @@ void luauc_runtime_v1_table_get_string(lua_State *state, uint32_t destination_re
                                      uint32_t table_register, const char *key_pointer,
                                      size_t key_length);
 void luauc_runtime_v1_namecall_plain(lua_State *state, uint32_t destination_register,
-                                   uint32_t source_register, const char *key_pointer,
-                                   size_t key_length);
+                                   uint32_t source_register, uint32_t key_index);
 void luauc_runtime_v1_table_set(lua_State *state, uint32_t table_register, uint32_t key_operand,
                               uint32_t source_register);
 void luauc_runtime_v1_table_get(lua_State *state, uint32_t destination_register,
@@ -231,6 +230,8 @@ uint32_t luauc_runtime_v1_table_array_get(lua_State *state, uint32_t destination
                                         uint32_t table_register, uint32_t one_based_index);
 void luauc_runtime_v1_get_global(lua_State *state, uint32_t destination_register,
                                const char *key_pointer, size_t key_length);
+void luauc_runtime_v1_get_global_constant(lua_State *state, uint32_t destination_register,
+                                         uint32_t key_constant);
 void luauc_runtime_v1_set_global(lua_State *state, uint32_t source_register, const char *key_pointer,
                                size_t key_length);
 uint32_t luauc_runtime_v1_check_safe_env(lua_State *state);
@@ -248,6 +249,13 @@ void luauc_runtime_v1_concat(lua_State *state, uint32_t destination_register, ui
                            uint32_t count);
 void luauc_runtime_v1_slice_string(lua_State *state, uint32_t destination_register,
                                  uint32_t source_register, uint32_t offset, uint32_t length);
+uint32_t luauc_runtime_v1_sub_string(lua_State *state, uint32_t destination_register,
+                                    uint32_t parameter_count);
+uint32_t luauc_runtime_v1_find_string(lua_State *state, uint32_t destination_register,
+                                     uint32_t parameter_count, uint32_t result_count);
+uint32_t luauc_runtime_v1_match_string(lua_State *state, uint32_t destination_register,
+                                      uint32_t match_form, uint32_t pattern_constant,
+                                      uint32_t result_count);
 void luauc_runtime_v1_do_len(lua_State *state, uint32_t destination_register,
                            uint32_t source_register);
 void luauc_runtime_v1_forg_prep(lua_State *state, uint32_t base_register);

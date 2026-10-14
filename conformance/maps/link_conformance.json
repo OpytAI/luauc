@@ -8,7 +8,7 @@
     {
       "name": "embed_lib",
       "kind": "generated_package",
-      "object_sha256": "b3606d7205eb5944861cd41ecf24bdc15941a6409b9580ee812ac43058ec0e46",
+      "object_sha256": "c66625dccb9a120ff7a58b901b8b94835bf0b7fcb03cb20b013befd26c5fb30a",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -45,6 +45,7 @@
         "luauc_runtime_v1_fast_lua_call",
         "luauc_runtime_v1_fast_prepare",
         "luauc_runtime_v1_fastcall",
+        "luauc_runtime_v1_find_string",
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
         "luauc_runtime_v1_forg_loop_call",
@@ -103,9 +104,11 @@
         "luauc_runtime_v1_function_00000049",
         "luauc_runtime_v1_function_00000050",
         "luauc_runtime_v1_get_global",
+        "luauc_runtime_v1_get_global_constant",
         "luauc_runtime_v1_get_upvalue",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_load_constant",
+        "luauc_runtime_v1_match_string",
         "luauc_runtime_v1_module_sources",
         "luauc_runtime_v1_modules",
         "luauc_runtime_v1_move_reg",
@@ -128,6 +131,7 @@
         "luauc_runtime_v1_set_upvalue",
         "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_string_keys",
+        "luauc_runtime_v1_sub_string",
         "luauc_runtime_v1_table_get",
         "luauc_runtime_v1_table_get_number",
         "luauc_runtime_v1_table_get_string",
@@ -139,7 +143,7 @@
         "luauc_runtime_v1_type_name"
       ],
       "wasm_ld": {
-        "sha256": "6d55954a921ee3d3dd67be3e02b3e87183bc414136a5f7c7d79a8e09f6abf9a0",
+        "sha256": "dc9fbd582010cd222cd08c871f5f1baadf9f230ded103a829a6df8cab5160c38",
         "export_names": [
           "luauc_runtime_v1_constant_array",
           "luauc_runtime_v1_direct_dispatch",
@@ -210,7 +214,7 @@
         "function_count": 100
       },
       "production": {
-        "sha256": "d7a37b56bb4cf08a96d0b7dc6345b028c01e4bc07b09976410af7b8b9b723090",
+        "sha256": "f80076125f7ee237830ee53ee2fd34e4e620edcd4b173e3a92d000815a0e0a13",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -235,7 +239,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 1085
+        "function_count": 1090
       }
     },
     {
@@ -281,7 +285,7 @@
         "function_count": 11
       },
       "production": {
-        "sha256": "0bad6d84077f2becb74f5b8ae903daba642ef9af9ecc49b8067c4586577ad311",
+        "sha256": "b0f2fed7803d1b1ece0bf17250e072b7a8c729978c10a0daafee14524cd31e68",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -357,7 +361,7 @@
         "function_count": 16
       },
       "production": {
-        "sha256": "45830ca4a0ad382f816ef3ee241e539724562e51daf38affcb143a6d11f45465",
+        "sha256": "7d62194271ab5e706aef25a21ea3f86e8f2c0d6bd45f48e9d477fb448557641f",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -388,7 +392,7 @@
     {
       "name": "table_clone_append",
       "kind": "generated_package",
-      "object_sha256": "134b4484387adae9d0cbb6c25307cdadcf71792d77be3e974d82e53713b9b5cf",
+      "object_sha256": "680b273ca2c54256320eae0af58dc0ca68ba35e348a17794fbf759f26f82262b",
       "reloc_types": [
         "R_WASM_6",
         "R_WASM_FUNCTION_INDEX_LEB",
@@ -413,6 +417,7 @@
         "luauc_runtime_v1_function_00000000",
         "luauc_runtime_v1_function_00000001",
         "luauc_runtime_v1_get_global",
+        "luauc_runtime_v1_get_global_constant",
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_module_sources",
         "luauc_runtime_v1_modules",
@@ -439,7 +444,7 @@
         "function_count": 13
       },
       "production": {
-        "sha256": "39c4e680cec5974eff76c7cf297a48e5478ad3ed223ab2d03b00f6999cf96617",
+        "sha256": "78faf2dc893c02089a873c963125c72d7927d726f73a4f69c6f5e13177d58cfc",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -464,7 +469,7 @@
           "memory"
         ],
         "memory_min": 1024,
-        "function_count": 972
+        "function_count": 973
       }
     },
     {
@@ -517,7 +522,7 @@
         "function_count": 18
       },
       "production": {
-        "sha256": "036c0d4d21232d27a923a20c8d3e8e2f51fc9ec52f0a6298f298714951c2d03d",
+        "sha256": "6ebd42773e3320539df32734ce1456bbd381ba34ff8b56466cc1b46659be5c8b",
         "export_names": [
           "__stack_pointer",
           "_start",
@@ -568,5 +573,5 @@
       "production": null
     }
   ],
-  "canonical_hash": "f7b6a3b785ed5e3e15d6c98ec53746c150a85fb73a1866573bbd373f80a7d896"
+  "canonical_hash": "0af7d6a5fb277bbf9fae3a345314e40bec983c04d3f72bbc9122a1255d1fa046"
 }

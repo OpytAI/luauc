@@ -5,8 +5,8 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "738b75004fc1f80ff891fd883ae70eac3d657c9c0162099646926e33ebabd44c",
   "input_sha256": {
-    "compiler": "06f9e82716ddb1d5a1dcac0be7b32808fa837a2209326df20c1ca90b7e5ea758",
-    "pack": "bbe4d22685aaa9bd4e59c94737c867457f64c0b861dd07302c92a6e544d5555a",
+    "compiler": "94958672f7675802170f7668cd008661eb6c45da63781cee850b7e4fa863dd8d",
+    "pack": "8aab9b5144e4060c76aa328c09f772553a40c6dff06b1d06f881fbaefc1b0e63",
     "corpus": "6e00883b456dd2bab76d4890ba2be68632b75e13dd35b8ba3a2a974e7ced9a46"
   },
   "permitted": [
@@ -35,7 +35,7 @@
   "artifacts": [
     {
       "label": "luauc.wasm",
-      "sha256": "06f9e82716ddb1d5a1dcac0be7b32808fa837a2209326df20c1ca90b7e5ea758",
+      "sha256": "94958672f7675802170f7668cd008661eb6c45da63781cee850b7e4fa863dd8d",
       "export_names": [
         "luauc_v1_alloc",
         "luauc_v1_compile",
@@ -61,7 +61,7 @@
     },
     {
       "label": "embed_v1.pack.wasm",
-      "sha256": "bbe4d22685aaa9bd4e59c94737c867457f64c0b861dd07302c92a6e544d5555a",
+      "sha256": "8aab9b5144e4060c76aa328c09f772553a40c6dff06b1d06f881fbaefc1b0e63",
       "export_names": [
         "__stack_pointer",
         "_start",
@@ -110,6 +110,7 @@
         "luauc_runtime_v1_dupclosure_capture",
         "luauc_runtime_v1_exchange_continuation",
         "luauc_runtime_v1_fastcall",
+        "luauc_runtime_v1_find_string",
         "luauc_runtime_v1_finish_compiled_call",
         "luauc_runtime_v1_forg_loop",
         "luauc_runtime_v1_forg_loop_call",
@@ -118,6 +119,7 @@
         "luauc_runtime_v1_forgprep_xnext_fallback",
         "luauc_runtime_v1_forn_prepare",
         "luauc_runtime_v1_get_global",
+        "luauc_runtime_v1_get_global_constant",
         "luauc_runtime_v1_get_upvalue",
         "luauc_runtime_v1_get_varargs_fixed",
         "luauc_runtime_v1_get_varargs_multret",
@@ -126,6 +128,7 @@
         "luauc_runtime_v1_interrupt",
         "luauc_runtime_v1_libm",
         "luauc_runtime_v1_load_constant",
+        "luauc_runtime_v1_match_string",
         "luauc_runtime_v1_namecall_plain",
         "luauc_runtime_v1_new_table",
         "luauc_runtime_v1_new_table_deferred",
@@ -147,6 +150,7 @@
         "luauc_runtime_v1_set_userdata_metatable",
         "luauc_runtime_v1_slice_string",
         "luauc_runtime_v1_slot_node_addr",
+        "luauc_runtime_v1_sub_string",
         "luauc_runtime_v1_table_array_get",
         "luauc_runtime_v1_table_array_set",
         "luauc_runtime_v1_table_get",
@@ -166,7 +170,7 @@
         "luauc_embed_v1.protected_call",
         "luauc_embed_v1.set_throw"
       ],
-      "function_count": 1041,
+      "function_count": 1046,
       "memory_min": 1024,
       "features": [
         "bulk-memory",
@@ -196,5 +200,5 @@
       "forbidden_present": []
     }
   ],
-  "canonical_hash": "85cdf9be80347f920b85a92297f71ed03805b21585ce95579da63caa92dc8549"
+  "canonical_hash": "d695af32ae667722a6ba0108a7120202609a732f3e7f8e89c19361a7e2cebe88"
 }

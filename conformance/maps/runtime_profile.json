@@ -5,9 +5,9 @@
   "luau_pin_digest": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
   "frontend_contract_digest": "738b75004fc1f80ff891fd883ae70eac3d657c9c0162099646926e33ebabd44c",
   "input_sha256": {
-    "profile": "3c7fb63ba9582868cdbca48d56081f23a7dbc4bda65331336fd7f21ee4ebb62d",
+    "profile": "6429fd52d4d663d7994f50ba5b30492c557186c7b11806deae3891f5e2dfb59a",
     "policy": "0ef5bf8353a1393734fe0b387f76f6758e70073079c270d15a3cc61bdfdebf47",
-    "pack": "bbe4d22685aaa9bd4e59c94737c867457f64c0b861dd07302c92a6e544d5555a"
+    "pack": "8aab9b5144e4060c76aa328c09f772553a40c6dff06b1d06f881fbaefc1b0e63"
   },
   "profile_id": "embed-v1",
   "feature_mask": 0,
@@ -19,7 +19,7 @@
     "luau_pin_sha256": "e51ead5f541633693d548057e0431927f3036c13b185fdb37fbc3f5a261e6676",
     "runtime_abi_sha256": "e9e35c4c61491d52fd479b2dc258ff9f6a998cf1a78dc3fc3bd9ea111d68395d",
     "object_contract_sha256": "34ddc1d7c5f42804c6305ddf46ed079519f593648a62d2b32abfb3591b7b8f7e",
-    "pack_build_sha256": "a2d2a677f26c58320a9ae577498b1e23073da962ffae22603f8f6b3d24102adf",
+    "pack_build_sha256": "dbc5b67c45f95585eeaec0222ad614a78b068c3a81db07511986a321966354d6",
     "license_inventory_sha256": "8e10cbc659c50024a618103c11c0cb992721a2bc945af296f845375100d25b60"
   },
   "host_imports": [
@@ -171,6 +171,7 @@
     "luauc_runtime_v1_dupclosure_capture",
     "luauc_runtime_v1_exchange_continuation",
     "luauc_runtime_v1_fastcall",
+    "luauc_runtime_v1_find_string",
     "luauc_runtime_v1_finish_compiled_call",
     "luauc_runtime_v1_forg_loop",
     "luauc_runtime_v1_forg_loop_call",
@@ -179,6 +180,7 @@
     "luauc_runtime_v1_forgprep_xnext_fallback",
     "luauc_runtime_v1_forn_prepare",
     "luauc_runtime_v1_get_global",
+    "luauc_runtime_v1_get_global_constant",
     "luauc_runtime_v1_get_upvalue",
     "luauc_runtime_v1_get_varargs_fixed",
     "luauc_runtime_v1_get_varargs_multret",
@@ -187,6 +189,7 @@
     "luauc_runtime_v1_interrupt",
     "luauc_runtime_v1_libm",
     "luauc_runtime_v1_load_constant",
+    "luauc_runtime_v1_match_string",
     "luauc_runtime_v1_namecall_plain",
     "luauc_runtime_v1_new_table",
     "luauc_runtime_v1_new_table_deferred",
@@ -205,6 +208,7 @@
     "luauc_runtime_v1_set_userdata_metatable",
     "luauc_runtime_v1_slice_string",
     "luauc_runtime_v1_slot_node_addr",
+    "luauc_runtime_v1_sub_string",
     "luauc_runtime_v1_table_array_get",
     "luauc_runtime_v1_table_array_set",
     "luauc_runtime_v1_table_get",
@@ -403,5 +407,5 @@
       }
     ]
   },
-  "canonical_hash": "5dfc5bc116f1493e2307d949bb9eaa71bc790ca93886df9ab3c1fa73bc015fde"
+  "canonical_hash": "f78c55d8f73529c36266428d2c6ef53db91eed9a17bc869775c99ee93fe7d343"
 }

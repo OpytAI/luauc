@@ -2236,7 +2236,7 @@ fn emitCallMiss(
         try self.body.i32Eq(self.allocator);
         try self.body.i32Eqz(self.allocator);
         try self.body.ifVoid(self.allocator);
-        try self.emitResolveDeferredNamecall(function_register, shape.receiver, shape.key_constant);
+        try self.emitResolveDeferredNamecall(function_register, function_register + 1, shape.key_constant);
         try self.body.end(self.allocator);
         try emitPreparedCompiledCall(self, function_register, parameter_count, result_count, continuation);
         try self.body.end(self.allocator);

@@ -77,12 +77,13 @@ pub fn stringMethodShape(
     parameter_count: i32,
     result_count: i32,
 ) Error!?StringMethodShape {
-    if (self.interrupt_helper != null)
-        return null;
     if (parameter_count < 2 or parameter_count > 4 or result_count < 1)
         return null;
     const site = (try namecallSite(self, call_id, function_register)) orelse return null;
     const key = site.key;
+    if (self.interrupt_helper != null and !std.mem.eql(u8, key, "sub") and
+        !std.mem.eql(u8, key, "find") and !std.mem.eql(u8, key, "match"))
+        return null;
     const params: u32 = @intCast(parameter_count);
     const results: u32 = @intCast(result_count);
     if (std.mem.eql(u8, key, "sub")) {
@@ -97,23 +98,35 @@ pub fn stringMethodShape(
             .key_constant = site.key_constant,
             .call_id = call_id,
         };
-        if (try subUse(self, call_id, function_register, site.receiver)) |use| {
-            switch (use) {
-                .one => |found| {
-                    shape.compare_only = true;
-                    shape.compare_constant = found.constant;
-                    shape.needle_len = @intCast(found.bytes.len);
-                    @memcpy(shape.needle[0..found.bytes.len], found.bytes);
-                },
-                .many => |found| {
-                    shape.elide_slice = true;
-                    shape.elided_count = found.count;
-                    shape.elided = found.compares;
-                },
+        if (self.interrupt_helper == null) {
+            if (try subUse(self, call_id, function_register, site.receiver)) |use| {
+                switch (use) {
+                    .one => |found| {
+                        shape.compare_only = true;
+                        shape.compare_constant = found.constant;
+                        shape.needle_len = @intCast(found.bytes.len);
+                        @memcpy(shape.needle[0..found.bytes.len], found.bytes);
+                    },
+                    .many => |found| {
+                        shape.elide_slice = true;
+                        shape.elided_count = found.count;
+                        shape.elided = found.compares;
+                    },
+                }
             }
         }
         return shape;
     }
+    if (self.interrupt_helper != null and std.mem.eql(u8, key, "find") and results <= 2)
+        return .{
+            .kind = .plain,
+            .function_register = function_register,
+            .parameter_count = params,
+            .result_count = results,
+            .receiver = site.receiver,
+            .key_constant = site.key_constant,
+            .call_id = call_id,
+        };
     if (std.mem.eql(u8, key, "match")) {
         // An init argument changes the anchor. More than two results is not one of these shapes.
         if (params != 2 or results > 2)
@@ -194,6 +207,36 @@ fn matchForm(pattern: []const u8) ?MatchForm {
 }
 
 pub noinline fn emitStringMethodGuards(self: anytype, shape: StringMethodShape) Error!void {
+    if (self.interrupt_helper != null and shape.kind == .sub) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(shape.function_register));
+        try self.body.i32Const(self.allocator, @intCast(shape.parameter_count));
+        try self.body.call(self.allocator, self.sub_string orelse return Error.UnsupportedCommand);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.emitReloadBase();
+        return;
+    }
+    if (self.interrupt_helper != null and shape.kind == .plain) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(shape.function_register));
+        try self.body.i32Const(self.allocator, @intCast(shape.parameter_count));
+        try self.body.i32Const(self.allocator, @intCast(shape.result_count));
+        try self.body.call(self.allocator, self.find_string orelse return Error.UnsupportedCommand);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.emitReloadBase();
+        return;
+    }
+    if (self.interrupt_helper != null and shape.kind == .match) {
+        try self.body.localGet(self.allocator, 0);
+        try self.body.i32Const(self.allocator, @intCast(shape.function_register));
+        try self.body.i32Const(self.allocator, @intFromEnum(shape.match_form));
+        try self.body.i32Const(self.allocator, @intCast(shape.pattern_constant.value));
+        try self.body.i32Const(self.allocator, @intCast(shape.result_count));
+        try self.body.call(self.allocator, self.match_string orelse return Error.UnsupportedCommand);
+        try self.body.localSet(self.allocator, self.status_local);
+        try self.emitReloadBase();
+        return;
+    }
     try self.body.i32Const(self.allocator, 1);
     try self.body.localSet(self.allocator, self.status_local);
     try emitCallerSafe(self);
@@ -234,7 +277,10 @@ pub noinline fn emitStringMethodOperation(
     shape: StringMethodShape,
     continuation: ?CallContinuation,
 ) Error!void {
-    if (shape.kind == .sub)
+    if (self.interrupt_helper != null and (shape.kind == .sub or shape.kind == .plain or shape.kind == .match)) {
+        if (continuation) |resumable|
+            try self.emitClearContinuation(resumable.continuation_id);
+    } else if (shape.kind == .sub)
         try emitSub(self, shape, continuation)
     else if (shape.kind == .match)
         try emitMatch(self, shape, continuation)

@@ -23,6 +23,7 @@
 #include "lualib.h"
 
 #include <limits.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -827,8 +828,7 @@ extern "C" void luauc_runtime_v1_table_get_string(lua_State *L, uint32_t destina
 }
 
 extern "C" void luauc_runtime_v1_namecall_plain(lua_State *L, uint32_t destinationRegister,
-                                              uint32_t sourceRegister, const char *keyPointer,
-                                              size_t keyLength) {
+                                              uint32_t sourceRegister, uint32_t keyIndex) {
     Proto *proto = activeAotFrameProto(L, "namecall");
     if (destinationRegister == UINT32_MAX)
         luaG_runerror(L, "strict AOT namecall destination pair overflow");
@@ -839,21 +839,46 @@ extern "C" void luauc_runtime_v1_namecall_plain(lua_State *L, uint32_t destinati
     if (destination >= L->top || receiverDestination >= L->top || source >= L->top)
         luaG_runerror(L, "strict AOT namecall requires published live registers");
 
-    // The linked key bytes are not a GC root. Reserve two temporary stack slots before interning:
-    // one preserves the receiver when either result overlaps its source register, and the other
-    // roots the interned key. luaD_checkstack can relocate every register pointer, so retain only
-    // register indices and the live-top offset across it.
+    if (keyIndex > LUAUC_AOT_OPERAND_V1_INDEX_MASK)
+        luaG_runerror(L, "strict AOT namecall rejected key index");
+    TValue *keyValue = const_cast<TValue *>(activeAotValueOperand(
+        L, proto, LUAUC_AOT_OPERAND_V1_CONSTANT_FLAG | keyIndex, "namecall"));
+    if (!ttisstring(keyValue))
+        luaG_runerror(L, "strict AOT namecall requires a string constant");
+    TString *key = tsvalue(keyValue);
+
+    if (ttistable(source)) {
+        LuaTable *table = hvalue(source);
+        if (!table->metatable) {
+            const TValue *method = luaH_getstr(table, key);
+            if (!ttisnil(method)) {
+                setobj2s(L, receiverDestination, source);
+                setobj2s(L, destination, method);
+                return;
+            }
+        }
+    } else if (ttisstring(source)) {
+        LuaTable *metatable = L->global->mt[LUA_TSTRING];
+        if (metatable && !fasttm(L, metatable, TM_NAMECALL)) {
+            const TValue *index = fasttm(L, metatable, TM_INDEX);
+            if (index && ttistable(index) && !hvalue(index)->metatable) {
+                const TValue *method = luaH_getstr(hvalue(index), key);
+                if (!ttisnil(method)) {
+                    setobj2s(L, receiverDestination, source);
+                    setobj2s(L, destination, method);
+                    return;
+                }
+            }
+        }
+    }
+
     const ptrdiff_t liveTop = savestack(L, L->top);
-    luaD_checkstack(L, 2);
+    luaD_checkstack(L, 1);
     luaC_threadbarrier(L);
 
     source = L->base + sourceRegister;
     setobj2s(L, L->top, source);
     TValue *rootedReceiver = L->top++;
-
-    TString *key = activeAotStringKey(L, keyPointer, keyLength, "namecall");
-    setsvalue(L, L->top, key);
-    TValue *keyValue = L->top++;
 
     // Pinned NAMECALL gives __namecall precedence only for non-table receivers. It publishes the
     // atom on the state and returns that metamethod as the ordinary CALL target. Tables and every
@@ -985,6 +1010,12 @@ extern "C" void luauc_runtime_v1_table_get(lua_State *L, uint32_t destinationReg
     if (destination >= L->top || tableValue >= L->top)
         luaG_runerror(L, "strict AOT generic table get requires published live registers");
 
+    if (ttistable(tableValue) && !hvalue(tableValue)->metatable) {
+        const TValue *value = luaH_get(hvalue(tableValue), keyValue);
+        setobj2s(L, destination, value);
+        return;
+    }
+
     // luaV_gettable is the corresponding pinned semantic boundary: it performs raw lookup over
     // every supported TValue key, publishes the real hash cache, follows table-valued __index
     // chains, invokes function-valued __index non-yieldably, and raises Luau's canonical receiver
@@ -1096,6 +1127,30 @@ extern "C" void luauc_runtime_v1_get_global(lua_State *L, uint32_t destinationRe
     L->top = restorestack(L, liveTop);
     luaC_checkGC(L);
     L->top = restorestack(L, liveTop);
+}
+
+extern "C" void luauc_runtime_v1_get_global_constant(lua_State *L, uint32_t destinationRegister,
+                                                     uint32_t keyConstant) {
+    Proto *proto = activeAotFrameProto(L, "constant global get");
+    TValue *destination = activeAotRegister(L, proto, destinationRegister, "constant global get");
+    if (destination >= L->top || keyConstant > LUAUC_AOT_OPERAND_V1_INDEX_MASK)
+        luaG_runerror(L, "strict AOT constant global get rejected its operands");
+    const TValue *key = activeAotValueOperand(
+        L, proto, LUAUC_AOT_OPERAND_V1_CONSTANT_FLAG | keyConstant, "constant global get");
+    if (!ttisstring(key))
+        luaG_runerror(L, "strict AOT constant global get requires a string key");
+
+    LuaTable *environment = clvalue(L->ci->func)->env;
+    if (!environment)
+        luaG_runerror(L, "strict AOT constant global get requires a closure environment");
+    if (!environment->metatable) {
+        setobj2s(L, destination, luaH_getstr(environment, tsvalue(key)));
+        return;
+    }
+
+    TValue environmentValue;
+    sethvalue(L, &environmentValue, environment);
+    luaV_gettable(L, &environmentValue, const_cast<TValue *>(key), destination);
 }
 
 extern "C" void luauc_runtime_v1_set_global(lua_State *L, uint32_t sourceRegister,
@@ -1492,6 +1547,280 @@ extern "C" void luauc_runtime_v1_slice_string(lua_State *L, uint32_t destination
     setsvalue(L, L->base + destinationRegister, slice);
     L->top = L->ci->top;
     luaC_checkGC(L);
+}
+
+extern "C" uint32_t luauc_runtime_v1_sub_string(lua_State *L, uint32_t destinationRegister,
+                                                uint32_t parameterCount) {
+    Proto *proto = activeAotFrameProto(L, "string sub");
+    if ((parameterCount != 2 && parameterCount != 3) ||
+        uint32_t(proto->maxstacksize) <= parameterCount ||
+        destinationRegister > uint32_t(proto->maxstacksize) - parameterCount - 1)
+        return 0;
+
+    LuaTable *environment = clvalue(L->ci->func)->env;
+    if (!environment || !environment->safeenv)
+        return 0;
+
+    TValue *destination = L->base + destinationRegister;
+    TValue *source = destination + 1;
+    TValue *startValue = destination + 2;
+    TValue *endValue = parameterCount == 3 ? destination + 3 : nullptr;
+    if (source >= L->top || startValue >= L->top || (endValue && endValue >= L->top) ||
+        !ttisstring(source) || !ttisnumber(startValue) || (endValue && !ttisnumber(endValue)))
+        return 0;
+
+    const double startNumber = nvalue(startValue);
+    const double endNumber = endValue ? nvalue(endValue) : -1;
+    if (!isfinite(startNumber) || !isfinite(endNumber) ||
+        startNumber < double(INT_MIN) || startNumber > double(INT_MAX) ||
+        endNumber < double(INT_MIN) || endNumber > double(INT_MAX) ||
+        startNumber != double(int(startNumber)) || endNumber != double(int(endNumber)))
+        return 0;
+
+    TString *text = tsvalue(source);
+    if (text->len >= INT_MAX)
+        return 0;
+    const int size = int(text->len);
+    int start = int(startNumber);
+    int end = int(endNumber);
+    if (start < 0)
+        start += size + 1;
+    if (end < 0)
+        end += size + 1;
+    if (start < 1)
+        start = 1;
+    if (end > size)
+        end = size;
+    const uint32_t offset = start <= end ? uint32_t(start - 1) : 0;
+    const uint32_t length = start <= end ? uint32_t(end - start + 1) : 0;
+
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+    text = tsvalue(L->base + destinationRegister + 1);
+    TString *slice = luaS_newlstr(L, getstr(text) + offset, length);
+    setsvalue(L, L->base + destinationRegister, slice);
+    L->top = L->ci->top;
+    luaC_checkGC(L);
+    return 1;
+}
+
+struct SimpleFindClass {
+    bool spaces = false;
+    bool nonSpaces = false;
+    uint8_t literals[16] = {};
+    uint8_t count = 0;
+};
+
+static bool simpleFindClass(const char *pattern, int length, SimpleFindClass *result) {
+    if (length < 3 || pattern[0] != '[' || pattern[length - 1] != ']' || pattern[1] == '^')
+        return false;
+    for (int index = 1; index < length - 1; ++index) {
+        const unsigned char byte = static_cast<unsigned char>(pattern[index]);
+        if (byte == '-' || byte == ']')
+            return false;
+        if (byte == '%') {
+            if (++index >= length - 1 || (pattern[index] != 's' && pattern[index] != 'S'))
+                return false;
+            if (pattern[index] == 's')
+                result->spaces = true;
+            else
+                result->nonSpaces = true;
+        } else {
+            if (result->count == sizeof(result->literals))
+                return false;
+            result->literals[result->count++] = byte;
+        }
+    }
+    return true;
+}
+
+extern "C" uint32_t luauc_runtime_v1_find_string(lua_State *L, uint32_t destinationRegister,
+                                                 uint32_t parameterCount, uint32_t resultCount) {
+    Proto *proto = activeAotFrameProto(L, "string find");
+    if (parameterCount < 2 || parameterCount > 4 || resultCount < 1 || resultCount > 2 ||
+        uint32_t(proto->maxstacksize) <= parameterCount ||
+        destinationRegister > uint32_t(proto->maxstacksize) - parameterCount - 1)
+        return 0;
+
+    LuaTable *environment = clvalue(L->ci->func)->env;
+    if (!environment || !environment->safeenv)
+        return 0;
+
+    TValue *destination = L->base + destinationRegister;
+    TValue *source = destination + 1;
+    TValue *pattern = destination + 2;
+    TValue *initValue = parameterCount >= 3 ? destination + 3 : nullptr;
+    TValue *plainValue = parameterCount == 4 ? destination + 4 : nullptr;
+    if (source >= L->top || pattern >= L->top || (initValue && initValue >= L->top) ||
+        (plainValue && plainValue >= L->top) || !ttisstring(source) || !ttisstring(pattern))
+        return 0;
+
+    TString *haystack = tsvalue(source);
+    TString *needle = tsvalue(pattern);
+    if (haystack->len >= INT_MAX || needle->len > INT_MAX)
+        return 0;
+    const int size = int(haystack->len);
+    const int needleSize = int(needle->len);
+    const double initNumber = initValue ? (ttisnumber(initValue) ? nvalue(initValue) : NAN) : 1;
+    if (!isfinite(initNumber) || initNumber < double(INT_MIN) || initNumber > double(INT_MAX) ||
+        initNumber != double(int(initNumber)))
+        return 0;
+
+    const char *patternBytes = getstr(needle);
+    const bool patternMode = !plainValue || l_isfalse(plainValue);
+    const bool anchoredSpaces = patternMode && needleSize == 4 && memcmp(patternBytes, "^%s*", 4) == 0;
+    const bool nonSpace = patternMode && needleSize == 2 && memcmp(patternBytes, "%S", 2) == 0;
+    SimpleFindClass findClass;
+    const bool classSearch = patternMode && !anchoredSpaces && !nonSpace &&
+                             simpleFindClass(patternBytes, needleSize, &findClass);
+    if (patternMode && !anchoredSpaces && !nonSpace && !classSearch) {
+        for (int index = 0; index < needleSize; ++index) {
+            if (patternBytes[index] && strchr("^$*+?.([%-", patternBytes[index]))
+                return 0;
+        }
+    }
+
+    int init = int(initNumber);
+    if (init < 0)
+        init += size + 1;
+    if (init < 1)
+        init = 1;
+    int found = -1;
+    int matchLength = anchoredSpaces ? 0 : (classSearch || nonSpace ? 1 : needleSize);
+    if (init <= size + 1 && matchLength <= size - init + 1) {
+        const char *bytes = getstr(haystack);
+        if (anchoredSpaces) {
+            found = init - 1;
+            while (found + matchLength < size && isspace(static_cast<unsigned char>(bytes[found + matchLength])))
+                ++matchLength;
+        } else if (nonSpace) {
+            for (int index = init - 1; index < size; ++index) {
+                if (!isspace(static_cast<unsigned char>(bytes[index]))) {
+                    found = index;
+                    break;
+                }
+            }
+        } else if (classSearch) {
+            for (int index = init - 1; index < size; ++index) {
+                const unsigned char byte = static_cast<unsigned char>(bytes[index]);
+                const bool space = isspace(byte) != 0;
+                if ((findClass.spaces && space) || (findClass.nonSpaces && !space) ||
+                    memchr(findClass.literals, byte, findClass.count)) {
+                    found = index;
+                    break;
+                }
+            }
+        } else if (needleSize == 0) {
+            found = init - 1;
+        } else {
+            const char *cursor = bytes + init - 1;
+            const char *last = bytes + size - needleSize;
+            while (cursor <= last) {
+                const char *candidate = static_cast<const char *>(memchr(cursor, patternBytes[0],
+                                                                         size_t(last - cursor + 1)));
+                if (!candidate)
+                    break;
+                if (needleSize == 1 || memcmp(candidate + 1, patternBytes + 1, needleSize - 1) == 0) {
+                    found = int(candidate - bytes);
+                    break;
+                }
+                cursor = candidate + 1;
+            }
+        }
+    }
+
+    if (found < 0) {
+        setnilvalue(destination);
+        if (resultCount == 2)
+            setnilvalue(destination + 1);
+    } else {
+        setnvalue(destination, double(found + 1));
+        if (resultCount == 2)
+            setnvalue(destination + 1, double(found + matchLength));
+    }
+    L->top = L->ci->top;
+    return 1;
+}
+
+extern "C" uint32_t luauc_runtime_v1_match_string(lua_State *L, uint32_t destinationRegister,
+                                                  uint32_t matchForm, uint32_t patternConstant,
+                                                  uint32_t resultCount) {
+    Proto *proto = activeAotFrameProto(L, "string match");
+    if (matchForm > 3 || resultCount < 1 || resultCount > 2 ||
+        uint32_t(proto->maxstacksize) < 3 || destinationRegister > uint32_t(proto->maxstacksize) - 3 ||
+        patternConstant > LUAUC_AOT_OPERAND_V1_INDEX_MASK)
+        return 0;
+
+    LuaTable *environment = clvalue(L->ci->func)->env;
+    if (!environment || !environment->safeenv)
+        return 0;
+
+    TValue *destination = L->base + destinationRegister;
+    TValue *source = destination + 1;
+    TValue *pattern = destination + 2;
+    if (source >= L->top || pattern >= L->top || !ttisstring(source) || !ttisstring(pattern))
+        return 0;
+    const TValue *expected = activeAotValueOperand(
+        L, proto, LUAUC_AOT_OPERAND_V1_CONSTANT_FLAG | patternConstant, "string match");
+    if (!ttisstring(expected) || tsvalue(expected) != tsvalue(pattern))
+        return 0;
+
+    TString *text = tsvalue(source);
+    if (text->len >= INT_MAX)
+        return 0;
+    const uint32_t size = uint32_t(text->len);
+    const char *bytes = getstr(text);
+    uint32_t start = 0;
+    uint32_t finish = 0;
+    uint32_t secondStart = 0;
+    bool found = true;
+    if (matchForm == 0) {
+        const char *colon = static_cast<const char *>(memchr(bytes, ':', size));
+        found = colon && colon != bytes && colon != bytes + size - 1;
+        if (found) {
+            finish = uint32_t(colon - bytes);
+            secondStart = finish + 1;
+        }
+    } else if (matchForm == 1) {
+        while (start < size && isspace(static_cast<unsigned char>(bytes[start])))
+            ++start;
+        finish = start;
+        while (finish < size && !isspace(static_cast<unsigned char>(bytes[finish])))
+            ++finish;
+        found = finish > start;
+        for (uint32_t index = finish; found && index < size; ++index)
+            found = isspace(static_cast<unsigned char>(bytes[index])) != 0;
+    } else if (matchForm == 2) {
+        while (finish < size && !isspace(static_cast<unsigned char>(bytes[finish])))
+            ++finish;
+        found = finish != 0;
+    } else {
+        while (start < size && isspace(static_cast<unsigned char>(bytes[start])))
+            ++start;
+        finish = size;
+        while (finish > start && isspace(static_cast<unsigned char>(bytes[finish - 1])))
+            --finish;
+    }
+
+    if (!found) {
+        setnilvalue(destination);
+        if (resultCount == 2)
+            setnilvalue(destination + 1);
+        L->top = L->ci->top;
+        return 1;
+    }
+
+    const uint32_t captureLength = finish - start;
+    luauc_runtime_v1_slice_string(L, destinationRegister, destinationRegister + 1,
+                                  captureLength ? start : 0, captureLength);
+    if (resultCount == 2) {
+        if (matchForm == 0)
+            luauc_runtime_v1_slice_string(L, destinationRegister + 1, destinationRegister + 1,
+                                          secondStart, size - secondStart);
+        else
+            setnilvalue(L->base + destinationRegister + 1);
+    }
+    return 1;
 }
 
 extern "C" void luauc_runtime_v1_do_len(lua_State *L, uint32_t destinationRegister,

@@ -33,6 +33,9 @@ const array_get_symbol = abi.array_get_symbol;
 const table_len_symbol = abi.table_len_symbol;
 const concat_symbol = abi.concat_symbol;
 const slice_string_symbol = abi.slice_string_symbol;
+const sub_string_symbol = abi.sub_string_symbol;
+const find_string_symbol = abi.find_string_symbol;
+const match_string_symbol = abi.match_string_symbol;
 const do_len_symbol = abi.do_len_symbol;
 const forg_prep_symbol = abi.forg_prep_symbol;
 const forg_loop_symbol = abi.forg_loop_symbol;
@@ -63,6 +66,7 @@ const table_get_number_symbol = abi.table_get_number_symbol;
 const table_array_set_symbol = abi.table_array_set_symbol;
 const table_array_get_symbol = abi.table_array_get_symbol;
 const get_global_symbol = abi.get_global_symbol;
+const get_global_constant_symbol = abi.get_global_constant_symbol;
 const set_global_symbol = abi.set_global_symbol;
 const fastcall_symbol = abi.fastcall_symbol;
 const type_name_symbol = abi.type_name_symbol;
@@ -178,6 +182,9 @@ pub const RuntimeImports = struct {
     table_len: ?wasm.FunctionRef,
     concat: ?wasm.FunctionRef,
     slice_string: ?wasm.FunctionRef,
+    sub_string: ?wasm.FunctionRef,
+    find_string: ?wasm.FunctionRef,
+    match_string: ?wasm.FunctionRef,
     do_len: ?wasm.FunctionRef,
     forg_prep: ?wasm.FunctionRef,
     forg_loop: ?wasm.FunctionRef,
@@ -193,6 +200,7 @@ pub const RuntimeImports = struct {
     table_array_set: ?wasm.FunctionRef,
     table_array_get: ?wasm.FunctionRef,
     get_global: ?wasm.FunctionRef,
+    get_global_constant: ?wasm.FunctionRef,
     set_global: ?wasm.FunctionRef,
     check_safe_env: ?wasm.FunctionRef,
     fastcall: ?wasm.FunctionRef,
@@ -209,7 +217,6 @@ pub const RuntimeImports = struct {
     host_module_missing: ?wasm.FunctionRef,
     generated_type: u32,
 };
-
 
 pub const scanImportNeeds = model.scanImportNeeds;
 
@@ -416,7 +423,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         break :blk try object.importFunction("env", table_insert_append_symbol, helper_type);
     } else null;
     const namecall_plain = if (needs.namecall_plain) blk: {
-        const helper_type = try object.addType(.{ .params = &string_table_params, .results = &no_results });
+        const helper_type = try object.addType(.{ .params = &generic_table_params, .results = &no_results });
         break :blk try object.importFunction("env", namecall_plain_symbol, helper_type);
     } else null;
     const set_list = if (needs.set_list) blk: {
@@ -442,6 +449,18 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const slice_string = if (needs.slice_string) blk: {
         const helper_type = try object.addType(.{ .params = &slice_string_params, .results = &no_results });
         break :blk try object.importFunction("env", slice_string_symbol, helper_type);
+    } else null;
+    const sub_string = if (needs.slice_string) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &[_]wasm.ValueType{.i32} });
+        break :blk try object.importFunction("env", sub_string_symbol, helper_type);
+    } else null;
+    const find_string = if (needs.slice_string) blk: {
+        const helper_type = try object.addType(.{ .params = &[_]wasm.ValueType{.i32} ** 4, .results = &[_]wasm.ValueType{.i32} });
+        break :blk try object.importFunction("env", find_string_symbol, helper_type);
+    } else null;
+    const match_string = if (needs.slice_string) blk: {
+        const helper_type = try object.addType(.{ .params = &[_]wasm.ValueType{.i32} ** 5, .results = &[_]wasm.ValueType{.i32} });
+        break :blk try object.importFunction("env", match_string_symbol, helper_type);
     } else null;
     const do_len = if (needs.do_len) blk: {
         const helper_type = try object.addType(.{ .params = &do_len_params, .results = &no_results });
@@ -502,6 +521,10 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
     const get_global = if (needs.get_global) blk: {
         const helper_type = try object.addType(.{ .params = &generic_table_params, .results = &no_results });
         break :blk try object.importFunction("env", get_global_symbol, helper_type);
+    } else null;
+    const get_global_constant = if (needs.get_global) blk: {
+        const helper_type = try object.addType(.{ .params = &register_pair_params, .results = &no_results });
+        break :blk try object.importFunction("env", get_global_constant_symbol, helper_type);
     } else null;
     const set_global = if (needs.set_global) blk: {
         const helper_type = try object.addType(.{ .params = &generic_table_params, .results = &no_results });
@@ -604,6 +627,9 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .table_len = table_len,
         .concat = concat,
         .slice_string = slice_string,
+        .sub_string = sub_string,
+        .find_string = find_string,
+        .match_string = match_string,
         .do_len = do_len,
         .forg_prep = forg_prep,
         .forg_loop = forg_loop,
@@ -619,6 +645,7 @@ pub fn addRuntimeImports(object: *wasm.Object, needs: ImportNeeds) Error!Runtime
         .table_array_set = table_array_set,
         .table_array_get = table_array_get,
         .get_global = get_global,
+        .get_global_constant = get_global_constant,
         .set_global = set_global,
         .check_safe_env = check_safe_env,
         .fastcall = fastcall,
